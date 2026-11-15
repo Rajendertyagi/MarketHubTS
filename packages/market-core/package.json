@@ -1,0 +1,16 @@
+﻿{
+    "version":  "0.1.0",
+    "name":  "@markethub/market-core",
+    "scripts":  {
+                    "typecheck":  "tsc -p tsconfig.json --noEmit",
+                    "build":  "tsc -p tsconfig.json --noEmit"
+                },
+    "exports":  {
+                    ".":  "./src/index.ts"
+                },
+    "type":  "module",
+    "devDependencies":  {
+                            "typescript":  "7.0.2"
+                        },
+    "private":  true
+}

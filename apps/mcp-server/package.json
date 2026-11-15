@@ -1,0 +1,21 @@
+﻿{
+    "name":  "@markethub/mcp-server",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "scripts":  {
+                    "dev":  "bun src/index.ts",
+                    "start":  "bun src/index.ts",
+                    "build":  "tsc -p tsconfig.json --noEmit",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit"
+                },
+    "dependencies":  {
+                         "@markethub/contracts":  "workspace:*",
+                         "@modelcontextprotocol/server":  "2.4.0",
+                         "zod":  "4.6.7"
+                     },
+    "devDependencies":  {
+                            "bun-types":  "1.4.4",
+                            "typescript":  "7.0.2"
+                        }
+}
