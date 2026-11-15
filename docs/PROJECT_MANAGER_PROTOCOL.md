@@ -1,8 +1,8 @@
 # Project Manager Protocol
 
 > **Status:** Durable operating manual for all future MarketHubTS development (authoritative).
-> **Last updated:** 2026-11-15
-> **Related:** [AGENTS.md](../AGENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md)
+> **Last updated:** 2026-11-16
+> **Related:** [AGENTS.md](../AGENTS.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (canonical), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md)
 
 This protocol governs how work is planned, executed, reviewed, and reported. It applies to documentation, research, implementation, testing, and operations tasks.
 
@@ -29,17 +29,29 @@ This protocol governs how work is planned, executed, reviewed, and reported. It 
 
 ## 2. Mandatory development lifecycle
 
+**Agreed development sequence (project-level):**
+1. Establish the essential product requirements, architecture, and engineering standards.
+2. Research and verify technical choices using current official documentation, supported versions, and actual compatibility information.
+3. Start building the real MarketHubTS application in controlled phases.
+4. Verify and test actual components as they are implemented.
+5. Integrate features progressively and verify the complete application.
+
+**Task-level lifecycle (for each bounded assignment):**
 1. **Understand the requirement** (confirmed scope, constraints, acceptance criteria).
 2. **Inspect actual repository state** (files, manifests, docs, config, `git status` before task).
 3. **Establish verified current behavior** (what exists/works today; distinguish implemented vs planned).
-4. **Research official APIs and dependencies** (verify capabilities, limits, compatibility; record sources/dates).
+4. **Research official APIs and dependencies** (verify capabilities, limits, compatibility; record sources/dates). Evidence-driven: support technical decisions with evidence, not assumptions.
 5. **Select a solution** (aligned with architecture/invariants; simplest adequate approach).
 6. **Document an implementation plan** where appropriate (scope, files, risks, tests).
 7. **Obtain required user approval** for changes requiring authorization.
-8. **Implement the bounded assignment** only.
-9. **Run targeted and relevant regression tests** (and report actual results).
+8. **Implement the bounded assignment** only (build real application components; do not create separate throwaway prototypes or an experimental phase before building).
+9. **Run targeted and relevant regression tests** (and report actual results). Do not test functionality that has not been implemented.
 10. **Independently review the actual diff and test evidence**.
 11. **Report complete, incomplete, and unverified work honestly** (and `git status` after task).
+
+**Research and uncertainty handling:** research official documentation first. When a significant technical uncertainty cannot be resolved through research, a narrowly scoped experiment may be used to answer it; keep it proportionate and reuse the result in the actual product wherever practical. The first meaningful end-to-end vertical slice must become part of the real MarketHubTS application, not a temporary discarded demonstration.
+
+**Documentation discipline:** maintain lean, useful documentation (requirements, architecture decisions, contracts, references, acceptance criteria). Avoid repeated documentation polishing; update docs when evidence or decisions change. Preserve confirmed product scope/features (lean means avoiding unnecessary implementation complexity, not reducing required product scope).
 
 ## 3. Strict rules
 
@@ -99,6 +111,7 @@ Do not repeatedly ask OpenCode to make product decisions or research the entire 
 
 ## 6. Quality and safety expectations
 
+- Follow [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (canonical) for architecture/module isolation, reliability/fault containment, code quality, configuration/data, UI, testing, and dependencies.
 - Prefer simple, durable, measurable solutions over unnecessary complexity.
 - Keep canonical data/services as the single source of truth for all consumers.
 - Never fabricate raw market data; never expose/log credentials or sensitive tokens.

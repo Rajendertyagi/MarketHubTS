@@ -1,15 +1,16 @@
 # Product Requirements
 
 > **Status:** Confirmed product requirements and boundaries (authoritative). Items marked **(verify)** require official-source verification before implementation.
-> **Last updated:** 2026-11-15
-> **Related:** [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md)
+> **Last updated:** 2026-11-16
+> **Related:** [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md)
 
 ## 1. Product identity
 
 - **Name:** MarketHubTS
 - **Type:** AI-first, local-first Indian stock-market data platform focused on comprehensive NSE and BSE F&O market information.
+- **Product direction:** MarketHubTS is the **only intended future MarketHub application** — a clean, independent TypeScript solution. The original Python MarketHub is a **reference for domain knowledge and useful requirements only**; do not migrate, copy, or automatically reproduce its code, architecture, or accumulated complexity.
 - **Primary purpose:** collect, normalize, organize, maintain, and expose market data.
-- **Users/consumers:** humans (WebUI) and AI agents (MCP). They decide how to use supplied information.
+- **Users/consumers:** humans (WebUI) and AI agents/applications (MCP, REST/SSE). They decide how to use supplied information. **Single-user means one local application owner, not one connected client.**
 
 ## 2. Confirmed exclusions (never part of the product)
 
@@ -26,8 +27,9 @@
 
 - News integration.
 - X/Twitter integration.
+- Market-wide information (as applicable/available).
 
-These must not be forgotten or accidentally removed from long-term architecture.
+These are **phased priorities, not unwanted features**, and must not be forgotten or removed from long-term architecture/roadmap.
 
 ## 4. Confirmed market coverage
 
@@ -166,12 +168,14 @@ Details: [MCP_INTERFACE.md](MCP_INTERFACE.md).
 
 ## 11. Deployment and operations
 
-- Windows-first, local-first, runs on user’s PC.
-- WebUI accessible to other devices on user’s LAN; MCP accessible over LAN using HTTP.
+- **Single local owner/application instance:** Windows-first, local-first, runs on the user’s PC. **Single-user means one local application owner, not one connected client.**
+- **LAN access is required:** WebUI must be accessible to other devices on the user’s LAN, and MCP must be accessible over LAN using HTTP, so other applications, devices, and multiple MCP clients can connect to the same running application.
+- **Client/UI form:** local browser-based WebUI is acceptable; a native desktop wrapper is optional. Do not prematurely force either approach.
 - No cloud hosting, no public internet exposure, no application-level user login/auth requirement.
 - Multiple MCP clients work normally; configurable startup/background; graceful shutdown/recovery; clear provider/system diagnostics.
 - Broker API credentials/sensitive tokens handled responsibly, never logged or exposed through ordinary data APIs.
 - **Full backup and restore:** account for complete database and any associated key material required to recover encrypted broker credentials; database-only copy is not full recovery if keys/state missing; restore must be tested on clean installation.
+- **Engineering standards:** implementation must follow [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (modular monolith, fault containment, validation, bounded resources, testing, dependency discipline).
 
 ## 12. Current implementation status
 

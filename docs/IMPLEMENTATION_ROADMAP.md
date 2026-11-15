@@ -1,16 +1,21 @@
 # Implementation Roadmap
 
 > **Status:** Dependency-based roadmap from verified scaffold to product milestones. No arbitrary dates/estimates.
-> **Last updated:** 2026-11-15
-> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
+> **Last updated:** 2026-11-16
+> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Planning principles
 
-- **Coherent end-to-end milestones:** each milestone delivers verifiable capability/value, not disconnected scaffolding.
+- **Agreed development sequence:** (1) establish essential product requirements, architecture, and engineering standards; (2) research and verify technical choices using current official documentation, supported versions, and actual compatibility information; (3) start building the real MarketHubTS application in controlled phases; (4) verify and test actual components as they are implemented; (5) integrate features progressively and verify the complete application.
+- **Evidence-driven, research-first:** technical decisions must be supported by evidence, not assumptions. Research official documentation first; when a significant technical uncertainty cannot be resolved through research, a narrowly scoped experiment may be used to answer it (proportionate, reused in the actual product wherever practical). Do not create separate throwaway prototypes or an experimental development phase before building the application.
+- **Real application, thin end-to-end vertical slice:** the first meaningful implementation milestone must prove one complete market-data flow through the actual MarketHubTS application and its consumers (not a temporary discarded demonstration). Build in controlled phases, verify/test actual components as implemented, and integrate progressively.
+- **Incremental NSE catalogue:** start with a limited initial instrument set, but design for full intended catalogue expansion. Never hardcode changing exchange information.
+- **Coherent end-to-end milestones:** each milestone delivers verifiable capability/value in the real application, not disconnected scaffolding.
 - **Dependency-driven order:** prerequisites and verification gates precede dependent work.
 - **Canonical foundation first:** shared contracts/catalog/services before consumer-specific duplication risks.
-- **Verify before commit:** provider APIs/limits/entitlements, MCP transport semantics, chart compatibility, and secure credential storage verified from official sources/evidence.
-- **Measure and prove:** performance/reliability claims backed by tests/measurements.
+- **Automated guardrails:** introduce module-boundary, integration, data-integrity, and failure-recovery tests progressively as actual code is developed (do not test functionality that has not been implemented).
+- **Lean documentation:** maintain useful requirements, architecture decisions, contracts, references, and acceptance criteria; avoid repeated documentation polishing.
+- **Measure and prove:** performance/reliability claims backed by tests/measurements. Preserve confirmed product scope/features (lean means avoiding unnecessary implementation complexity, not reducing required product scope).
 
 ## 2. Workstreams (major)
 
@@ -42,18 +47,18 @@
 
 ---
 
-### M1 — Canonical contracts, catalog foundation, and persistence primitives
-**Objective:** establish shared canonical schemas, instrument identity/catalog model, and DB/migration foundations used by all services.
+### M1 — Canonical contracts, catalog foundation, and persistence primitives (real application)
+**Objective:** establish shared canonical schemas, instrument identity/catalog model, and DB/migration foundations used by all services, as part of the real MarketHubTS application.
 
 **Prerequisites:** M0; verification of exchange universe rules and key provider identifier formats (sufficient to model mappings).
 
-**Key work:** canonical data contracts (Zod/shared types), catalog entities/mappings/aliases/status/sync metadata, migration framework and initial domain schema, transactional catalog sync design, provenance/freshness/availability model.
+**Key work:** canonical data contracts (Zod/shared types), catalog entities/mappings/aliases/status/sync metadata, migration framework and initial domain schema, transactional catalog sync design, provenance/freshness/availability model. Support a **limited initial instrument set** while designing for full intended catalogue expansion; never hardcode changing exchange information.
 
-**User-visible deliverables:** none or minimal internal diagnostics; enables subsequent data features.
+**User-visible deliverables:** none or minimal internal diagnostics; enables subsequent data features and the first end-to-end vertical slice.
 
 **Acceptance criteria:** schemas/types compile and are consumed by services; migrations run safely; catalog can be loaded/updated transactionally without destroying previous valid state in tests; identity/mapping rules documented and implemented.
 
-**Verification:** unit/integration tests for schema validation, migrations, transactional sync failure safety.
+**Verification:** unit/integration tests for schema validation, migrations, transactional sync failure safety (automated guardrails introduced progressively).
 
 **Risks:** incomplete provider/exchange metadata; identity edge cases for expired/changed contracts.
 
@@ -80,22 +85,22 @@
 
 ---
 
-### M3 — Live market data pipeline and in-memory realtime state
-**Objective:** stream/ingest live quotes/depth/ticks (as supported), normalize into canonical live state, and expose via shared services.
+### M3 — Live market data pipeline and in-memory realtime state (first end-to-end vertical slice target)
+**Objective:** stream/ingest live quotes/depth/ticks (as supported), normalize into canonical live state, and expose via shared services as part of the real application.
 
 **Prerequisites:** M2, verified feed protocols/subscription limits/field mappings.
 
-**Key work:** subscriptions management (WebUI-owned selections), normalization/provenance/freshness, in-memory bounded live state, source selection, REST/SSE delivery foundations with bounded buffers and drop-overflow-not-subscriber policy.
+**Key work:** subscriptions management (WebUI-owned selections), normalization/provenance/freshness, in-memory bounded live state, source selection, REST/SSE delivery foundations with bounded buffers and drop-overflow-not-subscriber policy. Deliver a **thin end-to-end vertical slice** for a limited initial instrument set proving one complete market-data flow through the actual application and its consumers (e.g. provider → canonical normalization/live state → shared service → REST/SSE and/or MCP/WebUI as implemented), becoming part of the real MarketHubTS application.
 
-**User-visible deliverables:** live quotes/depth views for configured instruments; freshness/source indicators.
+**User-visible deliverables:** live quotes/depth views for configured instruments; freshness/source indicators; verified end-to-end flow for the initial slice.
 
-**Acceptance criteria:** live updates flow for supported instruments; no per-tick/depth persistence; restart repopulates from streams; overflow drops events not subscribers; multi-client isolation.
+**Acceptance criteria:** live updates flow for supported instruments in the slice; no per-tick/depth persistence; restart repopulates from streams; overflow drops events not subscribers; multi-client isolation; parity across implemented consumers for the slice.
 
-**Verification:** load/concurrency tests, reconnect tests, memory/buffer bounds checks.
+**Verification:** integration/end-to-end tests for the slice, load/concurrency tests, reconnect tests, memory/buffer bounds checks (automated guardrails introduced progressively).
 
 **Risks:** high-rate feeds, provider limits, parsing/protobuf complexity, memory growth.
 
-**Non-goals:** complete historical/snapshot persistence, full alert/scanner automation.
+**Non-goals:** complete historical/snapshot persistence, full alert/scanner automation, full universe coverage in the first slice.
 
 ---
 
@@ -228,8 +233,9 @@
 
 ## 4. Cross-cutting dependencies and gates
 
+- **Engineering standards gate:** implementation follows [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (modular monolith boundaries, fault containment, validation, bounded resources, testing, dependency discipline).
 - **Official verification gates:** Upstox/FYERS capabilities/limits/entitlements/SDK-Bun fit; NSE/BSE universe/contract details; MCP 2026-07-28 transport semantics; Vela compatibility; Windows secure credential storage and backup key material.
-- **Security gate:** no plaintext secrets, no credential exposure/logging, safe LAN behavior documented.
+- **Security gate:** no plaintext secrets, no credential exposure/logging, safe LAN behavior documented (LAN access required, no app-level login).
 - **Parity gate:** MCP/REST/SSE/WebUI consistency on canonical data/state.
 - **Recoverability gate:** clean-install restore proof including credential recovery requirements.
 

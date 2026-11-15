@@ -1,15 +1,16 @@
 # Operations, Backup and Recovery
 
 > **Status:** Confirmed operational requirements and target design; most capabilities not yet implemented.
-> **Last updated:** 2026-11-15
-> **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
+> **Last updated:** 2026-11-16
+> **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Deployment model (confirmed)
 
-- **Windows-first, local-first:** runs on the user’s PC.
-- **LAN access:** WebUI accessible to other devices on the user’s local network; MCP accessible over LAN using HTTP (planned).
+- **Single local owner/application instance:** Windows-first, local-first, runs on the user’s PC. **Single-user means one local application owner, not one connected client.**
+- **LAN access is required:** WebUI must be accessible to other devices on the user’s local network, and MCP must be accessible over LAN using HTTP (planned), so other applications, devices, and multiple MCP clients can connect to the same running application.
+- **Client/UI form:** local browser-based WebUI is acceptable; a native desktop wrapper is optional (do not prematurely force either).
 - **No cloud hosting. No public internet exposure. No application-level user login/authentication requirement.**
-- Multiple MCP clients must work normally.
+- Multiple MCP clients must work normally, sharing the same canonical data/services with client isolation.
 
 ## 2. Runtime operations
 

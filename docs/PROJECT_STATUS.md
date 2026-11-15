@@ -1,8 +1,8 @@
 # Project Status
 
-> **Status:** Verified repository and scaffold condition as of 2026-11-15.
-> **Last updated:** 2026-11-15
-> **Related:** [README.md](../README.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
+> **Status:** Verified repository and scaffold condition (updated 2026-11-16 for current Git state and documentation alignment).
+> **Last updated:** 2026-11-16
+> **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Summary
 
@@ -10,7 +10,7 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 
 ## 2. Verified repository state
 
-### 2.1 Current Git-backed state (verified 2026-11-15)
+### 2.1 Current Git-backed state (verified 2026-11-16)
 
 | Item | Verified state |
 |---|---|
@@ -18,10 +18,10 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 | Git repository | **Yes** — `Rajendertyagi/MarketHubTS` |
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Branch | `main` (tracking `origin/main`) |
-| Local HEAD | `7ebb6abc3bb54710288f80a24dc82a40f3499980` (`7ebb6ab Initial MarketHubTS scaffold and documentation`) |
-| Remote `origin/main` | `7ebb6abc3bb54710288f80a24dc82a40f3499980` (synchronized with local `main`) |
-| Working tree | Task-specific; not recorded as permanent project state. At verification time (2026-11-15, before this correction pass) it was clean (`## main...origin/main`); check current `git status --short --branch` in task reports/session. |
-| Previously reported commit | `70c4a873f36e3143d3e5d271ead752ef3409f58f` is **not** present in current local history (history was rewritten to a single commit during prior cleanup; current HEAD is `7ebb6ab`) |
+| Local HEAD | `277d5e248ea972c0fea984105b86708563205a6a` (`277d5e2 Correct documentation: git state, FPI 150 date, MCP alert events, dependencies, and NSE index catalogue`) |
+| Remote `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (synchronized with local `main` at verification time) |
+| Working tree | Task-specific; not recorded as permanent project state. Check current `git status --short --branch` in task reports/session. |
+| Previously reported commits | `70c4a873f36e3143d3e5d271ead752ef3409f58f` and `7ebb6abc3bb54710288f80a24dc82a40f3499980` are historical ancestors in current lineage context as applicable; history was rewritten earlier (see §2.2) and subsequent documentation commits were added on `main`. |
 | `project-status.json` | **Not present locally and not tracked** (verified 2026-11-15). Historically observed earlier as an unrelated file/task entry; removed during prior cleanup/history rewrite. No project tooling usage identified in this repository. Reported separately for product-owner review. |
 | Workspace | Bun workspaces configured (`apps/*`, `packages/*`), `packageManager: bun@1.4.4` |
 | Runtime/tooling observed | Bun 1.4.4 installed; TypeScript 7.0.2 in manifests |
@@ -61,13 +61,15 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 
 ## 5. Documentation status
 
-Required documentation set created/updated in this task (see completion report): `AGENTS.md`, updated `README.md`, and `docs/` files including overview, requirements, protocol, architecture/decisions, market data/catalog, provider integration, MCP interface, WebUI/config, data lifecycle/storage, roadmap, testing/acceptance, operations/backup/recovery, project status, open questions/risks, and references. Existing Phase 1 docs were updated/expanded for consistency.
+Documentation baseline includes `AGENTS.md`, `README.md`, and `docs/` covering overview, requirements, protocol, **engineering standards (canonical)**, architecture/decisions, market data/catalog, provider integration, MCP interface, WebUI/config, data lifecycle/storage, roadmap, testing/acceptance, operations/backup/recovery, project status, open questions/risks, and references.
+
+**2026-11-16 alignment (this task):** added `docs/ENGINEERING_STANDARDS.md` as canonical practical standards and linked it from `AGENTS.md` and `docs/PROJECT_MANAGER_PROTOCOL.md`; updated specified docs to align on confirmed product direction (MarketHubTS as only intended future app, original Python MarketHub as reference only, single local owner/application instance with **LAN access required** for WebUI/MCP/multiple clients, browser-based WebUI acceptable/native desktop wrapper optional, no cloud/public exposure/no app-level login, provider independence, News/X/Twitter/market-wide as phased priorities) and to record current stable Git state without treating working-tree status as permanent documentation. Existing valid market-domain requirements, provider research, data lifecycle, backup/recovery requirements, and phased roadmap were preserved.
 
 ## 6. Known repository notes
 
 - `project-status.json` is not present locally and not tracked (see §2.1); historically observed with unrelated content and removed during prior cleanup/history rewrite.
 - `tsconfig.tsbuildinfo` files and `apps/web/dist/` may exist from prior work/builds; not modified by this documentation correction task.
-- Git-backed repository state is current (see §2.1); the pre-initialization "not a git repository" condition is historical only (§2.2).
+- Git-backed repository state is recorded in §2.1 (stable identity/branch/HEAD at verification time); the pre-initialization "not a git repository" condition is historical only (§2.2). Working-tree status must be reported per task, not treated as permanent documentation.
 
 ## 7. Readiness for next phase
 

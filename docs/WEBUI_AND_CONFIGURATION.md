@@ -1,14 +1,14 @@
 # WebUI and Configuration
 
 > **Status:** Confirmed requirements and target design; current WebUI is a minimal health-display shell only.
-> **Last updated:** 2026-11-15
-> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
+> **Last updated:** 2026-11-16
+> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
 
 ## 1. Role
 
-WebUI is the **human-facing interface** and the **operational control centre**.
+WebUI is the **human-facing interface** and the **operational control centre** for the single local owner/application instance. A **local browser-based WebUI is acceptable**; a native desktop wrapper is optional (do not prematurely force either). **LAN access is required** so other devices can access the WebUI on the same running application (no cloud/public exposure, no app-level login).
 
-**Guiding principle:** keep the application simple to configure. Avoid hidden fixed policies and unnecessary technical complexity. Everything relevant to normal operation should be configurable through clearly organized WebUI settings, with sensible initial defaults.
+**Guiding principle:** keep the application simple to configure. Avoid hidden fixed policies and unnecessary technical complexity. Everything relevant to normal operation should be configurable through clearly organized WebUI settings, with sensible initial defaults. Follow [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) for UI separation of concerns, reusable components/tokens, and clear state ownership.
 
 ## 2. Current implementation (verified scaffold)
 
@@ -89,7 +89,7 @@ Data-heavy views should use efficient rendering patterns (e.g. TanStack Table/Vi
 - Explicit visibility of provider connection state, limits, restrictions, data freshness, and unavailability.
 - No hidden automatic changes to user selections.
 - Responsible handling of sensitive inputs (credentials/tokens): masked entry, no logging/exposure in ordinary views/APIs.
-- LAN-accessible without app-level login is a deployment choice; UI should communicate local-network exposure implications where relevant **(planned)**.
+- **LAN access is required** (no app-level login) so other devices/applications can connect to the same running instance; UI should communicate local-network exposure implications clearly where relevant **(planned)**.
 
 ## 9. Current gaps (to be implemented)
 

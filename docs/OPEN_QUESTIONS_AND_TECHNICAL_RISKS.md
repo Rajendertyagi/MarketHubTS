@@ -1,22 +1,22 @@
 # Open Questions and Technical Risks
 
 > **Status:** Tracked confirmations, established decisions, pending verifications, and risks. Do not reopen confirmed product decisions.
-> **Last updated:** 2026-11-15
-> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [REFERENCES.md](REFERENCES.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
+> **Last updated:** 2026-11-16
+> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [REFERENCES.md](REFERENCES.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
 
 ## 1. Confirmed product decisions (do not reopen)
 
-- Product identity: AI-first, local-first Indian stock-market data platform (NSE/BSE F&O focus) to collect/normalize/organize/maintain/expose market data.
+- Product identity/direction: MarketHubTS is the only intended future MarketHub application (clean, independent TypeScript solution). Original Python MarketHub is reference for domain knowledge/useful requirements only (no migration/copy/reproduction of code, architecture, or accumulated complexity). AI-first, local-first Indian stock-market data platform (NSE/BSE F&O focus) to collect/normalize/organize/maintain/expose market data.
 - Exclusions: no trading/order management, no broker account management, no AI recommendations/predictions/signals, no sentiment, no chat, no general CSV/Excel market-data export (watchlist import/export separate if retained).
-- Later phases required: News integration; X/Twitter integration.
+- Later phases required (phased priorities, not unwanted): News integration; X/Twitter integration; market-wide information (as applicable/available).
 - One canonical data and application-services foundation for MCP, REST/SSE, WebUI; no duplicate market-data interpretation/business logic.
-- Initial providers Upstox and FYERS, independent/simultaneous; app works with either/neither (local/non-broker data).
+- Initial providers Upstox and FYERS, independent/simultaneous; one provider failing must not break the other; app works with either/neither (local/non-broker data).
 - Automatic source selection by capability/availability/freshness/reliability/limits; optional manual preferences; no fixed provider priority.
 - Never fabricate raw provider-supplied market fields (OI, IV, Greeks, prices, depth, volume); derived indicators separately labelled.
 - Live ticks/depth in memory only (no per-event persistence); historical candles cached; option-chain snapshots persisted separately per WebUI capture config; retention user-controlled.
 - MCP is primary AI interface; AI may manage watchlists/alerts/scanners and do on-demand retrieval but cannot modify operational configuration; alerts/scanners never auto-subscribe; waiting-for-streaming behavior required.
 - WebUI is operational control centre; simple configurable settings, no hidden fixed policies, no silent selection changes due to limits.
-- Windows-first, local-first, LAN-accessible WebUI and MCP HTTP; no cloud/public exposure; no app-level user login; multiple MCP clients supported.
+- Deployment/operating model: single local owner/application instance on user’s PC (Windows-first, local-first). **Single-user means one local application owner, not one connected client.** **LAN access is required** (WebUI and MCP HTTP) so other applications/devices/multiple MCP clients can connect to the same running application. Local browser-based WebUI acceptable; native desktop wrapper optional (do not prematurely force either). No cloud/public exposure; no app-level user login.
 - Full backup/restore must include DB and any key material/state required to recover encrypted broker credentials; restore tested on clean install.
 
 ## 2. Technical decisions already established (baseline)

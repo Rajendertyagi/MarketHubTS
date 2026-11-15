@@ -1,16 +1,16 @@
 # Testing and Acceptance
 
 > **Status:** Target validation strategy and acceptance criteria; current automated coverage is minimal (health contract test only).
-> **Last updated:** 2026-11-15
-> **Related:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
+> **Last updated:** 2026-11-16
+> **Related:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Validation strategy
 
-- **Layered testing:** unit (schemas, pure logic, mappers), integration (DB, services, adapters with mocks/fixtures), end-to-end (API/MCP/WebUI flows), and non-functional (performance, soak, resilience).
+- **Layered testing:** unit (schemas, pure logic, mappers), integration (DB, services, adapters with mocks/fixtures), end-to-end (API/MCP/WebUI flows), and non-functional (performance, soak, resilience), aligned with [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md).
 - **Evidence-based:** tests must be executed and reported with commands/results; no feature considered complete based on a single passing test.
 - **Canonical parity:** verify same canonical instrument/data state across MCP, REST, SSE, and WebUI.
 - **Provider realism with safety:** use mocks/simulators and sanitized recorded fixtures/captures (verified free of secrets) for deterministic tests; controlled live verification only when authorized and without placing orders.
-- **Failure-focused:** explicitly test disconnects, limits, stale/unavailable data, partial sync failures, and recovery.
+- **Failure-focused:** explicitly test disconnects, limits, stale/unavailable data, partial sync failures, and recovery (including fault containment in a shared-process modular monolith).
 
 ## 2. Current checks (verified scaffold)
 

@@ -1,14 +1,20 @@
 # Architecture
 
 > **Status:** Target architecture and current scaffold mapping (authoritative design baseline). Items marked **(planned)** or **(verify)** are not implemented/confirmed.
-> **Last updated:** 2026-11-15
-> **Related:** [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
+> **Last updated:** 2026-11-16
+> **Related:** [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (canonical), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. System overview
 
-MarketHubTS is a **Windows-first, local-first** Indian stock-market data platform (NSE/BSE F&O focus). It collects, normalizes, organizes, maintains, and exposes market data through a **single canonical data and application-services foundation** consumed by **MCP** (AI agents) and **REST/SSE + WebUI** (humans/LAN clients).
+MarketHubTS is the **only intended future MarketHub application** (clean, independent TypeScript solution; original Python MarketHub is reference for domain knowledge/useful requirements only). It is a **Windows-first, local-first** Indian stock-market data platform (NSE/BSE F&O focus) running as a **single local owner/application instance** on the user’s PC. **Single-user means one local application owner, not one connected client.**
+
+It collects, normalizes, organizes, maintains, and exposes market data through a **single canonical data and application-services foundation** consumed by **MCP** (AI agents/applications) and **REST/SSE + WebUI** (humans, devices, and LAN clients). **LAN access is required** so other applications, devices, and multiple MCP clients can connect to the same running application. Local browser-based WebUI is acceptable; a native desktop wrapper is optional (do not prematurely force either). No cloud hosting, no public internet exposure, no application-level login/authentication.
 
 **Current state:** Phase 1 scaffold only (health API, web shell, MCP stdio health tool, DB/contracts scaffolding). No market-data pipelines, broker integrations, catalog, realtime streams, alerts/scanners, or operational configuration are implemented.
+
+**Engineering approach:** modular monolith with clear module boundaries, defined interfaces/contracts, fault containment, and bounded resources per [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (not microservices; no claim of absolute isolation in a shared process).
+
+**Development and verification approach:** evidence-driven and research-first (official docs, supported versions, actual compatibility). Build the real MarketHubTS application in controlled phases; verify/test actual components as implemented and integrate progressively. The first meaningful end-to-end vertical slice must prove one complete market-data flow through the actual application and its consumers (not a discarded demonstration). Start with a limited initial instrument set while designing for full intended catalogue expansion; never hardcode changing exchange information. When a significant uncertainty cannot be resolved through research, use only a narrowly scoped, proportionate experiment and reuse results in the actual product where practical. See [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) and [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md).
 
 ## 2. Logical architecture diagram
 
