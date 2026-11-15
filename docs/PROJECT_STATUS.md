@@ -10,15 +10,28 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 
 ## 2. Verified repository state
 
+### 2.1 Current Git-backed state (verified 2026-11-15)
+
 | Item | Verified state |
 |---|---|
 | Path | `D:\Temp\MarketHubTS` |
-| Git repository | **No** — `git status` returned: not a git repository |
-| Pre-existing modifications (git) | N/A (no git repo). Unrelated existing file observed: `project-status.json` (contains unrelated task entry; preserved, not modified) |
+| Git repository | **Yes** — `Rajendertyagi/MarketHubTS` |
+| Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
+| Branch | `main` (tracking `origin/main`) |
+| Local HEAD | `7ebb6abc3bb54710288f80a24dc82a40f3499980` (`7ebb6ab Initial MarketHubTS scaffold and documentation`) |
+| Remote `origin/main` | `7ebb6abc3bb54710288f80a24dc82a40f3499980` (synchronized with local `main`) |
+| Working tree | Task-specific; not recorded as permanent project state. At verification time (2026-11-15, before this correction pass) it was clean (`## main...origin/main`); check current `git status --short --branch` in task reports/session. |
+| Previously reported commit | `70c4a873f36e3143d3e5d271ead752ef3409f58f` is **not** present in current local history (history was rewritten to a single commit during prior cleanup; current HEAD is `7ebb6ab`) |
+| `project-status.json` | **Not present locally and not tracked** (verified 2026-11-15). Historically observed earlier as an unrelated file/task entry; removed during prior cleanup/history rewrite. No project tooling usage identified in this repository. Reported separately for product-owner review. |
 | Workspace | Bun workspaces configured (`apps/*`, `packages/*`), `packageManager: bun@1.4.4` |
 | Runtime/tooling observed | Bun 1.4.4 installed; TypeScript 7.0.2 in manifests |
 | Lockfile | `bun.lock` present |
 | Build artifacts present | `apps/web/dist/` present (from prior build); `node_modules/` present; `data/` may be created at runtime |
+
+### 2.2 Historical repository state (before Git initialization, preserved for context)
+
+- Earlier in this environment the directory was **not** a Git repository (`git status` reported: not a git repository, no `.git` history).
+- Git was later initialized, connected to `origin`, and project files were committed/pushed; history was subsequently rewritten to the current single-commit state documented above. This subsection is historical context, not the current state.
 
 ## 3. Implemented and verified (scaffold)
 
@@ -52,12 +65,18 @@ Required documentation set created/updated in this task (see completion report):
 
 ## 6. Known repository notes
 
-- `project-status.json` exists with unrelated content (`"implement login feature in the Sky cloud environment..."`); preserved unchanged.
-- `tsconfig.tsbuildinfo` files and `apps/web/dist/` exist from prior work/builds; not modified by documentation task.
-- No `.git` history; before/after git status for this environment is effectively N/A (reported "not a git repository").
+- `project-status.json` is not present locally and not tracked (see §2.1); historically observed with unrelated content and removed during prior cleanup/history rewrite.
+- `tsconfig.tsbuildinfo` files and `apps/web/dist/` may exist from prior work/builds; not modified by this documentation correction task.
+- Git-backed repository state is current (see §2.1); the pre-initialization "not a git repository" condition is historical only (§2.2).
 
 ## 7. Readiness for next phase
 
 **Ready:** documented architecture/requirements/protocol/roadmap baseline; working scaffold and shared foundations to extend.
 
 **Next dependencies (per roadmap):** verify key official provider/MCP/chart/credential-storage details; implement canonical contracts/catalog and persistence primitives (M1), then provider connectivity and live pipeline (M2/M3) with measured, test-backed increments.
+
+## 8. Notes for future work
+
+- Re-run `git status --short --branch` before future work; §2.1 records stable repository identity/branch/base commit (`7ebb6ab`, synchronized at verification time). Record working-tree status in task reports, not as permanent project documentation.
+- If `project-status.json` reappears, treat as out-of-scope unless explicitly assigned and report for product-owner review.
+- Any implementation must follow [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), preserve existing work, and obtain explicit authorization for scope-expanding or destructive actions.

@@ -121,15 +121,15 @@
 ### M5 — MCP market-data and event interface (AI-first parity)
 **Objective:** comprehensive MCP access over shared services with correct transport/event behavior and permission boundaries.
 
-**Prerequisites:** M1–M4 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics.
+**Prerequisites:** M1–M4 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics (including `subscriptions/listen`, supported notifications, and `@modelcontextprotocol/server` v2.4.0 behavior).
 
-**Key work:** Streamable HTTP MCP endpoint (LAN), SSE-based event/subscription delivery as specified, STDIO compatibility, tool/resource/prompt set for discovery/quotes/depth/candles/option chains/futures/market-wide/freshness/on-demand, multi-client support and isolation.
+**Key work:** Streamable HTTP MCP endpoint (LAN), SSE-based event/subscription delivery as specified, STDIO compatibility, tool/resource/prompt set for discovery/quotes/depth/candles/option chains/futures/market-wide/freshness/on-demand, discoverable alert-event resources/feeds with cursor/sequence retrieval, multi-client support and isolation.
 
-**User-visible deliverables:** AI agents can query/subscribe to supported market data and receive events; parity with REST/WebUI data.
+**User-visible deliverables:** AI agents can query/subscribe to supported market data and receive/retrieve alert events; parity with REST/WebUI data.
 
-**Acceptance criteria:** no duplicate market logic; permission boundaries enforced; on-demand fetch does not alter operational config; multi-client scenarios pass; transport behavior matches verified spec.
+**Acceptance criteria:** no duplicate market logic; permission boundaries enforced; on-demand fetch does not alter operational config; multi-client scenarios pass; transport behavior matches verified spec; alert-event delivery uses durable records + supported protocol notifications/read-after-notify (no arbitrary alert-trigger notification type), with reconnect recovery and polling/tool fallback.
 
-**Verification:** MCP conformance/integration tests, parity tests, security/input validation tests.
+**Verification:** MCP conformance/integration tests, parity tests, security/input validation tests, subscription/reconnect/multi-client event-retrieval tests.
 
 **Risks:** spec/SDK evolution, transport complexity, LAN exposure considerations.
 
@@ -142,13 +142,13 @@
 
 **Prerequisites:** M1 (persistence/contracts), M3 (live data) and/or M4 as needed for conditions; M5 for MCP workflow parity.
 
-**Key work:** watchlist CRUD/organization; alert/scanner definition models, condition evaluator (canonical + provider-specific fields, supported operators), trigger/history persistence, alert states (waiting/active/unavailable/triggered), scanner modes (manual/scheduled/continuous), delivery channels (WebUI/desktop/MCP/webhook).
+**Key work:** watchlist CRUD/organization; alert/scanner definition models, condition evaluator (canonical + provider-specific fields, supported operators), durable trigger/event records with event IDs/cursors/sequence, trigger/history persistence, alert states (waiting/active/unavailable/triggered), scanner modes (manual/scheduled/continuous), delivery channels (WebUI/desktop/MCP/webhook).
 
-**User-visible deliverables:** manage and run watchlists/alerts/scanners; receive notifications/events; clear waiting/limitation explanations.
+**User-visible deliverables:** manage and run watchlists/alerts/scanners; receive notifications/events and retrieve alert-event history; clear waiting/limitation explanations.
 
-**Acceptance criteria:** no auto-subscribe; waiting-for-streaming behavior correct; AI cannot bypass config boundaries; stale/unavailable/not-streamed limitations reported; shared definitions/history across interfaces.
+**Acceptance criteria:** no auto-subscribe; waiting-for-streaming behavior correct; AI cannot bypass config boundaries; stale/unavailable/not-streamed limitations reported; shared definitions/history across interfaces; MCP alert-event access works via durable resources/feeds and supported notifications with reconnect recovery, independent multi-client consumption, and polling/tool fallback.
 
-**Verification:** scenario tests (waiting alerts, continuous scanners, delivery, multi-client events).
+**Verification:** scenario tests (waiting alerts, continuous scanners, delivery, multi-client events, cursor/reconnect recovery, notification-failure fallback to history retrieval).
 
 **Risks:** condition complexity, evaluation performance, event ordering/duplication semantics.
 

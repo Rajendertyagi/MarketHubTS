@@ -41,9 +41,10 @@
 | Equity derivatives contract information | https://www.nseindia.com/products-services/equity-derivatives-contract-information | Contract specs, underlyings, eligibility-related information | Official section; detailed current eligibility for all target index underlyings **verify** |
 | Contract specifications | https://www.nseindia.com/static/products-services/equity-derivatives-contract-specifications | Trading cycle, expiry, lot/tick/strike scheme references (subject to updates/circulars) | Public page observed; confirm current values dynamically/officially before implementation |
 | Nifty India FPI 150 F&O product page | https://www.nseindia.com/static/products-services/equity-derivatives-nifty-india-fpi | Product/contract information for Nifty India FPI 150 derivatives | Public page observed; confirms product presence — verify current eligibility/specs/circulars |
-| Circular (Nifty India FPI 150 F&O introduction) | https://nsearchives.nseindia.com/content/circulars/FAOP75239.pdf | Circular details (e.g. introduction/effective dates/specs as stated) | Public circular referenced in search results; verify latest status/circulars |
+| Press release (Nifty India FPI 150 F&O introduction date) | https://nsearchives.nseindia.com/web/pressrelease/2026-01/PR_cc_01012026_20260101194417.pdf | Official NSE press release identifying introduction date of Nifty India FPI 150 index futures and options | **Verified fact (user-provided, 2026-11-15):** introduction date stated as **08 December 2025**. Direct PDF fetch timed out in this session; treat as verified per provided official source and re-verify content directly before implementation if needed. Introduction date is distinct from current eligibility and actual available contracts. |
+| Circular (Nifty India FPI 150 F&O) | https://nsearchives.nseindia.com/content/circulars/FAOP75239.pdf | Circular details/specs/effective dates as stated | Public circular referenced in search results; verify latest status/circulars and current contract specs/eligibility independently (do not infer current eligibility from introduction date alone). |
 
-**Key cautions:** do not hardcode changing contracts/expiries/strikes/lot sizes/quantity freezes; verify current index-derivative eligibility (including NIFTY 50, BANK NIFTY, FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, NIFTY India FPI 150) from official/current sources.
+**Key cautions:** do not hardcode changing contracts/expiries/strikes/lot sizes/quantity freezes; verify current index-derivative eligibility and actual available contracts (including NIFTY 50, BANK NIFTY, FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, NIFTY India FPI 150) from official/current sources. Keep introduction dates separate from current eligibility.
 
 ## 5. BSE (official)
 
@@ -59,11 +60,12 @@
 
 | Source | URL | What it informs | Verification notes (2026-11-15) |
 |---|---|---|---|
-| MCP specification | https://modelcontextprotocol.io/specification/ | Protocol versions, transports, lifecycle, tools/resources/prompts, subscriptions/events | Official spec portal; 2026-07-28 revision and transport semantics **must be verified in detail** before implementation |
-| MCP TypeScript SDK docs (v2) | https://ts.sdk.modelcontextprotocol.io/ | SDK packages/APIs, transports (stdio/Streamable HTTP patterns), migration guidance | Official docs observed; verify exact Streamable HTTP/SSE event-subscription APIs and multi-client behavior for 2026-07-28 |
+| MCP specification (2026-07-28) | https://modelcontextprotocol.io/specification/2026-07-28/ | Protocol requirements, transports, lifecycle, tools/resources/prompts, subscriptions/events | Official spec revision reviewed at portal level; exact transport/event semantics must be verified in detail before implementation |
+| MCP TypeScript SDK docs (v2) | https://ts.sdk.modelcontextprotocol.io/v2/ | SDK packages/APIs, transports, migration guidance | Official docs reviewed |
+| Supporting protocol revision 2026-07-28 (SDK migration) | https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28 | `subscriptions/listen`, notification delivery, `createMcpHandler` notify/bus, `serveStdio` routing, client auto-listen behavior | Reviewed 2026-11-15: `subscriptions/listen` delivers `tools/prompts/resources` `list_changed` and `resources/updated` notifications on client-opened streams; `createMcpHandler` exposes `.notify.{toolsChanged,promptsChanged,resourcesChanged,resourceUpdated(uri)}` (in-process bus by default, custom `ServerEventBus` for multi-process); `serveStdio` routes pinned instance list-changed calls onto active subscriptions; `resources/subscribe` is 2025-only on 2026 connections (use `resourceSubscriptions` in listen filter). No arbitrary standard alert-trigger notification type should be invented. |
 | TypeScript SDK repository | https://github.com/modelcontextprotocol/typescript-sdk | Source, examples, changelog, migration notes | Official repo; useful for implementation details and current support status |
 
-**Key cautions:** do not confuse SSE notifications within Streamable HTTP with deprecated legacy HTTP+SSE transport; verify current spec/SDK behavior (including stateless/session and subscription/event mechanisms as defined in the applicable revision).
+**Key cautions:** do not confuse SSE notifications within Streamable HTTP with deprecated legacy HTTP+SSE transport. For alert/event delivery, use durable MarketHub records plus discoverable MCP resources/feeds and supported protocol notifications (e.g. `notifications/resources/updated` / list changes as applicable) with client read-after-notify, event IDs/cursors/sequence for no-miss/reconnect recovery, and polling/tool fallback. Verify exact `@modelcontextprotocol/server` v2.4.0 behavior and 2026-07-28 semantics before implementation.
 
 ## 7. Technology / dependency references (official)
 
@@ -84,8 +86,11 @@
 ## 8. Repository-local evidence (verified 2026-11-15)
 
 - Workspace manifests and source inspected under `D:\Temp\MarketHubTS` (apps, packages, docs, tests, configs).
-- `git status`: not a git repository.
+- **Current Git state (stable):** repository `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`), branch `main`; local HEAD and `origin/main` both `7ebb6abc3bb54710288f80a24dc82a40f3499980` (`7ebb6ab Initial MarketHubTS scaffold and documentation`), synchronized at verification time. Previously reported commit `70c4a873f36e3143d3e5d271ead752ef3409f58f` is not present in current history (rewritten to single commit). Working-tree status is task-specific and should be recorded in task reports (not as permanent project documentation).
+- **Historical (pre-initialization):** earlier in this environment `git status` reported "not a git repository" (no `.git` history). Preserved as historical context only.
+- `project-status.json`: not present locally and not tracked (verified 2026-11-15); historically observed as unrelated and removed during prior cleanup/history rewrite.
 - Scaffold checks previously verified: `bun test` pass (2 tests), `bun run typecheck` pass, `bun run build` pass, API `/health` returned OK with DB check.
+- Dependency evidence (verified 2026-11-15): `@modelcontextprotocol/server@2.4.0` declared/resolved and imported in `apps/mcp-server`; `@modelcontextprotocol/client` not declared in manifests, not resolved in `bun.lock`, and not imported in source.
 
 ## 9. Limitations of this reference pass
 

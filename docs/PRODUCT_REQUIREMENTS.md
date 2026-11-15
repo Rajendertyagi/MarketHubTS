@@ -32,15 +32,15 @@ These must not be forgotten or accidentally removed from long-term architecture.
 ## 4. Confirmed market coverage
 
 ### 4.1 NSE
-- Major NSE indices.
+- Major NSE indices via a discoverable, catalogue-based approach (cash/index market data exposure; distinct from approved index F&O underlyings — see [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md) for catalogue architecture, official-category organization, and configuration/availability rules; exact enabled/core set requires product confirmation).
 - NSE F&O stocks.
 - NSE cash-market instruments for supported F&O stocks.
 - Futures and options for supported stock underlyings.
-- Futures and options for currently eligible NSE index-derivative underlyings.
+- Futures and options for currently eligible NSE index-derivative underlyings (approved six below).
 - Current and expired contracts.
 - All relevant expiries and available strikes.
 
-**Six index-derivative underlyings accepted during product discovery (names/actual exchange eligibility must be verified against current official exchange information before implementation; do not rely on older hardcoded registries):**
+**Six NSE index F&O underlyings accepted during product discovery (names/actual exchange eligibility and currently available contracts must be verified against current official exchange information before implementation; do not rely on older hardcoded registries):**
 1. NIFTY 50
 2. BANK NIFTY
 3. FINNIFTY

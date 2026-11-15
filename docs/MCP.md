@@ -15,6 +15,7 @@
 - **Transports:** Streamable HTTP primary network transport; SSE-based event/subscription delivery per current MCP spec; assess legacy HTTP+SSE only for compatibility; retain/document STDIO. **(verify 2026-07-28 spec/SDK details)**
 - Multiple simultaneous clients, shared canonical data/services, client isolation.
 - Comprehensive market data tools/resources/events and workflow tools (watchlists/alerts/scanners) within permission boundaries.
+- **Alert-event delivery (target, verify):** durable MarketHub trigger records/history + discoverable alert-event resources/feeds; use supported MCP 2026-07-28 `subscriptions/listen` notifications (e.g. `resources/updated`, list changes as applicable) with client read-after-notify, event IDs/cursors/sequence for no-miss/reconnect recovery, independent multi-client consumption, and polling/tool fallback. Do not invent arbitrary alert-trigger notification types.
 - AI may do on-demand retrieval without mutating operational settings; **cannot** modify operational configuration (credentials, connections, streaming/sync/capture, retention, preferences, startup/network).
 - Strict input validation, graceful shutdown, never expose credentials/tokens.
 

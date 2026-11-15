@@ -33,7 +33,7 @@
 
 | Area | Pending verification | Why it matters |
 |---|---|---|
-| NSE universe/eligibility | Current official eligibility/specs for NIFTY 50, BANK NIFTY, FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, NIFTY India FPI 150; contract details/changes | Correct supported universe and catalog rules |
+| NSE universe/eligibility | Current official eligibility/specs and actual available contracts for NIFTY 50, BANK NIFTY, FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, NIFTY India FPI 150 (NIFTY India FPI 150 introduction date 08 December 2025 per official NSE press release is distinct from current eligibility/contracts); contract details/changes | Correct supported universe and catalog rules |
 | BSE scope | Official SENSEX derivatives scope/specs; confirmation of excluded instruments | Prevent scope creep/errors |
 | Upstox APIs | Current V3 feed/historical/expired-instruments/option-chain/quotes/instruments endpoints, fields, auth/session, protobuf schemas, rate/subscription limits, plan entitlements | Adapter design, normalization, limits handling |
 | FYERS APIs | Current v3 data socket/REST capabilities, symbol/connection limits, historical/option-chain/quotes fields, auth, entitlements | Adapter design, normalization, limits handling |

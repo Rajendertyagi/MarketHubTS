@@ -8,7 +8,7 @@
 
 - Collects, normalizes, organizes, maintains, and exposes market data for humans and AI agents.
 - One **canonical data and application-services foundation** serves all consumers (MCP, REST/SSE, WebUI) — no duplicate market-data interpretation or business logic.
-- Planned coverage: NSE (major indices, NSE F&O stocks, cash for supported F&O stocks, futures/options for supported stock and eligible index-derivative underlyings, current/expired contracts, relevant expiries/strikes) and BSE (SENSEX, SENSEX futures/options), plus market-wide information (India VIX, breadth, sectors, FII/DII, participant-wise derivatives OI, reports/bhavcopies, calendars/status) subject to source availability.
+- Planned coverage: NSE (major cash indices via a discoverable catalogue of official NSE index definitions, organized by official categories and individually configurable for streaming/historical sync — distinct from the six approved index F&O underlyings; NSE F&O stocks; cash for supported F&O stocks; futures/options for supported stock and currently eligible index-derivative underlyings [approved six]; current/expired contracts; relevant expiries/strikes) and BSE (SENSEX, SENSEX futures/options), plus market-wide information (India VIX, breadth, sectors, FII/DII, participant-wise derivatives OI, reports/bhavcopies, calendars/status) subject to source availability. See [docs/MARKET_DATA_AND_CATALOG.md](docs/MARKET_DATA_AND_CATALOG.md).
 - Initial providers: **Upstox** and **FYERS** (independent, simultaneous when configured; app continues with available local/non-broker data when disconnected).
 
 ## What it is not
@@ -79,4 +79,4 @@ Start here: [`AGENTS.md`](AGENTS.md) and [`docs/PROJECT_OVERVIEW.md`](docs/PROJE
 
 - Windows-first, local-first, LAN-accessible design (planned); no cloud hosting, no public internet exposure, no app-level user login (broker credentials/tokens handled responsibly).
 - Technical details pending official verification are explicitly marked in docs (provider APIs/limits/entitlements, MCP 2026-07-28 transport semantics, Vela compatibility, secure Windows credential storage, etc.).
-- This repository currently has no `.git` history; preserve existing files and follow the project protocol for any future changes.
+- Git repository: `Rajendertyagi/MarketHubTS` (`origin`, branch `main`, local/remote synchronized at `7ebb6ab` as verified 2026-11-15). Preserve existing files and follow the project protocol for any future changes (no commit/push without explicit authorization).

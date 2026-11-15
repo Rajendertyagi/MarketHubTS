@@ -16,7 +16,7 @@ MarketHubTS is an **AI-first, local-first Indian stock-market data platform** fo
 ## 2. Repository status (verified)
 
 - **State:** fresh Phase 1 scaffold/foundation (not a functioning market-data platform).
-- **Git:** not a git repository (`git status` reports no `.git`).
+- **Git (verified 2026-11-15):** repository `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`), branch `main`; local HEAD and `origin/main` both `7ebb6abc3bb54710288f80a24dc82a40f3499980` (`7ebb6ab Initial MarketHubTS scaffold and documentation`), synchronized at verification time. Working-tree status is task-specific (not recorded as permanent project state); check `git status --short --branch` in task reports/current session.
 - **Workspace:** Bun workspaces (`apps/*`, `packages/*`), Bun 1.4.4, TypeScript 7.0.2.
 - **Implemented (verified):** Hono API `/health` with SQLite check, React+Vite web shell fetching health, MCP stdio server with `markethub_health` tool reusing local API, shared Zod contracts, `bun:sqlite`+Drizzle database scaffold (`app_meta`, WAL/foreign_keys/NORMAL/busy_timeout), basic tests/typecheck/build passing at scaffold time.
 - **Not implemented:** broker integrations, canonical market engine/catalog, live/historical/option-chain data pipelines, realtime SSE, alerts/scanners/watchlists, charts, operational WebUI config, backup/restore, Streamable HTTP MCP, etc. Package scaffolds exist for future modules.

@@ -7,13 +7,31 @@
 ## 1. Supported universe (confirmed)
 
 ### 1.1 NSE
-- Major NSE indices.
+- Major NSE indices (cash/index market data exposure; see §1.1.1 — distinct from index F&O underlyings).
 - NSE F&O stocks.
 - NSE cash-market instruments for supported F&O stocks.
 - Futures and options for supported stock underlyings.
-- Futures and options for currently eligible NSE index-derivative underlyings.
+- Futures and options for currently eligible NSE index-derivative underlyings (see §1.1.2).
 - Current and expired contracts.
 - All relevant expiries and available strikes.
+
+#### 1.1.1 Major NSE cash indices vs NSE index F&O underlyings (clarification)
+
+| Category | Meaning | Scope status |
+|---|---|---|
+| **NSE cash-index catalogue** | Index definitions/values/market data MarketHub should be able to expose as indices (quotes/candles/market-wide context as available), based on official NSE index definitions and configured/available sources. This is broader than derivatives eligibility. | **Confirmed requirement (catalogue-based):** do not hardcode a small fixed list and do not treat the six F&O underlyings as the complete cash-index catalogue. Exact enabled/default/core set requires product confirmation and verified source mapping. |
+| **NSE index F&O underlyings** | Index underlyings eligible for NSE futures/options contracts that MarketHub must support for derivatives data (current/expired contracts, expiries, strikes as applicable). | **Approved scope (six underlyings):** see §1.1.2. Keep separate from the broader cash-index catalogue. Do not expand or reduce without evidence and authorization. |
+
+**Recommended catalogue architecture (target, evidence-oriented):**
+- **Discoverable catalogue:** maintain a discoverable catalogue of official NSE index definitions (not a hardcoded handful). NSE Indices manages a large index universe (reported as 440+ indices across families; **verify current official count/scope**), so the catalogue must scale without assuming every index is streamed or stored.
+- **Organization:** organize indices by official categories/families where supported (e.g. broad-market, sectoral, thematic/strategy, and other official categories as defined by NSE; **verify current taxonomy**).
+- **Configuration:** streaming and historical synchronization must be individually configurable per index (or defined index groups) through WebUI operational settings; no automatic subscription/sync for hundreds of indices by default.
+- **Availability:** show/expose only data actually available from configured and capable sources; report unavailable/unsupported/stale states clearly (no fabrication).
+- **Separation of concerns:** the six approved index F&O underlyings (§1.1.2) are a distinct derivatives scope and must remain separate from the broader cash-index catalogue, even when the same index appears in both contexts.
+
+**Important:** inclusion in the cash-index catalogue does **not** imply F&O eligibility; F&O support is limited to currently eligible contracts for the approved underlyings in §1.1.2 and verified BSE scope. **India VIX** remains tracked separately under market-wide information (§2), not as an index F&O underlying in this product scope.
+
+#### 1.1.2 NSE index F&O underlyings (approved)
 
 **Index-derivative underlyings accepted during product discovery (names and actual exchange eligibility must be verified against current official exchange information before implementation; do not rely on older hardcoded registries):**
 
@@ -24,7 +42,7 @@
 | FINNIFTY | **(verify)** |
 | MIDCPNIFTY | **(verify)** |
 | NIFTY NEXT 50 | **(verify)** |
-| NIFTY India FPI 150 | **(verify)** — NSE circular/product pages indicate derivatives introduced (e.g. effective Aug 12, 2026 per public sources); confirm current contract specs/eligibility officially |
+| NIFTY India FPI 150 | **(verify current eligibility/contracts)** — Official NSE press release states introduction date of Nifty India FPI 150 index futures and options as **08 December 2025** (see [REFERENCES.md](REFERENCES.md)); introduction date is distinct from current eligibility and actual available contracts/specs, which must be verified independently from current official exchange information before implementation |
 
 ### 1.2 BSE
 - SENSEX.
@@ -114,5 +132,5 @@ The catalog is shared by: Dashboard, Market data, Watchlists, Charts, Options, F
 
 ## 7. Verification notes
 
-- NSE index-derivative eligibility (including NIFTY India FPI 150) and BSE SENSEX derivatives scope must be confirmed against current official exchange information before implementation.
+- NSE index-derivative eligibility (including NIFTY India FPI 150) and BSE SENSEX derivatives scope must be confirmed against current official exchange information before implementation. NIFTY India FPI 150 introduction date (08 December 2025, per official NSE press release) must not be treated as proof of current eligibility or currently available contracts.
 - Provider field availability (OI/IV/Greeks/depth granularity), historical/expired-contract access, and market-wide dataset sources require official verification (see [REFERENCES.md](REFERENCES.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)).

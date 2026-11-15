@@ -40,6 +40,7 @@
 - Provider capacity exhaustion / subscription & rate limits (exposed clearly; no silent selection changes).
 - Stale and unavailable quotes/data (explicit freshness/availability states).
 - Provider-specific fields preserved and attributed alongside canonical fields.
+- MCP alert-event delivery: durable trigger records/history, discoverable alert-event resources/feeds, supported `subscriptions/listen` notifications (e.g. `resources/updated`/list changes as applicable) with read-after-notify, event IDs/cursors/sequence preventing missed/duplicate processing, reconnect recovery from last cursor, independent multi-client consumption, and polling/tool fallback when notifications/subscriptions are unavailable. No arbitrary alert-trigger notification type.
 
 ### 4.2 Data and catalog
 - Missing historical data periods and provider restrictions reported clearly.
@@ -84,7 +85,7 @@ Specific numeric targets must be established and evidenced during implementation
 - **M2:** provider-state matrix (connectivity) and secret-handling checks pass.
 - **M3:** live pipeline, bounded buffers/overflow rule, restart repopulation, multi-client isolation verified.
 - **M4:** historical cache/snapshot persistence, retention, and config-independence verified.
-- **M5:** MCP transport/capability/permission/parity tests pass.
+- **M5:** MCP transport/capability/permission/parity tests pass, including alert-event resource/subscription/read-after-notify, cursor/reconnect recovery, multi-client isolation, and polling/tool fallback behavior (per verified spec/SDK).
 - **M6:** alert waiting-state, scanner limitation reporting, delivery and shared-history tests pass.
 - **M7:** chart/data correctness (backend source of truth), UI responsiveness/customization verified.
 - **M8:** clean-install backup/restore (incl. key material) and diagnostics/config tests pass.

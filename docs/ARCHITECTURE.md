@@ -151,15 +151,17 @@ flowchart TB
 
 - Distinct services sharing condition-definition infrastructure where appropriate; both use shared canonical/provider-field data and services.
 - **Alerts:** definitions/trigger history shared across MCP and WebUI; states include waiting/active/unavailable/triggered; delivery via WebUI notifications/history, desktop notifications, MCP events, webhooks (configurable).
+- **Alert-event delivery (MCP-compatible target, verify):** persist durable trigger records/history with stable event IDs and monotonic sequence/cursor metadata; expose discoverable alert-event resources/feeds via shared services; use supported MCP 2026-07-28 `subscriptions/listen` notifications (e.g. `notifications/resources/updated`, list changes as applicable) as read-after-notify signals; clients retrieve events by cursor/sequence, recover after reconnect from durable history, and consume independently (multi-client isolation). Polling/tool retrieval is a fallback for clients without required subscription capability. Do not invent arbitrary alert-trigger notification types.
 - **Scanners:** manual, scheduled, continuous evaluation from incoming live data (configurable); results must identify stale/unavailable/not-streamed limitations.
 - Neither silently subscribes to additional instruments.
 
 ## 12. MCP service and transport architecture
 
 - MCP is a primary interface backed by **shared application services** (no separate market calculations).
-- **Planned transports (verify against current official MCP spec/SDK):** Streamable HTTP as primary network transport; SSE-based event/subscription delivery under current spec; assess legacy HTTP+SSE only for compatibility needs; retain/document STDIO per scaffold/compatibility.
+- **Planned transports (verify against current official MCP spec/SDK):** Streamable HTTP as primary network transport; SSE-based event/subscription delivery under current spec (including supported `subscriptions/listen` notifications such as `resources/updated` / list changes where applicable); assess legacy HTTP+SSE only for compatibility needs; retain/document STDIO per scaffold/compatibility.
+- **Alert/event delivery mechanism (target, verify):** durable MarketHub event records + discoverable resources/feeds + supported protocol notifications with read-after-notify, event IDs/cursors/sequence, reconnect recovery, independent multi-client consumption, and polling/tool fallback (see [MCP_INTERFACE.md](MCP_INTERFACE.md)).
 - Multiple simultaneous MCP clients; shared canonical data/services; one client’s subscriptions/disconnection must not corrupt another’s operation.
-- **Current scaffold:** STDIO server (`@modelcontextprotocol/server` 2.4.0, `serveStdio`) exposing `markethub_health` via local API.
+- **Current scaffold:** STDIO server (`@modelcontextprotocol/server` 2.4.0, `serveStdio`) exposing `markethub_health` via local API. Verify exact v2.4.0 behavior for 2026-07-28 notification/listen support before implementation.
 
 ## 13. REST/SSE delivery architecture
 

@@ -42,7 +42,7 @@
 | Dependency | Version | Role | Status |
 |---|---|---|---|
 | @modelcontextprotocol/server | 2.4.0 | MCP server SDK (v2) | Installed; STDIO `serveStdio` used in scaffold |
-| @modelcontextprotocol/client | 2.4.0 | MCP client SDK (v2) | Installed/available |
+| @modelcontextprotocol/client | — | MCP client SDK (v2) | **Not installed/declared/resolved** in current manifests, `bun.lock`, or imports (verified 2026-11-15). Possible future testing dependency only; do not treat as available. |
 
 **Transport note:** scaffold uses STDIO; Streamable HTTP/SSE event delivery planned but requires spec/SDK verification (see [MCP_INTERFACE.md](MCP_INTERFACE.md), [REFERENCES.md](REFERENCES.md)).
 
