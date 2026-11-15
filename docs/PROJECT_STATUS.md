@@ -10,18 +10,17 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 
 ## 2. Verified repository state
 
-### 2.1 Current Git-backed state (verified 2026-11-16)
+### 2.1 Verified Git state (pre-publication `main` base, verified 2026-11-16)
 
 | Item | Verified state |
 |---|---|
 | Path | `D:\Temp\MarketHubTS` |
 | Git repository | **Yes** — `Rajendertyagi/MarketHubTS` |
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
-| Branch | `main` (tracking `origin/main`) |
-| Local HEAD | `277d5e248ea972c0fea984105b86708563205a6a` (`277d5e2 Correct documentation: git state, FPI 150 date, MCP alert events, dependencies, and NSE index catalogue`) |
-| Remote `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (synchronized with local `main` at verification time) |
-| Working tree | Task-specific; not recorded as permanent project state. Check current `git status --short --branch` in task reports/session. |
-| Previously reported commits | `70c4a873f36e3143d3e5d271ead752ef3409f58f` and `7ebb6abc3bb54710288f80a24dc82a40f3499980` are historical ancestors in current lineage context as applicable; history was rewritten earlier (see §2.2) and subsequent documentation commits were added on `main`. |
+| Verified `main` base | Local `main` and `origin/main` both at `277d5e248ea972c0fea984105b86708563205a6a` (`277d5e2 Correct documentation: git state, FPI 150 date, MCP alert events, dependencies, and NSE index catalogue`) at verification time (synchronized). This is the pre-publication base for the documentation review work; `main` was not modified by that review publication. |
+| Documentation review branch (not merged into `main`) | `review/documentation-alignment-2026-11-16` was published from `277d5e2` for independent review (published review commit `ae613bff4ff76aa75a68022c8218c83507c9454c`, with bounded review corrections committed on the same branch). Review-branch documentation is **not** incorporated into `main` unless/until explicitly merged after review. |
+| Working tree / current branch | Task-specific and temporary; not recorded as permanent project state. Check current `git status --short --branch`, branch, and HEAD in task reports/session. |
+| Previously reported commits | `70c4a873f36e3143d3e5d271ead752ef3409f58f` and `7ebb6abc3bb54710288f80a24dc82a40f3499980` are historical ancestors in lineage context as applicable; history was rewritten earlier (see §2.2) and subsequent documentation commits were added on `main` before the review branch was created. |
 | `project-status.json` | **Not present locally and not tracked** (verified 2026-11-15). Historically observed earlier as an unrelated file/task entry; removed during prior cleanup/history rewrite. No project tooling usage identified in this repository. Reported separately for product-owner review. |
 | Workspace | Bun workspaces configured (`apps/*`, `packages/*`), `packageManager: bun@1.4.4` |
 | Runtime/tooling observed | Bun 1.4.4 installed; TypeScript 7.0.2 in manifests |
@@ -61,9 +60,9 @@ MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It pr
 
 ## 5. Documentation status
 
-Documentation baseline includes `AGENTS.md`, `README.md`, and `docs/` covering overview, requirements, protocol, **engineering standards (canonical)**, architecture/decisions, market data/catalog, provider integration, MCP interface, WebUI/config, data lifecycle/storage, roadmap, testing/acceptance, operations/backup/recovery, project status, open questions/risks, and references.
+Documentation baseline on verified `main` (`277d5e2`, §2.1) includes `AGENTS.md`, `README.md`, and `docs/` covering overview, requirements, protocol, architecture/decisions, market data/catalog, provider integration, MCP interface, WebUI/config, data lifecycle/storage, roadmap, testing/acceptance, operations/backup/recovery, project status, open questions/risks, and references.
 
-**2026-11-16 alignment (this task):** added `docs/ENGINEERING_STANDARDS.md` as canonical practical standards and linked it from `AGENTS.md` and `docs/PROJECT_MANAGER_PROTOCOL.md`; updated specified docs to align on confirmed product direction (MarketHubTS as only intended future app, original Python MarketHub as reference only, single local owner/application instance with **LAN access required** for WebUI/MCP/multiple clients, browser-based WebUI acceptable/native desktop wrapper optional, no cloud/public exposure/no app-level login, provider independence, News/X/Twitter/market-wide as phased priorities) and to record current stable Git state without treating working-tree status as permanent documentation. Existing valid market-domain requirements, provider research, data lifecycle, backup/recovery requirements, and phased roadmap were preserved.
+**2026-11-16 documentation alignment (review branch, not merged into `main`):** on `review/documentation-alignment-2026-11-16` (published from `277d5e2` for independent review), `docs/ENGINEERING_STANDARDS.md` was added as canonical practical standards and linked from relevant docs; specified documentation was aligned on confirmed product direction (MarketHubTS as only intended future app, original Python MarketHub as reference only, single local owner/application instance with **LAN access required** for WebUI/MCP/multiple clients, browser-based WebUI acceptable/native desktop wrapper optional, no cloud/public exposure/no app-level login, provider independence, News/X/Twitter/market-wide as phased priorities) and on Git-state reporting discipline (no temporary branch/working-tree state treated as permanent project state). Bounded review corrections on the same branch clarify Git-state reporting, LAN exposure-boundary review needs, and test-development timing. Existing valid market-domain requirements, provider research, data lifecycle, backup/recovery requirements, and phased roadmap were preserved. These changes remain under independent review until merged.
 
 ## 6. Known repository notes
 
@@ -79,6 +78,6 @@ Documentation baseline includes `AGENTS.md`, `README.md`, and `docs/` covering o
 
 ## 8. Notes for future work
 
-- Re-run `git status --short --branch` before future work; §2.1 records stable repository identity/branch/base commit (`7ebb6ab`, synchronized at verification time). Record working-tree status in task reports, not as permanent project documentation.
+- Re-run `git status --short --branch` before future work; §2.1 records the verified pre-publication `main` base (`277d5e2`, synchronized at verification time) and distinguishes it from the unmerged documentation review branch. Record current branch/HEAD/working-tree status in task reports, not as permanent project documentation.
 - If `project-status.json` reappears, treat as out-of-scope unless explicitly assigned and report for product-owner review.
 - Any implementation must follow [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), preserve existing work, and obtain explicit authorization for scope-expanding or destructive actions.

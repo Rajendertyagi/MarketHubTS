@@ -33,7 +33,7 @@
 
 - Broker API credentials and sensitive tokens must be handled responsibly: **never logged, never exposed through ordinary data APIs**.
 - Credentials/tokens must **never be stored in plaintext**. A secure local credential-storage mechanism for Windows must be verified and implemented **(pending verification/implementation)**.
-- LAN access without app-level login increases local-network exposure risk; deployment/usage implications should be documented clearly in UI/docs (planned).
+- LAN access is required and there is no application-level login/authentication system, but LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation. Safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope); deployment/usage implications should be documented clearly in UI/docs (planned).
 - MCP/REST interfaces must enforce input validation and avoid leaking secrets.
 
 ## 4. Backup and restore (confirmed requirements)

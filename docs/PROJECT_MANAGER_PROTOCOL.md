@@ -44,8 +44,8 @@ This protocol governs how work is planned, executed, reviewed, and reported. It 
 5. **Select a solution** (aligned with architecture/invariants; simplest adequate approach).
 6. **Document an implementation plan** where appropriate (scope, files, risks, tests).
 7. **Obtain required user approval** for changes requiring authorization.
-8. **Implement the bounded assignment** only (build real application components; do not create separate throwaway prototypes or an experimental phase before building).
-9. **Run targeted and relevant regression tests** (and report actual results). Do not test functionality that has not been implemented.
+8. **Implement the bounded assignment** only (build real application components; do not create separate throwaway prototypes or an experimental phase before building). Test-first development is an option: tests may be designed and written before or alongside implementation, and tests and implementation should evolve together within the same bounded assignment.
+9. **Run targeted and relevant regression tests** (and report actual results). Do not claim functionality is implemented merely because tests exist, and do not claim tests validate a feature that has not been implemented. Report honest test evidence (commands and outcomes).
 10. **Independently review the actual diff and test evidence**.
 11. **Report complete, incomplete, and unverified work honestly** (and `git status` after task).
 

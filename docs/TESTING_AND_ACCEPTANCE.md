@@ -7,7 +7,8 @@
 ## 1. Validation strategy
 
 - **Layered testing:** unit (schemas, pure logic, mappers), integration (DB, services, adapters with mocks/fixtures), end-to-end (API/MCP/WebUI flows), and non-functional (performance, soak, resilience), aligned with [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md).
-- **Evidence-based:** tests must be executed and reported with commands/results; no feature considered complete based on a single passing test.
+- **Test-development timing:** test-first development is an option. Tests may be designed and written before or alongside implementation, and tests and implementation should evolve together within the same bounded assignment. Introduce automated guardrails progressively, with actual implementation.
+- **Evidence-based:** tests must be executed and reported with commands/results; no feature considered complete based on a single passing test. Do not claim functionality is implemented merely because tests exist, and do not claim tests validate a feature that has not been implemented.
 - **Canonical parity:** verify same canonical instrument/data state across MCP, REST, SSE, and WebUI.
 - **Provider realism with safety:** use mocks/simulators and sanitized recorded fixtures/captures (verified free of secrets) for deterministic tests; controlled live verification only when authorized and without placing orders.
 - **Failure-focused:** explicitly test disconnects, limits, stale/unavailable data, partial sync failures, and recovery (including fault containment in a shared-process modular monolith).

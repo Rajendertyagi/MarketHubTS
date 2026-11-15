@@ -69,7 +69,7 @@
 
 ## 7. Security and operational risks
 
-- LAN exposure without app-level login: acceptable by product decision but requires clear boundaries and safe handling of sensitive operations/data.
+- LAN exposure without app-level login: acceptable by product decision, but LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation. Safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope); sensitive operations/data require careful handling and clear documentation.
 - Credential/key management errors leading to unrecoverable secrets or leakage.
 - Backups containing sensitive material if not handled securely.
 - Misconfiguration of streaming/sync/capture causing unexpected load or gaps (must be visible, not silent).
