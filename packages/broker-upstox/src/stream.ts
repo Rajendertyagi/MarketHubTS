@@ -13,8 +13,9 @@ export const UPSTOX_FEED_AUTHORIZE_URL = "https://api.upstox.com/v3/feed/market-
 export const UPSTOX_V3_LIMITS = {
   connectionsPerUser: 2,
   ltpc: { individual: 5000, combined: 2000 },
-  optionGreeks: { individual: 3000, combined: 2000 },
-  full: { individual: 2000, combined: 1500 }
+  option_greeks: { individual: 3000, combined: 2000 },
+  full: { individual: 2000, combined: 1500 },
+  full_d30: { individual: 50, combined: 1500 }
 } as const;
 
 export type UpstoxFeedMode = "ltpc" | "full" | "option_greeks" | "full_d30";
@@ -52,8 +53,24 @@ export interface UpstoxStreamOptions {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   webSocketFactory?: WebSocketFactory;
-  /** Defaults to the conservative combined LTPC limit (2000). */
-  maxSubscriptions?: number;
+}
+
+/** Map a feed mode to its published individual/combined limit. */
+export function modeLimit(mode: UpstoxFeedMode, combined: boolean): number {
+  const limits = UPSTOX_V3_LIMITS[mode];
+  return combined ? limits.combined : limits.individual;
+}
+
+/** Group subscriptions by mode so each request carries exactly one mode. */
+export function groupByMode(subscriptions: UpstoxSubscription[]): Map<UpstoxFeedMode, UpstoxSubscription[]> {
+  const groups = new Map<UpstoxFeedMode, UpstoxSubscription[]>();
+  for (const sub of subscriptions) {
+    const mode = sub.mode ?? "ltpc";
+    const group = groups.get(mode) ?? [];
+    group.push(sub);
+    groups.set(mode, group);
+  }
+  return groups;
 }
 
 function defaultWebSocketFactory(url: string): StreamSocket {
@@ -83,18 +100,19 @@ export class UpstoxMarketDataStream {
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
   private readonly webSocketFactory: WebSocketFactory;
-  private readonly maxSubscriptions: number;
   private socket: StreamSocket | null = null;
   private subscriptions = new Map<string, UpstoxSubscription>();
   private callbacks: UpstoxStreamCallbacks | null = null;
   private state: ProviderConnectionState = "NOT_STARTED";
+  /** Guards the async authorize→connect window against concurrent/stale starts. */
+  private startGeneration = 0;
+  private startInFlight = false;
 
   constructor(private readonly options: UpstoxStreamOptions) {
     this.now = options.now ?? (() => new Date());
     this.fetchImpl = options.fetchImpl ?? fetchWithTimeout;
     this.timeoutMs = options.timeoutMs ?? 8000;
     this.webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
-    this.maxSubscriptions = options.maxSubscriptions ?? UPSTOX_V3_LIMITS.ltpc.combined;
   }
 
   getConnectionState(): ProviderConnectionState {
@@ -112,9 +130,6 @@ export class UpstoxMarketDataStream {
 
   private validateSubscriptions(subscriptions: UpstoxSubscription[]): void {
     if (subscriptions.length === 0) throw new Error("At least one subscription is required");
-    if (subscriptions.length > this.maxSubscriptions) {
-      throw new Error(`Subscription count ${subscriptions.length} exceeds limit ${this.maxSubscriptions}`);
-    }
     const seen = new Set<string>();
     for (const sub of subscriptions) {
       if (!sub.instrumentKey || !sub.canonicalId) {
@@ -122,6 +137,15 @@ export class UpstoxMarketDataStream {
       }
       if (seen.has(sub.instrumentKey)) throw new Error(`Duplicate instrument key: ${sub.instrumentKey}`);
       seen.add(sub.instrumentKey);
+    }
+    // Limits are per mode and depend on whether multiple modes are used.
+    const groups = groupByMode(subscriptions);
+    const combined = groups.size > 1;
+    for (const [mode, subs] of groups) {
+      const limit = modeLimit(mode, combined);
+      if (subs.length > limit) {
+        throw new Error(`${mode} subscription count ${subs.length} exceeds limit ${limit}`);
+      }
     }
   }
 
@@ -148,31 +172,53 @@ export class UpstoxMarketDataStream {
     return uri;
   }
 
-  /** Connect and subscribe. Callers drive reconnection by calling start() again. */
+  /**
+   * Connect and subscribe. Callers drive reconnection by calling start() again.
+   * The authorize→connect window is guarded: concurrent starts are rejected and
+   * a stop() during authorization invalidates the pending start so it cannot
+   * open a socket afterward.
+   */
   async start(subscriptions: UpstoxSubscription[], callbacks: UpstoxStreamCallbacks): Promise<void> {
     this.validateSubscriptions(subscriptions);
     if (this.socket) throw new Error("Upstox stream is already connected");
+    if (this.startInFlight) throw new Error("Upstox stream start is already in progress");
+
+    const generation = ++this.startGeneration;
+    this.startInFlight = true;
     this.callbacks = callbacks;
     this.setState("CONNECTING");
     try {
       const uri = await this.authorize();
+      // A stop() (or a newer start) occurred while authorizing — do not connect.
+      // Do not touch startInFlight here: a newer start may own it now.
+      if (generation !== this.startGeneration) return;
       const socket = this.webSocketFactory(uri);
       socket.onopen = () => {
+        if (generation !== this.startGeneration) return;
         this.setState("STREAMING");
         this.sendFrame("sub", [...this.subscriptions.values()]);
       };
-      socket.onmessage = (event) => this.handleMessage(event);
+      socket.onmessage = (event) => {
+        if (generation !== this.startGeneration) return;
+        this.handleMessage(event);
+      };
       socket.onclose = () => {
+        if (generation !== this.startGeneration) return;
         this.socket = null;
         this.setState("DISCONNECTED");
       };
       socket.onerror = () => {
+        if (generation !== this.startGeneration) return;
         this.setState("ERROR", "Upstox feed socket error");
       };
       this.subscriptions = new Map(subscriptions.map((s) => [s.instrumentKey, { ...s }]));
       this.socket = socket;
+      this.startInFlight = false;
     } catch (error) {
-      this.setState("ERROR", sanitizeError(error));
+      if (generation === this.startGeneration) {
+        this.startInFlight = false;
+        this.setState("ERROR", sanitizeError(error));
+      }
       throw error;
     }
   }
@@ -194,16 +240,31 @@ export class UpstoxMarketDataStream {
     if (modeChanged.length) this.sendFrame("change_mode", modeChanged);
   }
 
+  /**
+   * Send one binary frame per mode. Upstox accepts a single mode per request;
+   * grouping prevents mixed-mode batches from receiving the wrong feed.
+   * Unsubscribe carries no mode and is sent as a single frame.
+   */
   private sendFrame(method: "sub" | "unsub" | "change_mode", subs: UpstoxSubscription[]): void {
     if (!this.socket || subs.length === 0) return;
-    const mode = subs[0]?.mode ?? "ltpc";
-    const frame: Record<string, unknown> = {
-      guid: crypto.randomUUID(),
-      method,
-      data: { instrumentKeys: subs.map((s) => s.instrumentKey) }
-    };
-    if (method !== "unsub") (frame.data as Record<string, unknown>).mode = mode;
-    this.socket.send(new TextEncoder().encode(JSON.stringify(frame)));
+    const encoder = new TextEncoder();
+    if (method === "unsub") {
+      const frame = {
+        guid: crypto.randomUUID(),
+        method,
+        data: { instrumentKeys: subs.map((s) => s.instrumentKey) }
+      };
+      this.socket.send(encoder.encode(JSON.stringify(frame)));
+      return;
+    }
+    for (const [mode, group] of groupByMode(subs)) {
+      const frame = {
+        guid: crypto.randomUUID(),
+        method,
+        data: { mode, instrumentKeys: group.map((s) => s.instrumentKey) }
+      };
+      this.socket.send(encoder.encode(JSON.stringify(frame)));
+    }
   }
 
   private handleMessage(event: { data: unknown }): void {
@@ -242,8 +303,10 @@ export class UpstoxMarketDataStream {
     }
   }
 
-  /** Close the socket and clear subscriptions. Idempotent. */
+  /** Close the socket and clear subscriptions. Idempotent. Invalidates any pending start. */
   stop(): void {
+    this.startGeneration++;
+    this.startInFlight = false;
     const socket = this.socket;
     this.socket = null;
     this.subscriptions = new Map();

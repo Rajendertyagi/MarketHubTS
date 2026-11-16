@@ -43,14 +43,52 @@ export function encodeFeedResponse(payload: Record<string, unknown>): Uint8Array
 
 export type UpstoxFeedMessageType = "initial_feed" | "live_feed" | "market_info";
 
+export interface DecodedDepthLevel {
+  bidQ: number | null;
+  bidP: number | null;
+  askQ: number | null;
+  askP: number | null;
+}
+
+export interface DecodedOhlc {
+  interval: string | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  vol: number | null;
+  ts: number | null;
+}
+
+export interface DecodedGreeks {
+  delta: number | null;
+  theta: number | null;
+  gamma: number | null;
+  vega: number | null;
+  rho: number | null;
+}
+
+/** Provider-native fields preserved verbatim; never fabricated. */
+export interface UpstoxNativeFields {
+  optionGreeks?: DecodedGreeks;
+  oi?: number;
+  iv?: number;
+  vtt?: number;
+  atp?: number;
+  tbq?: number;
+  tsq?: number;
+  depth?: DecodedDepthLevel[];
+  firstDepth?: DecodedDepthLevel;
+  ohlc?: DecodedOhlc[];
+}
+
 export interface DecodedFeedEntry {
   instrumentKey: string;
   ltp: number;
   lastTradedTimeMs: number | null;
   lastTradedQty: number | null;
   close: number | null;
-  /** Provider-native fields preserved verbatim; never fabricated. */
-  native: Record<string, unknown>;
+  native: UpstoxNativeFields;
 }
 
 export interface DecodedFeed {
@@ -68,25 +106,61 @@ function extractLtpc(feed: any): any | null {
   return null;
 }
 
-function nativeFields(feed: any): Record<string, unknown> {
-  const native: Record<string, unknown> = {};
-  const full = feed?.fullFeed?.marketFF ?? feed?.fullFeed?.indexFF ?? feed?.firstLevelWithGreeks;
+function depthLevel(quote: any): DecodedDepthLevel {
+  return {
+    bidQ: toNumber(quote?.bidQ),
+    bidP: toNumber(quote?.bidP),
+    askQ: toNumber(quote?.askQ),
+    askP: toNumber(quote?.askP)
+  };
+}
+
+function ohlcBar(bar: any): DecodedOhlc {
+  return {
+    interval: typeof bar?.interval === "string" ? bar.interval : null,
+    open: toNumber(bar?.open),
+    high: toNumber(bar?.high),
+    low: toNumber(bar?.low),
+    close: toNumber(bar?.close),
+    vol: toNumber(bar?.vol),
+    ts: toNumber(bar?.ts)
+  };
+}
+
+function nativeFields(feed: any): UpstoxNativeFields {
+  const native: UpstoxNativeFields = {};
+  const marketFF = feed?.fullFeed?.marketFF;
+  const indexFF = feed?.fullFeed?.indexFF;
+  const greeksFeed = feed?.firstLevelWithGreeks;
+  const full = marketFF ?? indexFF ?? greeksFeed;
   if (!full) return native;
-  if (full.optionGreeks) {
+
+  const greeks = full.optionGreeks;
+  if (greeks) {
     native.optionGreeks = {
-      delta: toNumber(full.optionGreeks.delta),
-      theta: toNumber(full.optionGreeks.theta),
-      gamma: toNumber(full.optionGreeks.gamma),
-      vega: toNumber(full.optionGreeks.vega),
-      rho: toNumber(full.optionGreeks.rho)
+      delta: toNumber(greeks.delta),
+      theta: toNumber(greeks.theta),
+      gamma: toNumber(greeks.gamma),
+      vega: toNumber(greeks.vega),
+      rho: toNumber(greeks.rho)
     };
   }
-  const oi = toNumber(full.oi);
-  if (oi !== null) native.oi = oi;
-  const iv = toNumber(full.iv);
-  if (iv !== null) native.iv = iv;
-  const vtt = toNumber(full.vtt);
-  if (vtt !== null) native.vtt = vtt;
+  for (const key of ["oi", "iv", "vtt", "atp", "tbq", "tsq"] as const) {
+    const value = toNumber(full[key]);
+    if (value !== null) native[key] = value;
+  }
+
+  // Market depth: 5-level (marketFF) or first level (greeksFeed).
+  if (Array.isArray(marketFF?.marketLevel?.bidAskQuote) && marketFF.marketLevel.bidAskQuote.length > 0) {
+    native.depth = marketFF.marketLevel.bidAskQuote.map(depthLevel);
+  }
+  if (greeksFeed?.firstDepth) native.firstDepth = depthLevel(greeksFeed.firstDepth);
+
+  // OHLC bars: present on marketFF and indexFF full feeds.
+  const ohlcSource = marketFF?.marketOHLC?.ohlc ?? indexFF?.marketOHLC?.ohlc;
+  if (Array.isArray(ohlcSource) && ohlcSource.length > 0) {
+    native.ohlc = ohlcSource.map(ohlcBar);
+  }
   return native;
 }
 
