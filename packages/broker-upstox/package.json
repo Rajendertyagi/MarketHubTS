@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@markethub/contracts": "workspace:*",
-    "@markethub/market-core": "workspace:*"
+    "@markethub/market-core": "workspace:*",
+    "protobufjs": "^8.8.1"
   },
   "devDependencies": {
     "typescript": "7.0.2"

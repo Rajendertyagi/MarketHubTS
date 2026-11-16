@@ -8,10 +8,24 @@ import type {
 } from "@markethub/contracts";
 import { emptyProviderStatus, VALIDATION_REQUIRED_ADVISORY, withoutValidationAdvisory } from "@markethub/contracts";
 import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from "@markethub/market-core";
+import { UPSTOX_EXPIRY_SETTING, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_VALIDATION_URL } from "./constants";
 
-export const UPSTOX_VALIDATION_URL = "https://api.upstox.com/v2/market/status/NSE";
-export const UPSTOX_TOKEN_CREDENTIAL = "analytics_token";
-export const UPSTOX_EXPIRY_SETTING = "upstox.tokenExpiresAt";
+export { UPSTOX_VALIDATION_URL, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_EXPIRY_SETTING } from "./constants";
+export {
+  UPSTOX_FEED_AUTHORIZE_URL,
+  UPSTOX_V3_LIMITS,
+  UpstoxMarketDataStream
+} from "./stream";
+export type {
+  UpstoxFeedMode,
+  UpstoxSubscription,
+  UpstoxStreamCallbacks,
+  UpstoxStreamOptions,
+  StreamSocket,
+  WebSocketFactory
+} from "./stream";
+export { decodeFeedResponse, encodeFeedResponse } from "./decode";
+export type { DecodedFeed, DecodedFeedEntry, UpstoxFeedMessageType } from "./decode";
 
 export interface UpstoxAdapterOptions {
   credentials: CredentialStore;
