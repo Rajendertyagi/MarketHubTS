@@ -94,7 +94,7 @@ function normalizeIdentifier(input: InstrumentIdentifier, now: string): Instrume
   const segmentScope = normalizeScope(input.segmentScope ?? input.segment);
   return instrumentIdentifierSchema.parse({
     ...input,
-    identifierNormalized: normalizeAliasValue(input.identifierNormalized || input.identifierValue),
+    identifierNormalized: normalizeAliasValue(input.identifierValue),
     exchangeScope,
     segmentScope,
     createdAt: input.createdAt ?? now,
@@ -288,7 +288,11 @@ export class CatalogSyncService {
         const resolvedIdByIdentity = new Map<string, string>();
         const resolvedIdByIncomingCanonicalId = new Map<string, string>();
         const enrichmentByIdentity = new Map<string, { canonicalId: string; existing: CanonicalInstrument }>();
+
+        // Phase 1: resolve cash underlyings first (existing identity match or symbol-to-ISIN enrichment),
+        // independent of input array order. Derivatives are resolved in phase 3 after remapping.
         for (const inst of normalizedInstruments) {
+          if (inst.derivative) continue;
           const existing = await tx.getInstrumentByIdentityKey(inst.identityKey);
           if (existing) {
             resolvedIdByIdentity.set(inst.identityKey, existing.canonicalId);
@@ -307,6 +311,94 @@ export class CatalogSyncService {
           } else {
             resolvedIdByIdentity.set(inst.identityKey, inst.canonicalId);
             resolvedIdByIncomingCanonicalId.set(inst.canonicalId, inst.canonicalId);
+          }
+        }
+
+        // Phase 2: remap incoming derivative underlying IDs to resolved canonical IDs and recompute
+        // derivative identity keys so identity resolution and persistence use the resolved underlying.
+        for (let i = 0; i < normalizedInstruments.length; i++) {
+          const inst = normalizedInstruments[i]!;
+          if (!inst.derivative) continue;
+          const incomingUnderlying = inst.derivative.underlyingCanonicalId;
+          const resolvedUnderlying = resolvedIdByIncomingCanonicalId.get(incomingUnderlying) ?? incomingUnderlying;
+          if (resolvedUnderlying === incomingUnderlying) continue;
+          const oldIdentityKey = inst.identityKey;
+          const remapped: CanonicalInstrument = {
+            ...inst,
+            underlyingCanonicalId: resolvedUnderlying,
+            derivative: { ...inst.derivative, underlyingCanonicalId: resolvedUnderlying }
+          };
+          remapped.identityKey = computeIdentityKey({
+            exchange: remapped.exchange,
+            segment: remapped.segment,
+            instrumentCategory: remapped.instrumentCategory,
+            canonicalSymbol: remapped.canonicalSymbol,
+            isin: remapped.isin,
+            exchangeSecurityId: remapped.exchangeSecurityId,
+            stableIdentifier: remapped.stableIdentifier,
+            derivative: {
+              underlyingCanonicalId: resolvedUnderlying,
+              expiryDate: remapped.derivative!.expiryDate,
+              strike: remapped.derivative!.strike,
+              strikeNormalized: remapped.derivative!.strikeNormalized,
+              optionType: remapped.derivative!.optionType
+            }
+          });
+          normalizedInstruments[i] = remapped;
+          if (resolvedIdByIdentity.has(oldIdentityKey)) {
+            resolvedIdByIdentity.delete(oldIdentityKey);
+            resolvedIdByIdentity.set(remapped.identityKey, remapped.canonicalId);
+          }
+          const enrich = enrichmentByIdentity.get(oldIdentityKey);
+          if (enrich) {
+            enrichmentByIdentity.delete(oldIdentityKey);
+            enrichmentByIdentity.set(remapped.identityKey, enrich);
+          }
+        }
+
+        // Phase 3: resolve derivatives against their remapped identity keys (no enrichment for derivatives).
+        for (const inst of normalizedInstruments) {
+          if (!inst.derivative) continue;
+          const existing = await tx.getInstrumentByIdentityKey(inst.identityKey);
+          if (existing) {
+            resolvedIdByIdentity.set(inst.identityKey, existing.canonicalId);
+            resolvedIdByIncomingCanonicalId.set(inst.canonicalId, existing.canonicalId);
+          } else {
+            resolvedIdByIdentity.set(inst.identityKey, inst.canonicalId);
+            resolvedIdByIncomingCanonicalId.set(inst.canonicalId, inst.canonicalId);
+          }
+        }
+
+        // Final duplicate detection after all resolution/remapping. The pre-remap identityToInstrument
+        // map cannot catch collisions created by underlying-ID remapping or enrichment convergence.
+        const finalIdentityOwners = new Map<string, string>();
+        const resolvedIdOwners = new Map<string, string>();
+        for (const inst of normalizedInstruments) {
+          const resolvedId = resolvedIdByIdentity.get(inst.identityKey) ?? inst.canonicalId;
+          const priorIdentityOwner = finalIdentityOwners.get(inst.identityKey);
+          if (priorIdentityOwner && priorIdentityOwner !== inst.canonicalId) {
+            conflicts.push({
+              type: "DUPLICATE_IDENTITY_IN_BATCH",
+              severity: "ERROR",
+              message: `Distinct incoming instruments resolve to the same final identity: ${inst.identityKey}`,
+              identityKey: inst.identityKey,
+              canonicalId: inst.canonicalId,
+              details: { otherCanonicalId: priorIdentityOwner }
+            });
+          } else {
+            finalIdentityOwners.set(inst.identityKey, inst.canonicalId);
+          }
+          const priorResolvedOwner = resolvedIdOwners.get(resolvedId);
+          if (priorResolvedOwner && priorResolvedOwner !== inst.canonicalId) {
+            conflicts.push({
+              type: "DUPLICATE_IDENTITY_IN_BATCH",
+              severity: "ERROR",
+              message: `Distinct incoming instruments resolve to the same canonical instrument: ${resolvedId}`,
+              canonicalId: inst.canonicalId,
+              details: { resolvedCanonicalId: resolvedId, otherCanonicalId: priorResolvedOwner }
+            });
+          } else {
+            resolvedIdOwners.set(resolvedId, inst.canonicalId);
           }
         }
 

@@ -780,4 +780,112 @@ describe("M2 corrected catalog foundation", () => {
     expect(all.length).toBe(2);
     handle.close();
   });
+
+  test("derivative underlying incoming canonical ID is remapped to enriched existing canonical ID", async () => {
+    const { sync, repo, handle } = setup();
+    // 1. symbol-only equity with canonical ID A
+    const A = "underlying-A";
+    const existing = equity({ canonicalId: A, exchange: "NSE", segment: "CASH", canonicalSymbol: "UNDREM", displayName: "Underlying Remap" });
+    const r1 = await sync.applyBatch({ source: "s1", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [existing], mappings: [], aliases: [], identifiers: [] });
+    expect(r1.status).toBe("COMPLETED");
+
+    // 2. same equity with ISIN and a different incoming canonical ID B (enriches to A),
+    //    plus a new derivative referencing B as underlying (deliberately listed first)
+    const B = "underlying-B-incoming";
+    const withIsin = equity({ canonicalId: B, exchange: "NSE", segment: "CASH", canonicalSymbol: "UNDREM", displayName: "Underlying Remap Ltd", isin: "INEUNDREM0101" });
+    const derivId = "derivative-remap";
+    const fut = derivative({
+      canonicalId: derivId,
+      exchange: "NSE", segment: "FO", instrumentCategory: "STOCK_FUTURE",
+      canonicalSymbol: "UNDREM", displayName: "UNDREM FUT",
+      underlyingCanonicalId: B,
+      derivative: { underlyingCanonicalId: B, expiryDate: "2026-12-29" }
+    });
+    const r2 = await sync.applyBatch({ source: "s2", scope: { source: "s2" }, completeness: "PARTIAL", instruments: [fut, withIsin], mappings: [], aliases: [], identifiers: [] });
+    expect(r2.status).toBe("COMPLETED");
+    expect(r2.conflicts.length).toBe(0);
+
+    const all = await repo.listInstruments();
+    expect(all.length).toBe(2);
+    expect(all.some((i) => i.canonicalId === B)).toBe(false);
+    const storedFut = await repo.getInstrumentByCanonicalId(derivId);
+    expect(storedFut?.underlyingCanonicalId).toBe(A);
+    expect(storedFut?.derivative?.underlyingCanonicalId).toBe(A);
+    expect(storedFut?.identityKey).toContain(normalizeAliasValue(A));
+    expect(storedFut?.identityKey).not.toContain(normalizeAliasValue(B));
+    const contract = await repo.getDerivativeContract(derivId);
+    expect(contract?.underlyingCanonicalId).toBe(A);
+    handle.close();
+  });
+
+  test("post-remap collision: converging derivative identities fail with DUPLICATE_IDENTITY_IN_BATCH and roll back atomically", async () => {
+    const { sync, repo, handle } = setup();
+    // existing symbol-only underlying A
+    const A = "collide-A";
+    const a = equity({ canonicalId: A, exchange: "NSE", segment: "CASH", canonicalSymbol: "COLLIDE", displayName: "Collide Underlying" });
+    expect((await sync.applyBatch({ source: "s1", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [a], mappings: [], aliases: [], identifiers: [] })).status).toBe("COMPLETED");
+
+    // two distinct incoming cash IDs B1/B2 both enrich to A; two derivatives referencing B1/B2
+    // converge onto the same final derivative identity after remapping
+    const B1 = "collide-B1", B2 = "collide-B2", D1 = "collide-D1", D2 = "collide-D2";
+    const b1 = equity({ canonicalId: B1, exchange: "NSE", segment: "CASH", canonicalSymbol: "COLLIDE", displayName: "B1", isin: "INEB1X01010" });
+    const b2 = equity({ canonicalId: B2, exchange: "NSE", segment: "CASH", canonicalSymbol: "COLLIDE", displayName: "B2", isin: "INEB2Y01010" });
+    const d1 = derivative({ canonicalId: D1, exchange: "NSE", segment: "FO", instrumentCategory: "STOCK_FUTURE", canonicalSymbol: "COLLIDE", displayName: "D1", underlyingCanonicalId: B1, derivative: { underlyingCanonicalId: B1, expiryDate: "2026-12-29" } });
+    const d2 = derivative({ canonicalId: D2, exchange: "NSE", segment: "FO", instrumentCategory: "STOCK_FUTURE", canonicalSymbol: "COLLIDE", displayName: "D2", underlyingCanonicalId: B2, derivative: { underlyingCanonicalId: B2, expiryDate: "2026-12-29" } });
+
+    const res = await sync.applyBatch({
+      source: "s2", scope: { source: "s2" }, completeness: "PARTIAL",
+      instruments: [d1, d2, b1, b2],
+      mappings: [{ provider: "UPSTOX", nativeIdentifier: "COLLIDE-MAP", canonicalId: D1, status: "ACTIVE" }],
+      aliases: [aliasOf({ canonicalId: D1, alias: "COLLIDE ALIAS", aliasType: "SEARCH", source: "s2" })],
+      identifiers: [{ canonicalId: D1, identifierType: "EXCHANGE_SECURITY_ID", identifierNamespace: "NSE", identifierValue: "COLLIDESEC", identifierNormalized: "COLLIDESEC", exchange: "NSE", segment: "FO", exchangeScope: "NSE", segmentScope: "FO", source: "s2", status: "CURRENT" }]
+    });
+    expect(res.status).toBe("FAILED");
+    expect(res.conflicts.some((c) => c.type === "DUPLICATE_IDENTITY_IN_BATCH" && c.severity === "ERROR")).toBe(true);
+
+    // atomic rollback: only the pre-existing A remains; no mappings/aliases/identifiers/contracts from failed batch
+    expect((await repo.listInstruments()).length).toBe(1);
+    expect((await repo.listInstruments())[0]!.canonicalId).toBe(A);
+    expect(await repo.getMapping("UPSTOX", "COLLIDE-MAP")).toBeNull();
+    expect((await repo.findAlias("COLLIDE ALIAS")).length).toBe(0);
+    expect((await repo.findIdentifiers({ identifierNormalized: "INEB1X01010" })).length).toBe(0);
+    expect((await repo.findIdentifiers({ identifierNormalized: "INEB2Y01010" })).length).toBe(0);
+    expect(await repo.getDerivativeContract(D1)).toBeNull();
+    expect(await repo.getDerivativeContract(D2)).toBeNull();
+    handle.close();
+  });
+
+  test("explicit identifier normalization is recomputed from identifierValue", async () => {
+    const { sync, repo, handle } = setup();
+    const inst = equity({ exchange: "NSE", segment: "CASH", canonicalSymbol: "NORM", displayName: "Norm", isin: "INENORM0101" });
+    expect((await sync.applyBatch({ source: "s1", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [inst], mappings: [], aliases: [], identifiers: [] })).status).toBe("COMPLETED");
+
+    // caller supplies a wrong pre-normalized value; it must be ignored in favour of the original value
+    const res = await sync.applyBatch({ source: "s2", scope: { source: "s2" }, completeness: "PARTIAL", instruments: [], mappings: [], aliases: [], identifiers: [
+      { canonicalId: inst.canonicalId, identifierType: "EXCHANGE_SECURITY_ID", identifierNamespace: "NSE", identifierValue: "sec999", identifierNormalized: "WRONGVALUE", exchange: "NSE", segment: "CASH", exchangeScope: "NSE", segmentScope: "CASH", source: "s2", status: "CURRENT" }
+    ] });
+    expect(res.status).toBe("COMPLETED");
+    const byValue = await repo.findIdentifiers({ identifierNormalized: "SEC999" });
+    expect(byValue.some((i) => i.identifierValue === "sec999" && i.identifierNormalized === "SEC999")).toBe(true);
+    expect((await repo.findIdentifiers({ identifierNormalized: "WRONGVALUE" })).length).toBe(0);
+    handle.close();
+  });
+
+  test("post-remap collision: multiple incoming cash records resolving to one canonical ID fail atomically", async () => {
+    const { sync, repo, handle } = setup();
+    const A = "cashconv-A";
+    const a = equity({ canonicalId: A, exchange: "NSE", segment: "CASH", canonicalSymbol: "CASHCONV", displayName: "Cash Conv" });
+    expect((await sync.applyBatch({ source: "s1", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [a], mappings: [], aliases: [], identifiers: [] })).status).toBe("COMPLETED");
+
+    const b1 = equity({ canonicalId: "cashconv-B1", exchange: "NSE", segment: "CASH", canonicalSymbol: "CASHCONV", displayName: "B1", isin: "INEC1X01010" });
+    const b2 = equity({ canonicalId: "cashconv-B2", exchange: "NSE", segment: "CASH", canonicalSymbol: "CASHCONV", displayName: "B2", isin: "INEC2Y01010" });
+    const res = await sync.applyBatch({ source: "s2", scope: { source: "s2" }, completeness: "PARTIAL", instruments: [b1, b2], mappings: [], aliases: [], identifiers: [] });
+    expect(res.status).toBe("FAILED");
+    expect(res.conflicts.some((c) => c.type === "DUPLICATE_IDENTITY_IN_BATCH" && c.severity === "ERROR")).toBe(true);
+    const all = await repo.listInstruments();
+    expect(all.length).toBe(1);
+    expect(all[0]!.canonicalId).toBe(A);
+    expect(all[0]!.isin).toBeUndefined();
+    handle.close();
+  });
 });

@@ -278,7 +278,7 @@ function identifierToRow(i: InstrumentIdentifier): typeof instrumentIdentifierHi
     identifierType: i.identifierType,
     identifierNamespace: i.identifierNamespace,
     identifierValue: i.identifierValue,
-    identifierNormalized: i.identifierNormalized || normalizeAliasValue(i.identifierValue),
+    identifierNormalized: normalizeAliasValue(i.identifierValue),
     exchange: i.exchange ?? null,
     segment: i.segment ?? null,
     exchangeScope,
