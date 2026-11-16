@@ -127,6 +127,19 @@ export function resetConfigCache(): void {
   cached = null;
 }
 
+function sanitizeApiUrlForLog(apiUrl: string): string {
+  try {
+    const u = new URL(apiUrl);
+    if (u.username || u.password) {
+      u.username = "";
+      u.password = "";
+    }
+    return u.toString();
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 export function toPublicConfig(config: AppConfig): PublicConfig {
   return {
     env: config.env,
@@ -136,12 +149,13 @@ export function toPublicConfig(config: AppConfig): PublicConfig {
     logLevel: config.logLevel,
     webHost: config.webHost,
     webPort: config.webPort,
-    apiUrl: config.apiUrl,
+    apiUrl: sanitizeApiUrlForLog(config.apiUrl),
     version: config.version,
     dbPathConfigured: config.dbPath.length > 0
   };
 }
 
 export function redactConfigForLog(config: AppConfig): Record<string, unknown> {
-  return { ...toPublicConfig(config), dbPath: config.dbPath };
+  // Intentionally excludes raw dbPath and strips credentials from apiUrl.
+  return { ...toPublicConfig(config) };
 }

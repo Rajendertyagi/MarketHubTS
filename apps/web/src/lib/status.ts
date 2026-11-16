@@ -1,4 +1,12 @@
-import type { SystemStatus } from "@markethub/contracts";
+import { systemStatusSchema, type SystemStatus } from "@markethub/contracts";
+
+function extractErrorMessage(payload: unknown, status: number): string {
+  if (payload && typeof payload === "object" && "message" in payload) {
+    const message = (payload as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim().length > 0) return message;
+  }
+  return `Status request failed (${status})`;
+}
 
 export async function fetchSystemStatus(): Promise<SystemStatus> {
   const res = await fetch("/api/status", { headers: { Accept: "application/json" } });
@@ -6,15 +14,20 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;
-  } catch {}
-  if (!res.ok) {
-    const message =
-      json && typeof json === "object" && json !== null && "message" in json && typeof (json as any).message === "string"
-        ? (json as any).message
-        : `Status request failed (${res.status})`;
-    throw new Error(message);
+  } catch {
+    if (!res.ok) throw new Error(`Status request failed (${res.status})`);
+    throw new Error("Received invalid status response from backend");
   }
-  return json as SystemStatus;
+
+  if (!res.ok) {
+    throw new Error(extractErrorMessage(json, res.status));
+  }
+
+  const parsed = systemStatusSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error("Received invalid status response from backend");
+  }
+  return parsed.data;
 }
 
 export function formatUptime(ms: number): string {

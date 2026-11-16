@@ -4,6 +4,7 @@ import { serveStatic } from "hono/bun";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -54,28 +55,57 @@ function buildReadiness(deps: AppDependencies): ReadinessStatus {
   });
 }
 
-function corsOrigin(config: AppConfig) {
+function normalizeHostname(hostname: string): string {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) return hostname.slice(1, -1);
+  return hostname;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const h = normalizeHostname(hostname).toLowerCase();
+  if (h === "localhost" || h === "::1") return true;
+  if (isIP(h) === 4) {
+    const parts = h.split(".").map((n) => Number(n));
+    return parts.length === 4 && parts[0] === 127 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+  }
+  return false;
+}
+
+function isPrivateLanIpv4(hostname: string): boolean {
+  const h = normalizeHostname(hostname);
+  if (isIP(h) !== 4) return false;
+  const parts = h.split(".").map((n) => Number(n));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const a = parts[0]!;
+  const b = parts[1]!;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+export function isAllowedCorsOrigin(origin: string, config: Pick<AppConfig, "lan" | "port" | "webPort">): boolean {
+  if (!origin) return false;
   const allowed = new Set<string>([
     `http://localhost:${config.webPort}`,
     `http://127.0.0.1:${config.webPort}`,
     `http://localhost:${config.port}`,
     `http://127.0.0.1:${config.port}`
   ]);
-  return (origin: string) => {
-    if (!origin) return undefined;
-    if (allowed.has(origin)) return origin;
-    try {
-      const u = new URL(origin);
-      const host = u.hostname;
-      const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-      const isPrivateLan = /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
-      if (config.lan && (isLocal || isPrivateLan)) return origin;
-      if (!config.lan && isLocal) return origin;
-    } catch {
-      return undefined;
-    }
-    return undefined;
-  };
+  if (allowed.has(origin)) return true;
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname;
+    if (isLoopbackHost(host)) return true;
+    if (config.lan && isPrivateLanIpv4(host)) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function corsOrigin(config: AppConfig) {
+  return (origin: string) => (isAllowedCorsOrigin(origin, config) ? origin : undefined);
 }
 
 export function createApp(deps: AppDependencies) {
@@ -145,20 +175,23 @@ export function createApp(deps: AppDependencies) {
     return c.json(payload);
   });
 
-  app.get("/", (c) => c.json({ name: "MarketHubTS API", health: "/health", ready: "/ready", status: "/api/status" }));
-
   const distDir = resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
-  if (deps.config.env === "production" && existsSync(distDir)) {
+  const indexPath = resolve(distDir, "index.html");
+  const serveWeb = deps.config.env === "production" && existsSync(indexPath);
+
+  if (serveWeb) {
+    app.get("/", async (c) => c.html(await Bun.file(indexPath).text()));
     app.use("/*", serveStatic({ root: distDir }));
     app.get("*", async (c, next) => {
       const p = c.req.path;
       if (p.startsWith("/api") || p === "/health" || p === "/ready") return next();
       if (c.req.method === "GET") {
-        const indexPath = resolve(distDir, "index.html");
-        if (existsSync(indexPath)) return c.html(await Bun.file(indexPath).text());
+        return c.html(await Bun.file(indexPath).text());
       }
       return next();
     });
+  } else {
+    app.get("/", (c) => c.json({ name: "MarketHubTS API", health: "/health", ready: "/ready", status: "/api/status" }));
   }
 
   return app;

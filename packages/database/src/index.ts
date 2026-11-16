@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as schema from "./schema";
 
@@ -22,10 +22,12 @@ export interface OpenDatabaseOptions {
 }
 
 const packageDir = dirname(fileURLToPath(import.meta.url));
+export const repoRoot = resolve(packageDir, "../../..");
 export const defaultMigrationsFolder = resolve(packageDir, "../drizzle");
 
 export function resolveDatabasePath(dbPath = process.env.MARKETHUB_DB_PATH ?? "./data/markethub.sqlite"): string {
-  return resolve(dbPath);
+  if (isAbsolute(dbPath)) return resolve(dbPath);
+  return resolve(repoRoot, dbPath);
 }
 
 export function openDatabase(options: OpenDatabaseOptions | string = {}): DatabaseHandle {

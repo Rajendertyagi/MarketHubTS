@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { checkDatabase, defaultMigrationsFolder, openDatabase, runMigrations } from "../packages/database/src/index";
+import { join, resolve } from "node:path";
+import { checkDatabase, defaultMigrationsFolder, openDatabase, repoRoot, resolveDatabasePath, runMigrations } from "../packages/database/src/index";
 
 function tempDbPath(name: string) {
   const dir = mkdtempSync(join(tmpdir(), "markethub-db-"));
   return { dir, path: join(dir, name) };
 }
 function safeRm(dir: string) {
-  try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {}
 }
 
 describe("database", () => {
@@ -67,5 +69,21 @@ describe("database", () => {
     } finally {
       safeRm(dir);
     }
+  });
+
+  test("resolves relative database paths against repository root regardless of cwd", () => {
+    const prev = process.cwd();
+    try {
+      process.chdir(join(repoRoot, "packages", "database"));
+      const resolved = resolveDatabasePath("./data/markethub.sqlite");
+      expect(resolved).toBe(resolve(repoRoot, "data", "markethub.sqlite"));
+    } finally {
+      process.chdir(prev);
+    }
+  });
+
+  test("keeps explicit absolute database paths", () => {
+    const abs = resolve(repoRoot, "tmp-abs", "custom.sqlite");
+    expect(resolveDatabasePath(abs)).toBe(abs);
   });
 });

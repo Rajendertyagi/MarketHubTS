@@ -4,13 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../packages/config/src/index";
 import { defaultMigrationsFolder, openDatabase, runMigrations } from "../packages/database/src/index";
-import { createApp } from "../apps/api/src/app";
+import { createApp, isAllowedCorsOrigin } from "../apps/api/src/app";
 import { createLogger } from "../apps/api/src/lib/logger";
 import { healthStatusSchema, readinessStatusSchema, systemStatusSchema } from "../packages/contracts/src/index";
 
 function safeCleanup(dir: string, close?: () => void) {
-  try { close?.(); } catch {}
-  try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  try {
+    close?.();
+  } catch {}
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {}
 }
 
 function makeDeps() {
@@ -96,5 +100,33 @@ describe("api", () => {
     } finally {
       cleanup();
     }
+  });
+
+  test("CORS origin validation allows loopback and valid RFC1918 LAN origins when enabled", () => {
+    const cfg = { lan: true, port: 3001, webPort: 5173 };
+    expect(isAllowedCorsOrigin("http://localhost:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://127.0.0.1:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://[::1]:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://10.0.0.5:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://172.16.0.10:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://172.31.255.255:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://192.168.1.20:5173", cfg)).toBe(true);
+  });
+
+  test("CORS origin validation rejects public IPs and hostname lookalikes", () => {
+    const cfg = { lan: true, port: 3001, webPort: 5173 };
+    expect(isAllowedCorsOrigin("http://8.8.8.8:5173", cfg)).toBe(false);
+    expect(isAllowedCorsOrigin("http://1.2.3.4:5173", cfg)).toBe(false);
+    expect(isAllowedCorsOrigin("http://10.attacker.com:5173", cfg)).toBe(false);
+    expect(isAllowedCorsOrigin("http://192.168.attacker.com:5173", cfg)).toBe(false);
+    expect(isAllowedCorsOrigin("http://172.16.attacker.com:5173", cfg)).toBe(false);
+  });
+
+  test("CORS origin validation respects LAN-disabled behavior", () => {
+    const cfg = { lan: false, port: 3001, webPort: 5173 };
+    expect(isAllowedCorsOrigin("http://localhost:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://127.0.0.1:5173", cfg)).toBe(true);
+    expect(isAllowedCorsOrigin("http://192.168.1.20:5173", cfg)).toBe(false);
+    expect(isAllowedCorsOrigin("http://10.0.0.5:5173", cfg)).toBe(false);
   });
 });

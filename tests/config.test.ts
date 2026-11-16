@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { ConfigError, loadConfig, resetConfigCache, toPublicConfig } from "../packages/config/src/index";
+import { ConfigError, loadConfig, redactConfigForLog, resetConfigCache, toPublicConfig } from "../packages/config/src/index";
 
 beforeEach(() => resetConfigCache());
 
@@ -50,6 +50,21 @@ describe("config", () => {
     const cfg = loadConfig({ env: { MARKETHUB_DB_PATH: "C:/secret/path/db.sqlite" } });
     const pub = toPublicConfig(cfg);
     expect(pub.dbPathConfigured).toBe(true);
-    expect((pub as any).dbPath).toBeUndefined();
+    expect((pub as Record<string, unknown>).dbPath).toBeUndefined();
+  });
+
+  test("logged config does not include raw db path or api url credentials", () => {
+    const cfg = loadConfig({
+      env: {
+        MARKETHUB_DB_PATH: "C:/secret/path/db.sqlite",
+        MARKETHUB_API_URL: "http://user:pass@example.local:3001"
+      }
+    });
+    const logged = redactConfigForLog(cfg);
+    expect(logged.dbPath).toBeUndefined();
+    expect(logged.dbPathConfigured).toBe(true);
+    expect(String(logged.apiUrl)).not.toContain("user:pass");
+    expect(String(logged.apiUrl)).not.toContain("user");
+    expect(String(logged.apiUrl)).toContain("example.local");
   });
 });
