@@ -51,21 +51,54 @@ class FakeStreamer implements SdkStreamer {
   unsubscribeCalls: string[][] = [];
   connectCalls = 0;
   disconnectCalls = 0;
+  connectMode: "resolve" | "reject" | "deferred" = "resolve";
+  subscribeThrows = false;
   private listeners = new Map<string, Listener[]>();
+  private connectResolvers: Array<() => void> = [];
+  private connectRejecters: Array<(e: Error) => void> = [];
   autoReconnect(enable: boolean): void { this.autoReconnectCalls.push(enable); }
   on(event: string, listener: Listener): void {
     const arr = this.listeners.get(event) ?? [];
     arr.push(listener);
     this.listeners.set(event, arr);
   }
-  async connect(): Promise<void> { this.connectCalls++; }
+  async connect(): Promise<void> {
+    this.connectCalls++;
+    if (this.connectMode === "reject") throw new Error("SDK connect failed");
+    if (this.connectMode === "deferred") {
+      return new Promise<void>((resolve, reject) => {
+        this.connectResolvers.push(resolve);
+        this.connectRejecters.push(reject);
+      });
+    }
+  }
+  resolveConnect(): void { this.connectResolvers.shift()?.(); }
+  rejectConnect(e: Error): void { this.connectRejecters.shift()?.(e); }
   disconnect(): void { this.disconnectCalls++; }
-  subscribe(keys: string[], mode: string): void { this.subscribeCalls.push({ keys, mode }); }
+  subscribe(keys: string[], mode: string): void {
+    if (this.subscribeThrows) throw new Error("SDK subscribe failed");
+    this.subscribeCalls.push({ keys, mode });
+  }
   unsubscribe(keys: string[]): void { this.unsubscribeCalls.push(keys); }
   emit(event: string, payload?: unknown): void {
     for (const l of this.listeners.get(event) ?? []) l(payload);
   }
   async open(): Promise<void> { this.emit("open"); }
+}
+
+/** Credential store whose get() can be deliberately blocked and resolved. */
+class DeferredCredentials {
+  calls = 0;
+  private resolvers: Array<(v: string | null) => void> = [];
+  status(): { state: "AVAILABLE" } { return { state: "AVAILABLE" }; }
+  async get(): Promise<string | null> {
+    this.calls++;
+    return new Promise((resolve) => this.resolvers.push(resolve));
+  }
+  async set(): Promise<void> {}
+  async delete(): Promise<void> {}
+  async reset(): Promise<void> {}
+  resolve(value: string | null): void { this.resolvers.shift()?.(value); }
 }
 
 function setup(opts: { ready?: boolean; streamer?: FakeStreamer } = {}) {
@@ -100,6 +133,32 @@ const cbs = (h: ReturnType<typeof setup>) => ({
   onObservation: (o: NormalizeObservationInput) => h.observations.push(o),
   onConnectionState: (s: any, e?: string | null) => h.states.push({ state: s, error: e })
 });
+
+/** Build a stream with injected credentials and/or streamer factory for race tests. */
+function makeStream(opts: {
+  credentials?: DeferredCredentials;
+  streamerFactory?: () => SdkStreamer;
+  protobufReadyTimeoutMs?: number;
+} = {}) {
+  const observations: NormalizeObservationInput[] = [];
+  const states: Array<{ state: string; error?: string | null }> = [];
+  const streamers: FakeStreamer[] = [];
+  const stream = new UpstoxMarketDataStream({
+    credentials: (opts.credentials ?? new DeferredCredentials()) as any,
+    now: () => new Date(NOW),
+    protobufReadyTimeoutMs: opts.protobufReadyTimeoutMs ?? 100,
+    streamerFactory: opts.streamerFactory ?? (() => {
+      const s = new FakeStreamer();
+      streamers.push(s);
+      return s;
+    })
+  });
+  return { stream, observations, states, streamers,
+    callbacks: {
+      onObservation: (o: NormalizeObservationInput) => observations.push(o),
+      onConnectionState: (s: any, e?: string | null) => states.push({ state: s, error: e })
+    } };
+}
 
 afterEach(() => {
   while (handles.length) { try { handles.pop()?.close(); } catch {} }
@@ -283,17 +342,53 @@ describe("subscription lifecycle", () => {
     expect(h.states.some((x) => x.state === "DISCONNECTED")).toBe(true);
   });
 
-  test("concurrent start and stop-during-connect generation guards", async () => {
+  test("concurrent start is rejected while a start is in progress", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
     const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
-    await expect(h.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], cbs(h))).rejects.toThrow("already in progress");
-    h.stream.stop();
+    await expect(h.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], cbs(h)))
+      .rejects.toThrow("already in progress");
     await first;
     expect(h.streamers.length).toBe(1);
-    // stale event from old streamer must not affect state
-    h.streamers[0]!.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1 }, requestMode: 0 } } }));
-    expect(h.observations.length).toBe(0);
+  });
+
+  test("stop during credential retrieval prevents streamer creation and stale state changes", async () => {
+    const creds = new DeferredCredentials();
+    const h = makeStream({ credentials: creds });
+    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    expect(creds.calls).toBe(1);
+    h.stream.stop(); // invalidate generation while credentials are pending
+    creds.resolve("test-token");
+    await first;
+    expect(h.streamers.length).toBe(0); // no SDK streamer created
+    expect(h.states.some((s) => s.state === "CONNECTING")).toBe(true); // stale start did not change final state
+    expect(h.stream.getConnectionState()).toBe("DISCONNECTED");
+    // A new generation works normally.
+    const creds2 = new DeferredCredentials();
+    const h2 = makeStream({ credentials: creds2 });
+    const second = h2.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h2.callbacks);
+    creds2.resolve("test-token");
+    await second;
+    expect(h2.streamers.length).toBe(1);
+    expect(h2.streamers[0]!.connectCalls).toBe(1);
+  });
+
+  test("old credential resolution does not interfere with a newer pending start", async () => {
+    const creds = new DeferredCredentials();
+    const h = makeStream({ credentials: creds });
+    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    h.stream.stop();
+    const second = h.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h.callbacks);
+    expect(creds.calls).toBe(2);
+    creds.resolve("old-token"); // resolves the FIRST pending request
+    await first;
+    expect(h.streamers.length).toBe(0); // old start created nothing
+    expect(h.stream.getConnectionState()).toBe("CONNECTING"); // newer start still owns state
+    creds.resolve("new-token"); // resolves the SECOND request
+    await second;
+    expect(h.streamers.length).toBe(1);
+    expect(h.streamers[0]!.connectCalls).toBe(1);
+    expect(h.stream.getConnectionState()).toBe("CONNECTING");
   });
 });
 
@@ -376,5 +471,232 @@ describe("field mapping via real SDK serialization", () => {
     await Bun.sleep(20);
     s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [BANK_KEY]: { ltpc: { ltp: 1 }, requestMode: 0 } } }));
     expect(h.observations.length).toBe(0);
+  });
+});
+
+describe("Finding 2 — failed SDK connect cleanup", () => {
+  test("connect rejection cleans up failed instance and allows a fresh start", async () => {
+    const creds = new DeferredCredentials();
+    const h = makeStream({ credentials: creds });
+    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    creds.resolve("token");
+    await first;
+    const failed = h.streamers[0]!;
+    failed.connectMode = "reject";
+    // Force a fresh start after stop; the next streamer will reject connect.
+    h.stream.stop();
+    const creds2 = new DeferredCredentials();
+    const h2 = makeStream({ credentials: creds2, streamerFactory: () => {
+      const s = new FakeStreamer();
+      s.connectMode = "reject";
+      h2streamers.push(s);
+      return s;
+    } });
+    const h2streamers: FakeStreamer[] = [];
+    const second = h2.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h2.callbacks);
+    creds2.resolve("token");
+    await expect(second).rejects.toThrow("SDK connect failed");
+    expect(h2streamers[0]!.disconnectCalls).toBe(1); // failed instance cleaned up
+    expect(h2.states.some((s) => s.state === "ERROR")).toBe(true);
+    // A subsequent start creates a fresh instance and can succeed.
+    const creds3 = new DeferredCredentials();
+    const h3 = makeStream({ credentials: creds3 });
+    const third = h3.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h3.callbacks);
+    creds3.resolve("token");
+    await third;
+    expect(h3.streamers.length).toBe(1);
+    expect(h3.streamers[0]!.connectCalls).toBe(1);
+  });
+
+  test("old connect rejection after stop does not disturb a newer start", async () => {
+    const creds = new DeferredCredentials();
+    const h = makeStream({ credentials: creds, streamerFactory: () => {
+      const s = new FakeStreamer();
+      s.connectMode = "deferred";
+      h.streamers.push(s);
+      return s;
+    } });
+    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    creds.resolve("token");
+    await Bun.sleep(5); // let first reach deferred connect
+    const old = h.streamers[0]!;
+    h.stream.stop(); // invalidate old generation
+    const creds2 = new DeferredCredentials();
+    const h2 = makeStream({ credentials: creds2 });
+    const second = h2.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h2.callbacks);
+    creds2.resolve("token");
+    await second;
+    old.rejectConnect(new Error("old connect failed"));
+    await first.catch(() => {});
+    expect(h2.streamers.length).toBe(1);
+    expect(h2.streamers[0]!.connectCalls).toBe(1);
+    expect(h2.states.some((s) => s.state === "ERROR")).toBe(false); // old failure did not touch newer state
+  });
+});
+
+describe("Finding 3 — safe int64 across all fields", () => {
+  const Long = (protobuf as any).util.Long;
+  const unsafe = () => Long.fromString("9007199254740993");
+
+  test("unsafe ltpc.ltt and ltpc.ltq are not rounded or zeroed", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1, ltt: unsafe(), ltq: unsafe(), cp: 1 }, requestMode: 0 } } }));
+    expect(h.observations.length).toBe(1);
+    const o = h.observations[0]!;
+    expect(o.rawProviderTimestamp).toBeNull();
+    expect(o.value.lastTradedQuantity).toBeUndefined();
+    const n = o.value.native as any;
+    expect(n.ltpcLttRaw).toBe("9007199254740993");
+    expect(n.ltpcLttUnsafe).toBe(true);
+    expect(n.ltpcLtqRaw).toBe("9007199254740993");
+    expect(n.ltpcLtqUnsafe).toBe(true);
+  });
+
+  test("unsafe vtt, CAS int64, depth, first-depth and OHLC int64 fields preserved exactly", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { fullFeed: { marketFF: {
+      ltpc: { ltp: 1, ltt: NOW, ltq: 1, cp: 1 },
+      vtt: unsafe(), ieq: unsafe(), iiqTotal: unsafe(), iiqM: unsafe(),
+      marketLevel: { bidAskQuote: [{ bidQ: unsafe(), bidP: 1, askQ: unsafe(), askP: 1 }] },
+      marketOHLC: { ohlc: [{ interval: "1m", open: 1, high: 1, low: 1, close: 1, vol: unsafe(), ts: unsafe() }] }
+    } }, requestMode: 1 } } }));
+    expect(h.observations.length).toBe(1);
+    const n = h.observations[0]!.value.native as any;
+    for (const key of ["vtt", "ieq", "iiqTotal", "iiqM"]) {
+      expect(n[`${key}Raw`]).toBe("9007199254740993");
+      expect(n[`${key}Unsafe`]).toBe(true);
+      expect(n[key]).toBeUndefined(); // never fabricated zero
+    }
+    expect(n.depth[0].bidQRaw).toBe("9007199254740993");
+    expect(n.depth[0].askQRaw).toBe("9007199254740993");
+    expect(n.depth[0].bidQ).toBeUndefined();
+    expect(n.ohlc[0].volRaw).toBe("9007199254740993");
+    expect(n.ohlc[0].tsRaw).toBe("9007199254740993");
+    expect(n.ohlc[0].vol).toBeUndefined();
+  });
+
+  test("unsafe first-level depth quantities preserved exactly", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "option_greeks" }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { firstLevelWithGreeks: {
+      ltpc: { ltp: 1, ltt: NOW, ltq: 1, cp: 1 },
+      firstDepth: { bidQ: unsafe(), bidP: 1, askQ: unsafe(), askP: 1 }
+    }, requestMode: 2 } } }));
+    const n = h.observations[0]!.value.native as any;
+    expect(n.firstDepth.bidQRaw).toBe("9007199254740993");
+    expect(n.firstDepth.askQRaw).toBe("9007199254740993");
+    expect(n.firstDepth.bidQ).toBeUndefined();
+  });
+
+  test("safe int64 values still convert and omitted scalars keep zero defaults", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { fullFeed: { marketFF: {
+      ltpc: { ltp: 1, ltt: NOW, ltq: 7, cp: 1 }, vtt: 42, ieq: 9
+      // iiqTotal, iiqM, depth, OHLC omitted -> proto3 zero defaults
+    } }, requestMode: 1 } } }));
+    const o = h.observations[0]!;
+    const n = o.value.native as any;
+    expect(o.value.lastTradedQuantity).toBe(7);
+    expect(n.vtt).toBe(42);
+    expect(n.ieq).toBe(9);
+    expect(n.iiqTotal).toBe(0);
+    expect(n.iiqM).toBe(0);
+    expect(n.vttUnsafe).toBeUndefined();
+  });
+});
+
+describe("Finding 4 — close during readiness and async handler safety", () => {
+  test("close before readiness completes prevents STREAMING and subscriptions", async () => {
+    const h = setup({ ready: false });
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    s.emit("close"); // close while readiness pending
+    s.streamer = { protobufRoot: {} as unknown }; // readiness becomes ready
+    await Bun.sleep(30);
+    expect(s.subscribeCalls.length).toBe(0);
+    expect(h.states.some((x) => x.state === "STREAMING")).toBe(false);
+    expect(h.stream.getConnectionState()).toBe("DISCONNECTED");
+    // stale message after close produces no observation
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1 }, requestMode: 0 } } }));
+    expect(h.observations.length).toBe(0);
+  });
+
+  test("subscribe throwing during initial subscription yields controlled ERROR and cleanup", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    s.subscribeThrows = true;
+    await s.open();
+    await Bun.sleep(30);
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
+    expect(s.disconnectCalls).toBe(1);
+    expect(h.stream.getConnectionState()).toBe("ERROR");
+  });
+});
+
+describe("Additional A/B/C — partial failure, mode normalization, feed types", () => {
+  test("partial subscription update failure keeps last committed map and invalidates connection", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.subscribeThrows = true; // unsubscribe succeeds, subscribe fails
+    await expect(h.stream.updateSubscriptions([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }]))
+      .rejects.toThrow("SDK subscribe failed");
+    expect(h.stream.getSubscriptions().map((x) => x.instrumentKey)).toEqual([NIFTY_KEY]); // last committed
+    expect(s.disconnectCalls).toBe(1); // inconsistent connection invalidated
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
+  });
+
+  test("omitted mode and explicit ltpc are equivalent — no unnecessary operations", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h)); // omitted mode
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    await h.stream.updateSubscriptions([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "ltpc" }]);
+    expect(s.unsubscribeCalls.length).toBe(0);
+    expect(s.subscribeCalls.length).toBe(1); // only the initial subscription
+  });
+
+  test("supported feed types produce observations; unknown type with feeds does not", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    const feed = { [NIFTY_KEY]: { ltpc: { ltp: 1, ltt: NOW, ltq: 1, cp: 1 }, requestMode: 0 } };
+    s.emit("message", sdkSerialize({ type: 0, currentTs: NOW, feeds: feed })); // initial_feed
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: feed })); // live_feed
+    expect(h.observations.length).toBe(2);
+    s.emit("message", JSON.stringify({ type: "mystery_type", feeds: feed }));
+    expect(h.observations.length).toBe(2); // no observation for unknown type
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
   });
 });

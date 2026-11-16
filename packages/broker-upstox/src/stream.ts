@@ -62,10 +62,15 @@ export function modeLimit(mode: UpstoxFeedMode, combined: boolean): number {
   return combined ? limits.combined : limits.individual;
 }
 
+/** Effective mode: omitted mode and explicit ltpc are equivalent. */
+export function effectiveMode(mode?: UpstoxFeedMode): UpstoxFeedMode {
+  return mode ?? "ltpc";
+}
+
 export function groupByMode(subscriptions: UpstoxSubscription[]): Map<UpstoxFeedMode, UpstoxSubscription[]> {
   const groups = new Map<UpstoxFeedMode, UpstoxSubscription[]>();
   for (const sub of subscriptions) {
-    const mode = sub.mode ?? "ltpc";
+    const mode = effectiveMode(sub.mode);
     const group = groups.get(mode) ?? [];
     group.push(sub);
     groups.set(mode, group);
@@ -95,22 +100,61 @@ function toNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string" && value.trim() !== "") {
     const n = Number(value);
-    return Number.isSafeInteger(n) || Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) ? n : null;
   }
   return null;
 }
 
-/** Convert an int64 decimal string to a safe number, or null with a diagnostic. */
-function int64ToNumber(value: unknown): { value: number | null; unsafe: boolean } {
-  if (value === null || value === undefined) return { value: null, unsafe: false };
-  const n = toNumber(value);
-  if (n === null) return { value: null, unsafe: true };
-  if (!Number.isSafeInteger(n)) return { value: null, unsafe: true };
-  return { value: n, unsafe: false };
+interface Int64Result {
+  value: number | null;
+  raw: string | null;
+  unsafe: boolean;
+  missing: boolean;
+}
+
+/**
+ * Lossless int64 conversion. A decimal string is accepted only when its exact
+ * canonical representation round-trips through Number() as a safe integer —
+ * never by converting first and assuming the original value is recoverable.
+ */
+function int64Value(value: unknown): Int64Result {
+  if (value === null || value === undefined) return { value: null, raw: null, unsafe: false, missing: true };
+  let text: string;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return { value: null, raw: String(value), unsafe: true, missing: false };
+    text = String(value);
+  } else if (typeof value === "string") {
+    text = value.trim();
+  } else if (typeof (value as { toString?: unknown })?.toString === "function") {
+    text = String((value as { toString: () => string }).toString()).trim();
+  } else {
+    return { value: null, raw: null, unsafe: true, missing: false };
+  }
+  if (text === "") return { value: null, raw: text, unsafe: true, missing: false };
+  const n = Number(text);
+  if (Number.isSafeInteger(n) && String(n) === text) {
+    return { value: n, raw: text, unsafe: false, missing: false };
+  }
+  return { value: null, raw: text, unsafe: true, missing: false };
 }
 
 interface NativeFields {
   [key: string]: unknown;
+}
+
+/** Assign an int64 native field without ever turning an unsafe value into zero. */
+function setNativeInt64(target: NativeFields, key: string, value: unknown, defaultOnMissing: boolean): void {
+  const r = int64Value(value);
+  if (r.missing) {
+    if (defaultOnMissing) target[key] = 0; // proto3 zero default under existing parent
+    return;
+  }
+  if (r.unsafe) {
+    target[`${key}Raw`] = r.raw; // exact decimal preserved
+    target[`${key}Unsafe`] = true; // explicit diagnostic
+    return;
+  }
+  target[key] = r.value;
 }
 
 function mapNative(feed: any): NativeFields {
@@ -125,44 +169,50 @@ function mapNative(feed: any): NativeFields {
       gamma: toNumber(greeks.gamma), vega: toNumber(greeks.vega), rho: toNumber(greeks.rho)
     };
   }
-  for (const key of ["oi", "iv", "vtt", "atp", "tbq", "tsq"] as const) {
+  // oi/iv/atp/tbq/tsq are doubles; vtt is int64 and needs safe conversion.
+  for (const key of ["oi", "iv", "atp", "tbq", "tsq"] as const) {
     const v = toNumber(full[key]);
     if (v !== null) native[key] = v;
   }
+  setNativeInt64(native, "vtt", full.vtt, false); // old decoder omitted missing vtt
+
   const marketFF = feed?.fullFeed?.marketFF;
   if (marketFF) {
     // Proto3 scalar defaults: when the parent message exists, omitted scalars
     // decode to 0/false. Preserve that behavior for CAS fields.
     for (const key of ["iep", "rp"] as const) native[key] = toNumber(marketFF[key]) ?? 0;
-    for (const key of ["ieq", "iiqTotal", "iiqM"] as const) {
-      const c = int64ToNumber(marketFF[key]);
-      native[key] = c.value ?? 0;
-    }
+    for (const key of ["ieq", "iiqTotal", "iiqM"] as const) setNativeInt64(native, key, marketFF[key], true);
     native.casEligible = marketFF.casEligible === true;
     const quotes = marketFF.marketLevel?.bidAskQuote;
     if (Array.isArray(quotes) && quotes.length) {
-      native.depth = quotes.map((q: any) => ({
-        bidQ: int64ToNumber(q.bidQ).value ?? 0, bidP: toNumber(q.bidP) ?? 0,
-        askQ: int64ToNumber(q.askQ).value ?? 0, askP: toNumber(q.askP) ?? 0
-      }));
+      native.depth = quotes.map((q: any) => {
+        const level: NativeFields = { bidP: toNumber(q.bidP) ?? 0, askP: toNumber(q.askP) ?? 0 };
+        setNativeInt64(level, "bidQ", q.bidQ, true);
+        setNativeInt64(level, "askQ", q.askQ, true);
+        return level;
+      });
     }
   }
   const greeksFeed = feed?.firstLevelWithGreeks;
   if (greeksFeed?.firstDepth) {
     const q = greeksFeed.firstDepth;
-    native.firstDepth = {
-      bidQ: int64ToNumber(q.bidQ).value ?? 0, bidP: toNumber(q.bidP) ?? 0,
-      askQ: int64ToNumber(q.askQ).value ?? 0, askP: toNumber(q.askP) ?? 0
-    };
+    const level: NativeFields = { bidP: toNumber(q.bidP) ?? 0, askP: toNumber(q.askP) ?? 0 };
+    setNativeInt64(level, "bidQ", q.bidQ, true);
+    setNativeInt64(level, "askQ", q.askQ, true);
+    native.firstDepth = level;
   }
   const ohlcSource = marketFF?.marketOHLC?.ohlc ?? feed?.fullFeed?.indexFF?.marketOHLC?.ohlc;
   if (Array.isArray(ohlcSource) && ohlcSource.length) {
-    native.ohlc = ohlcSource.map((b: any) => ({
-      interval: typeof b.interval === "string" ? b.interval : null,
-      open: toNumber(b.open) ?? 0, high: toNumber(b.high) ?? 0, low: toNumber(b.low) ?? 0,
-      close: toNumber(b.close) ?? 0, vol: int64ToNumber(b.vol).value ?? 0,
-      ts: int64ToNumber(b.ts).value ?? 0
-    }));
+    native.ohlc = ohlcSource.map((b: any) => {
+      const bar: NativeFields = {
+        interval: typeof b.interval === "string" ? b.interval : null,
+        open: toNumber(b.open) ?? 0, high: toNumber(b.high) ?? 0,
+        low: toNumber(b.low) ?? 0, close: toNumber(b.close) ?? 0
+      };
+      setNativeInt64(bar, "vol", b.vol, true);
+      setNativeInt64(bar, "ts", b.ts, true);
+      return bar;
+    });
   }
   return native;
 }
@@ -175,6 +225,8 @@ function extractLtpc(feed: any): any | null {
   if (feed?.firstLevelWithGreeks?.ltpc) return feed.firstLevelWithGreeks.ltpc;
   return null;
 }
+
+const SUPPORTED_FEED_TYPES = new Set(["initial_feed", "live_feed"]);
 
 /**
  * Upstox V3 stream using the official SDK. Owns only provider protocol and
@@ -244,6 +296,15 @@ export class UpstoxMarketDataStream {
     }
   }
 
+  /** Safe cleanup of a specific streamer instance; never touches a newer one. */
+  private cleanupStreamer(streamer: SdkStreamer): void {
+    if (this.streamer === streamer) {
+      this.streamer = null;
+      this.ready = false;
+    }
+    try { streamer.disconnect(); } catch {}
+  }
+
   async start(subscriptions: UpstoxSubscription[], callbacks: UpstoxStreamCallbacks): Promise<void> {
     this.validateSubscriptions(subscriptions);
     if (this.streamer) throw new Error("Upstox stream is already connected");
@@ -255,52 +316,80 @@ export class UpstoxMarketDataStream {
     this.subscriptions = new Map(subscriptions.map((s) => [s.instrumentKey, { ...s }]));
     this.setState("CONNECTING");
 
+    let streamer: SdkStreamer | null = null;
     try {
       const token = await this.options.credentials.get("UPSTOX", UPSTOX_TOKEN_CREDENTIAL);
+      // Finding 1: a stop() during credential retrieval invalidates this start.
+      if (generation !== this.startGeneration) return;
       if (!token) throw new Error("Upstox Analytics Token is not configured");
       const oauth2 = sdk.ApiClient.instance.authentications.OAUTH2;
       if (!oauth2) throw new Error("Upstox SDK OAUTH2 authentication slot is unavailable");
       oauth2.accessToken = token;
 
-      const streamer = this.streamerFactory();
+      streamer = this.streamerFactory();
       // SDK defaults autoReconnect to TRUE — explicitly disable so MarketHubTS
       // is the sole owner of reconnection.
       streamer.autoReconnect(false);
 
       streamer.on("open", () => {
         if (generation !== this.startGeneration) return;
-        void this.waitForProtobufReady(streamer, generation).then((ready) => {
-          if (generation !== this.startGeneration) return;
-          if (!ready) {
-            this.setState("ERROR", "Upstox SDK protobuf schema did not become ready");
-            try { streamer.disconnect(); } catch {}
-            if (this.streamer === streamer) this.streamer = null;
-            return;
-          }
-          this.ready = true;
-          this.setState("STREAMING");
-          this.sendSubscriptions(streamer);
-        });
+        if (this.streamer !== streamer) return;
+        void this.waitForProtobufReady(streamer!, generation)
+          .then((ready) => {
+            // Finding 4: generation AND active-instance AND not-closed checks.
+            if (generation !== this.startGeneration) return;
+            if (this.streamer !== streamer) return;
+            if (!ready) {
+              this.setState("ERROR", "Upstox SDK protobuf schema did not become ready");
+              this.cleanupStreamer(streamer!);
+              return;
+            }
+            this.ready = true;
+            this.setState("STREAMING");
+            try {
+              this.sendSubscriptions(streamer!);
+            } catch (error) {
+              this.setState("ERROR", sanitizeError(error));
+              this.cleanupStreamer(streamer!);
+            }
+          })
+          .catch((error) => {
+            // Avoid unhandled promise rejections from async event handlers.
+            if (generation !== this.startGeneration) return;
+            this.setState("ERROR", sanitizeError(error));
+            this.cleanupStreamer(streamer!);
+          });
       });
       streamer.on("message", (payload) => {
         if (generation !== this.startGeneration) return;
+        if (this.streamer !== streamer) return;
         this.handleMessage(payload);
       });
       streamer.on("close", () => {
         if (generation !== this.startGeneration) return;
-        this.streamer = null;
-        this.ready = false;
+        if (this.streamer === streamer) {
+          this.streamer = null;
+          this.ready = false;
+        }
         this.setState("DISCONNECTED");
       });
       streamer.on("error", (err) => {
         if (generation !== this.startGeneration) return;
+        if (this.streamer !== streamer) return;
         this.setState("ERROR", sanitizeError(err));
       });
 
       this.streamer = streamer;
       await streamer.connect();
+      // A stop()/newer start during connect must not be disturbed by this start.
+      if (generation !== this.startGeneration) {
+        if (this.streamer === streamer) this.streamer = null;
+        return;
+      }
       this.startInFlight = false;
     } catch (error) {
+      // Finding 2: clean up the failed instance; never clear a newer generation's streamer.
+      if (streamer) this.cleanupStreamer(streamer);
       if (generation === this.startGeneration) {
         this.startInFlight = false;
         this.setState("ERROR", sanitizeError(error));
@@ -316,7 +405,7 @@ export class UpstoxMarketDataStream {
     const added = [...next.values()].filter((s) => !this.subscriptions.has(s.instrumentKey));
     const modeChanged = [...next.values()].filter((s) => {
       const cur = this.subscriptions.get(s.instrumentKey);
-      return cur && cur.mode !== s.mode;
+      return cur && effectiveMode(cur.mode) !== effectiveMode(s.mode); // Finding B
     });
     if (!this.streamer || !this.ready) {
       // Defer: desired state changes only; no SDK calls while disconnected/connecting.
@@ -333,11 +422,14 @@ export class UpstoxMarketDataStream {
         // SDK changeMode() is defective (sends sub instead of change_mode).
         for (const s of modeChanged) {
           streamer.unsubscribe([s.instrumentKey]);
-          streamer.subscribe([s.instrumentKey], s.mode ?? "ltpc");
+          streamer.subscribe([s.instrumentKey], effectiveMode(s.mode));
         }
       }
-      this.subscriptions = next; // commit only after SDK operations succeed
+      this.subscriptions = next; // commit only after all SDK operations succeed
     } catch (error) {
+      // Finding A: partial remote state may have changed. Invalidate this
+      // connection so the supervisor reconnects with the last committed map.
+      this.cleanupStreamer(streamer);
       this.setState("ERROR", sanitizeError(error));
       throw error;
     }
@@ -355,6 +447,11 @@ export class UpstoxMarketDataStream {
     }
     // market_info is the first V3 message and has no feeds map — handle before feeds validation.
     if (message?.type === "market_info") return;
+    // Finding C: accept only documented feed types supported by this wrapper.
+    if (!SUPPORTED_FEED_TYPES.has(message?.type)) {
+      this.setState("ERROR", `Upstox SDK delivered an unsupported feed type: ${String(message?.type)}`);
+      return;
+    }
     if (!message?.feeds || typeof message.feeds !== "object") {
       this.setState("ERROR", "Upstox SDK message is missing the feeds map");
       return;
@@ -368,21 +465,29 @@ export class UpstoxMarketDataStream {
       const ltp = toNumber(ltpc.ltp);
       if (ltp === null) continue;
       const value: Record<string, unknown> = { ltp };
-      const qty = int64ToNumber(ltpc.ltq);
-      if (qty.value !== null) value.lastTradedQuantity = qty.value;
+      const native = mapNative(feed);
+
+      const qty = int64Value(ltpc.ltq);
+      if (!qty.missing && !qty.unsafe) value.lastTradedQuantity = qty.value;
+      else if (qty.unsafe) { native.ltpcLtqRaw = qty.raw; native.ltpcLtqUnsafe = true; }
+
       const cp = toNumber(ltpc.cp);
       if (cp !== null) value.close = cp;
-      const native = mapNative(feed);
+
       // LTPC IEP wrapper: absent -> undefined; present (incl. {} for zero) -> 0.
       if (ltpc.iep !== null && ltpc.iep !== undefined) {
         native.ltpcIep = toNumber(ltpc.iep.value) ?? 0;
       }
+
+      const ltt = int64Value(ltpc.ltt);
+      if (ltt.unsafe) { native.ltpcLttRaw = ltt.raw; native.ltpcLttUnsafe = true; }
+
       if (Object.keys(native).length) value.native = native;
       this.callbacks?.onObservation({
         provider: "UPSTOX",
         canonicalId: sub.canonicalId,
         value,
-        rawProviderTimestamp: int64ToNumber(ltpc.ltt).value,
+        rawProviderTimestamp: ltt.missing || ltt.unsafe ? null : ltt.value,
         providerTimestampUnit: "MS",
         providerTimestampMeaning: "last traded time",
         receivedAtMs,
