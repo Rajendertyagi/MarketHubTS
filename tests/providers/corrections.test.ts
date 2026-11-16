@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { VALIDATION_REQUIRED_ADVISORY } from "../../packages/contracts/src/index";
 import { loadConfig, providerConfigFromAppConfig } from "../../packages/config/src/index";
 import { openDatabase, SqliteCredentialStore, SqliteProviderSettings } from "../../packages/database/src/index";
 import { ProviderRegistry, fetchWithRetry, parseRetryAfter } from "../../packages/market-core/src/index";
@@ -274,5 +275,61 @@ describe("final M3 corrections", () => {
       "http://example.test", {}, 100, { sleep: async () => {}, now: () => nowMs }
     );
     expect(missingCalls).toBe(1);
+  });
+});
+
+describe("final startup-state corrections", () => {
+  test("FYERS restart with saved config and app secret but no OAuth reports AUTH_REQUIRED", async () => {
+    const { dbPath, handle, settings, fyers } = setup();
+    await fyers.setConfig("APP-100", "http://127.0.0.1:3001/api/provider/fyers/callback");
+    await fyers.setAppSecret("saved-secret");
+    expect(await settings.get("fyers.appId")).toBe("APP-100");
+    expect(await settings.get("fyers.redirectUri")).toBe("http://127.0.0.1:3001/api/provider/fyers/callback");
+    handle.close();
+
+    const h2 = openDatabase({ dbPath, migrate: true });
+    handles.push(h2);
+    const pc2 = providerConfigFromAppConfig(loadConfig({ env: { MARKETHUB_DB_PATH: dbPath } }));
+    const f2 = new FyersAdapter({
+      credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2,
+      fetchImpl: async () => { throw new Error("offline"); }
+    });
+    await f2.initialize();
+    expect(f2.getStatus().authState).toBe("AUTH_REQUIRED");
+    expect(f2.getStatus().authState).not.toBe("NOT_CONFIGURED");
+    expect(f2.getStatus().restrictions).toContain(VALIDATION_REQUIRED_ADVISORY);
+  });
+
+  test("successful validation clears the startup advisory for both providers", async () => {
+    const { dbPath, handle, credentials, settings, upstox, fyers } = setup();
+    await upstox.setToken("u-token");
+    await fyers.setConfig("APP-100", "http://127.0.0.1:3001/api/provider/fyers/callback");
+    await fyers.setAppSecret("f-secret");
+    const started = await fyers.startAuth();
+    await fyers.completeAuth({ code: "c", state: started.state });
+    handle.close();
+
+    const h2 = openDatabase({ dbPath, migrate: true });
+    handles.push(h2);
+    const pc2 = providerConfigFromAppConfig(loadConfig({ env: { MARKETHUB_DB_PATH: dbPath } }));
+    const u2 = new UpstoxAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => validUpstox() });
+    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => validFyersProfile() });
+    await Promise.all([u2.initialize(), f2.initialize()]);
+    expect(u2.getStatus().restrictions).toContain(VALIDATION_REQUIRED_ADVISORY);
+    expect(f2.getStatus().restrictions).toContain(VALIDATION_REQUIRED_ADVISORY);
+
+    expect((await u2.validate()).authState).toBe("AUTHENTICATED");
+    expect((await f2.validate()).authState).toBe("AUTHENTICATED");
+    expect(u2.getStatus().restrictions).not.toContain(VALIDATION_REQUIRED_ADVISORY);
+    expect(f2.getStatus().restrictions).not.toContain(VALIDATION_REQUIRED_ADVISORY);
+  });
+
+  test("Upstox retains expiry-unknown warning after validation when expiry is absent", async () => {
+    const { upstox } = setup();
+    await upstox.setToken("token");
+    expect(upstox.getStatus().restrictions.some((r) => r.includes("expiry unknown"))).toBe(true);
+    expect((await upstox.validate()).authState).toBe("AUTHENTICATED");
+    expect(upstox.getStatus().restrictions.some((r) => r.includes("expiry unknown"))).toBe(true);
+    expect(upstox.getStatus().restrictions).not.toContain(VALIDATION_REQUIRED_ADVISORY);
   });
 });

@@ -8,7 +8,7 @@ import type {
   ProviderSettings,
   ProviderStatus
 } from "@markethub/contracts";
-import { emptyProviderStatus } from "@markethub/contracts";
+import { emptyProviderStatus, VALIDATION_REQUIRED_ADVISORY, withoutValidationAdvisory } from "@markethub/contracts";
 import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from "@markethub/market-core";
 
 export const FYERS_AUTH_URL = "https://api-t1.fyers.in/api/v3/generate-authcode";
@@ -98,12 +98,27 @@ export class FyersAdapter implements ProviderAdapter {
         this.status = { ...this.status, expiresAt: expiry, expiryKnown: true };
       }
     }
-    if (this.options.config.enabled && await this.isConfigured()) {
-      this.status = {
-        ...this.status,
-        authState: "AUTH_REQUIRED",
-        restrictions: [...this.status.restrictions, "Stored credentials found; validation required"]
-      };
+    // Recognize saved config and secrets even before OAuth completes (no access token yet).
+    if (this.options.config.enabled && this.options.credentials.status().state === "AVAILABLE") {
+      const [token, appSecret, candidateSecret] = await Promise.all([
+        this.options.credentials.get("FYERS", FYERS_ACCESS_TOKEN_CREDENTIAL),
+        this.options.credentials.get("FYERS", FYERS_APP_SECRET_CREDENTIAL),
+        this.options.credentials.get("FYERS", FYERS_CANDIDATE_SECRET_CREDENTIAL)
+      ]);
+      const hasConfig = Boolean(
+        this.options.config.fyersAppId &&
+        this.options.config.fyersRedirectUri &&
+        isValidFyersRedirectUri(this.options.config.fyersRedirectUri, this.options.config.apiPort ?? 3001, this.options.config.apiSecure ?? false)
+      );
+      if (hasConfig && (appSecret || candidateSecret)) {
+        this.status = {
+          ...this.status,
+          authState: "AUTH_REQUIRED",
+          restrictions: [...this.status.restrictions, VALIDATION_REQUIRED_ADVISORY]
+        };
+      } else if (!token && !appSecret && !candidateSecret) {
+        this.status = { ...this.status, authState: "NOT_CONFIGURED" };
+      }
     }
   }
 
@@ -220,7 +235,8 @@ export class FyersAdapter implements ProviderAdapter {
         expiresAt: this.tokenExpiresAt,
         expiryKnown: true,
         error: null,
-        lastErrorAt: null
+        lastErrorAt: null,
+        restrictions: withoutValidationAdvisory(this.status.restrictions)
       };
       return this.getStatus();
     } catch (error) {
@@ -293,6 +309,7 @@ export class FyersAdapter implements ProviderAdapter {
           expiryKnown: true,
           error: null,
           lastErrorAt: null,
+          restrictions: withoutValidationAdvisory(this.status.restrictions),
           capabilities: [
             { name: "market_data", state: "UNKNOWN", source: "DOCUMENTATION" },
             { name: "historical_data", state: "UNKNOWN", source: "DOCUMENTATION" }

@@ -36,6 +36,14 @@ export interface CredentialStore {
   reset(): Promise<void>;
 }
 
+/** Startup advisory shown when stored credentials still need validation. */
+export const VALIDATION_REQUIRED_ADVISORY = "Stored credentials found; validation required";
+
+/** Remove only the startup advisory, preserving other restrictions (e.g. expiry unknown). */
+export function withoutValidationAdvisory(restrictions: string[]): string[] {
+  return restrictions.filter((r) => r !== VALIDATION_REQUIRED_ADVISORY);
+}
+
 /** Durable non-secret settings (App ID, redirect URI, expiry metadata). Never secrets. */
 export interface ProviderSettings {
   get(key: string): Promise<string | null>;

@@ -6,7 +6,7 @@ import type {
   ProviderSettings,
   ProviderStatus
 } from "@markethub/contracts";
-import { emptyProviderStatus } from "@markethub/contracts";
+import { emptyProviderStatus, VALIDATION_REQUIRED_ADVISORY, withoutValidationAdvisory } from "@markethub/contracts";
 import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from "@markethub/market-core";
 
 export const UPSTOX_VALIDATION_URL = "https://api.upstox.com/v2/market/status/NSE";
@@ -65,7 +65,7 @@ export class UpstoxAdapter implements ProviderAdapter {
       this.status = {
         ...this.status,
         authState: "AUTH_REQUIRED",
-        restrictions: [...this.status.restrictions, "Stored credentials found; validation required"]
+        restrictions: [...this.status.restrictions, VALIDATION_REQUIRED_ADVISORY]
       };
     }
   }
@@ -192,6 +192,7 @@ export class UpstoxAdapter implements ProviderAdapter {
       validatedAt: this.now().toISOString(),
       error: null,
       lastErrorAt: null,
+      restrictions: withoutValidationAdvisory(this.status.restrictions),
       capabilities: [
         { name: "market_quote", state: "UNKNOWN", source: "DOCUMENTATION" },
         { name: "historical_data", state: "UNKNOWN", source: "DOCUMENTATION" },
