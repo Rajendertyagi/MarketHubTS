@@ -1,4 +1,5 @@
 import type {
+  LiveItem,
   LiveSnapshot,
   LiveStateOptions,
   ProviderConnectionState,
@@ -43,6 +44,10 @@ export class MarketDataService {
 
   allConnectionStatuses(): ProviderConnectionStatus[] {
     return this.store.allConnectionStatuses();
+  }
+
+  getItem(canonicalId: string): LiveItem | undefined {
+    return this.store.getItem(canonicalId);
   }
 
   getSelected(canonicalId: string): SelectedObservation | undefined {

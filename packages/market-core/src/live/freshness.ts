@@ -16,27 +16,25 @@ export function evaluateFreshness(
   policy: FreshnessPolicy,
   nowMs: number
 ): LiveFreshnessState {
-  const transportAge = nowMs - observation.receivedAtMs;
-  if (!Number.isFinite(transportAge) || transportAge > policy.maxRetainedObservationAgeMs) {
+  // Age basis: trusted source observation time when available, otherwise local
+  // receipt time. A recently received but genuinely old observation must not
+  // stay eligible for retained fallback indefinitely.
+  const hasSource = observation.timestampTrusted && observation.normalizedProviderTimestampMs !== null;
+  const basisMs = hasSource ? observation.normalizedProviderTimestampMs! : observation.receivedAtMs;
+  const age = nowMs - basisMs;
+  if (!Number.isFinite(age) || age > policy.maxRetainedObservationAgeMs) {
     return "UNAVAILABLE";
   }
 
   if (session === "CLOSED") return "LAST_KNOWN";
 
   if (session === "UNKNOWN") {
-    if (!observation.timestampTrusted || observation.normalizedProviderTimestampMs === null) {
-      return "LAST_KNOWN";
-    }
-    const age = nowMs - observation.normalizedProviderTimestampMs;
+    if (!hasSource) return "LAST_KNOWN";
     if (age < 0) return "LAST_KNOWN";
     return age <= policy.unknownMaxAgeMs ? "FRESH" : "STALE";
   }
 
   // OPEN: prefer a validated source timestamp; otherwise use local receipt time.
-  const basisMs = observation.timestampTrusted && observation.normalizedProviderTimestampMs !== null
-    ? observation.normalizedProviderTimestampMs
-    : observation.receivedAtMs;
-  const age = nowMs - basisMs;
   if (age < 0) return "LAST_KNOWN";
   return age <= policy.openMaxAgeMs ? "FRESH" : "STALE";
 }

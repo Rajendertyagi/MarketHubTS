@@ -35,13 +35,16 @@ export function normalizeProviderTimestamp(raw: number | null, unit: TimestampUn
   return Math.round(ms);
 }
 
-/** Two observations may be ranked by source timestamp only if semantics match. */
+/**
+ * Two observations may be ranked by source timestamp only if both conversions
+ * are trusted and their documented meanings match. Original units need not
+ * match: reliable conversion to ms epoch already normalised them.
+ */
 export function timestampsCompatible(a: ProviderObservation, b: ProviderObservation): boolean {
   return a.timestampTrusted &&
     b.timestampTrusted &&
     a.normalizedProviderTimestampMs !== null &&
     b.normalizedProviderTimestampMs !== null &&
-    a.providerTimestampUnit === b.providerTimestampUnit &&
     a.providerTimestampMeaning === b.providerTimestampMeaning;
 }
 
@@ -59,12 +62,14 @@ export function normalizeObservation(input: NormalizeObservationInput): Provider
   return {
     provider: input.provider,
     canonicalId: input.canonicalId,
-    value: input.value,
+    // Clone at the boundary: the caller retains ownership of the input object.
+    value: structuredClone(input.value),
     rawProviderTimestamp: input.rawProviderTimestamp,
     providerTimestampUnit: input.providerTimestampUnit,
     providerTimestampMeaning: input.providerTimestampMeaning,
     normalizedProviderTimestampMs: normalizedMs,
     timestampTrusted: normalizedMs !== null,
+    ageBasis: normalizedMs !== null ? "SOURCE" : "RECEIPT",
     receivedAtMs: input.receivedAtMs,
     providerSequence: input.providerSequence ?? null,
     freshness: "UNAVAILABLE",

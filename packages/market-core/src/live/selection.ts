@@ -59,10 +59,11 @@ export function selectObservation(
     return {
       canonicalId,
       provider: winner.observation.provider,
-      value: winner.observation.value,
+      // Clone so the selection never aliases internal observation storage.
+      value: structuredClone(winner.observation.value),
       mode: "LIVE",
       freshness: "FRESH" satisfies LiveFreshnessState,
-      observation: winner.observation,
+      observation: structuredClone(winner.observation),
       reason: compatible
         ? "eligible live observation; ranked by compatible source timestamp"
         : "eligible live observation; receivedAt fallback (incompatible or missing source timestamps)"
@@ -76,14 +77,17 @@ export function selectObservation(
   if (retained.length > 0) {
     const sorted = [...retained].sort((a, b) => b.observation.receivedAtMs - a.observation.receivedAtMs);
     const winner = sorted[0]!;
+    const ageBasisNote = winner.observation.ageBasis === "SOURCE"
+      ? "source observation time"
+      : "local receipt time (source timestamp unavailable or untrusted)";
     return {
       canonicalId,
       provider: winner.observation.provider,
-      value: winner.observation.value,
+      value: structuredClone(winner.observation.value),
       mode: "LAST_KNOWN",
       freshness: winner.freshness === "FRESH" ? "LAST_KNOWN" : winner.freshness,
-      observation: winner.observation,
-      reason: "no eligible live observation; retained fallback"
+      observation: structuredClone(winner.observation),
+      reason: `no eligible live observation; retained fallback (age basis: ${ageBasisNote})`
     };
   }
 

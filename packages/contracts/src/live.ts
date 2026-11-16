@@ -32,6 +32,10 @@ export type MarketSessionState = z.infer<typeof marketSessionStateSchema>;
 export const timestampUnitSchema = z.enum(["MS", "SECONDS", "UNKNOWN"]);
 export type TimestampUnit = z.infer<typeof timestampUnitSchema>;
 
+/** Which clock was used as the age basis for an observation. */
+export const observationAgeBasisSchema = z.enum(["SOURCE", "RECEIPT"]);
+export type ObservationAgeBasis = z.infer<typeof observationAgeBasisSchema>;
+
 // --- Canonical values actually supplied by a provider (never fabricated) ---
 export interface CanonicalLiveValue {
   ltp?: number;
@@ -55,6 +59,8 @@ export interface ProviderObservation {
   providerTimestampMeaning: string;
   normalizedProviderTimestampMs: number | null;
   timestampTrusted: boolean;
+  /** SOURCE when a trusted source timestamp exists, otherwise RECEIPT. */
+  ageBasis: ObservationAgeBasis;
   receivedAtMs: number;
   providerSequence: number | null;
   freshness: LiveFreshnessState;

@@ -149,9 +149,20 @@ describe("timestamp normalization", () => {
       provider: "FYERS", canonicalId: NIFTY, value: {}, rawProviderTimestamp: BASE / 1000 + 1,
       providerTimestampUnit: "SECONDS", providerTimestampMeaning: "last traded time", receivedAtMs: BASE
     });
+    const untrusted = normalizeObservation({
+      provider: "FYERS", canonicalId: NIFTY, value: {}, rawProviderTimestamp: BASE,
+      providerTimestampUnit: "UNKNOWN", providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
+    const missing = normalizeObservation({
+      provider: "FYERS", canonicalId: NIFTY, value: {}, rawProviderTimestamp: null,
+      providerTimestampUnit: "MS", providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
     expect(timestampsCompatible(a, same)).toBe(true);
+    // Different units are fine when conversion to ms is reliable and meaning matches.
+    expect(timestampsCompatible(a, diffUnit)).toBe(true);
     expect(timestampsCompatible(a, diffMeaning)).toBe(false);
-    expect(timestampsCompatible(a, diffUnit)).toBe(false);
+    expect(timestampsCompatible(a, untrusted)).toBe(false);
+    expect(timestampsCompatible(a, missing)).toBe(false);
   });
 });
 
@@ -170,6 +181,25 @@ describe("source selection", () => {
     const selected = h.service.getSnapshot().items[0]!.selected;
     expect(selected.provider).toBe("UPSTOX");
     expect(selected.mode).toBe("LIVE");
+    expect(selected.reason).toContain("compatible source timestamp");
+  });
+
+  test("ranks compatible normalized timestamps across different units", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    // Upstox: ms source, newer observation, older receipt.
+    update(h.service, "UPSTOX", {
+      value: { ltp: 100 }, rawProviderTimestamp: BASE - 1_000,
+      providerTimestampUnit: "MS", providerTimestampMeaning: "last traded time", receivedAtMs: BASE - 5_000
+    });
+    // FYERS: seconds source, older observation, newer receipt.
+    update(h.service, "FYERS", {
+      value: { ltp: 200 }, rawProviderTimestamp: (BASE - 2_000) / 1000,
+      providerTimestampUnit: "SECONDS", providerTimestampMeaning: "last traded time", receivedAtMs: BASE - 100
+    });
+    const selected = h.service.getSnapshot().items[0]!.selected;
+    expect(selected.provider).toBe("UPSTOX");
     expect(selected.reason).toContain("compatible source timestamp");
   });
 
@@ -311,5 +341,141 @@ describe("bounded storage and revision", () => {
     expect(h.service.revision).toBe(r3); // reads do not advance revision
     snapshot.items[0]!.observations.UPSTOX = undefined;
     expect(h.service.getSnapshot().items[0]!.observations.UPSTOX?.value.ltp).toBe(1);
+  });
+});
+
+describe("defensive copying and ownership", () => {
+  function seed(h: ReturnType<typeof harness>) {
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    h.service.applyProviderUpdate({
+      provider: "UPSTOX", canonicalId: NIFTY,
+      value: { ltp: 100, native: { depth: { bid: [1, 2] } } },
+      rawProviderTimestamp: BASE, providerTimestampUnit: "MS",
+      providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
+  }
+  function nativeOf(value: { native?: Record<string, unknown> }): { depth: { bid: number[] } } {
+    return value.native as { depth: { bid: number[] } };
+  }
+
+  test("mutating the submitted input object does not change internal state", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    const native = { depth: { bid: [1, 2] } };
+    const value = { ltp: 100, native };
+    h.service.applyProviderUpdate({
+      provider: "UPSTOX", canonicalId: NIFTY, value,
+      rawProviderTimestamp: BASE, providerTimestampUnit: "MS",
+      providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
+    value.ltp = 999;
+    native.depth.bid[0] = 999;
+    const obs = h.service.getSnapshot().items[0]!.observations.UPSTOX!;
+    expect(obs.value.ltp).toBe(100);
+    expect(nativeOf(obs.value).depth.bid[0]).toBe(1);
+  });
+
+  test("getItem returns a deep copy including native fields and provenance", () => {
+    const h = harness();
+    seed(h);
+    const item = h.service.getItem(NIFTY)!;
+    item.observations.UPSTOX!.value.ltp = 999;
+    nativeOf(item.observations.UPSTOX!.value).depth.bid[0] = 999;
+    item.observations.UPSTOX!.provenance.notes = "tampered";
+    const fresh = h.service.getSnapshot().items[0]!.observations.UPSTOX!;
+    expect(fresh.value.ltp).toBe(100);
+    expect(nativeOf(fresh.value).depth.bid[0]).toBe(1);
+    expect(fresh.provenance.notes).toBeUndefined();
+  });
+
+  test("getSnapshot returns a deep copy including native fields and provenance", () => {
+    const h = harness();
+    seed(h);
+    const snapshot = h.service.getSnapshot();
+    const obs = snapshot.items[0]!.observations.UPSTOX!;
+    obs.value.ltp = 999;
+    nativeOf(obs.value).depth.bid[0] = 999;
+    obs.provenance.notes = "tampered";
+    const fresh = h.service.getSnapshot().items[0]!.observations.UPSTOX!;
+    expect(fresh.value.ltp).toBe(100);
+    expect(nativeOf(fresh.value).depth.bid[0]).toBe(1);
+    expect(fresh.provenance.notes).toBeUndefined();
+  });
+
+  test("getSelected returns a deep copy that cannot alias internal storage", () => {
+    const h = harness();
+    seed(h);
+    const selected = h.service.getSelected(NIFTY)!;
+    selected.value!.ltp = 999;
+    nativeOf(selected.value!).depth.bid[0] = 999;
+    selected.observation!.value.ltp = 999;
+    selected.observation!.provenance.notes = "tampered";
+    const fresh = h.service.getSelected(NIFTY)!;
+    expect(fresh.value!.ltp).toBe(100);
+    expect(nativeOf(fresh.value!).depth.bid[0]).toBe(1);
+    expect(fresh.observation!.value.ltp).toBe(100);
+    expect(fresh.observation!.provenance.notes).toBeUndefined();
+    expect(h.service.getSnapshot().items[0]!.observations.UPSTOX!.value.ltp).toBe(100);
+  });
+});
+
+describe("maximum retained age and age basis", () => {
+  test("a recently received but genuinely old observation is not eligible for retained fallback", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    h.service.applyProviderUpdate({
+      provider: "UPSTOX", canonicalId: NIFTY, value: { ltp: 100 },
+      rawProviderTimestamp: BASE - 120_000, providerTimestampUnit: "MS",
+      providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
+    const item = h.service.getSnapshot().items[0]!;
+    expect(item.observations.UPSTOX!.freshness).toBe("UNAVAILABLE");
+    expect(item.selected.mode).toBe("UNAVAILABLE");
+  });
+
+  test("trusted source timestamps use SOURCE age basis", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    update(h.service, "UPSTOX", { value: { ltp: 100 } });
+    expect(h.service.getSnapshot().items[0]!.observations.UPSTOX!.ageBasis).toBe("SOURCE");
+  });
+
+  test("missing source timestamps fall back to receipt time with a recorded reason", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    h.service.applyProviderUpdate({
+      provider: "UPSTOX", canonicalId: NIFTY, value: { ltp: 100 },
+      rawProviderTimestamp: null, providerTimestampUnit: "UNKNOWN",
+      providerTimestampMeaning: "unknown", receivedAtMs: BASE
+    });
+    const obs = h.service.getSnapshot().items[0]!.observations.UPSTOX!;
+    expect(obs.ageBasis).toBe("RECEIPT");
+    expect(obs.freshness).toBe("FRESH");
+    h.service.setProviderConnection("UPSTOX", "DISCONNECTED");
+    const selected = h.service.getSnapshot().items[0]!.selected;
+    expect(selected.mode).toBe("LAST_KNOWN");
+    expect(selected.reason).toContain("local receipt time");
+  });
+
+  test("old source observations are UNAVAILABLE in OPEN, CLOSED and UNKNOWN", () => {
+    const h = harness();
+    h.service.track(NIFTY);
+    connectBoth(h.service);
+    h.service.applyProviderUpdate({
+      provider: "UPSTOX", canonicalId: NIFTY, value: { ltp: 100 },
+      rawProviderTimestamp: BASE - 120_000, providerTimestampUnit: "MS",
+      providerTimestampMeaning: "last traded time", receivedAtMs: BASE
+    });
+    for (const session of ["OPEN", "CLOSED", "UNKNOWN"] as const) {
+      h.setSession(session);
+      const item = h.service.getSnapshot().items[0]!;
+      expect(item.observations.UPSTOX!.freshness).toBe("UNAVAILABLE");
+      expect(item.selected.mode).toBe("UNAVAILABLE");
+    }
   });
 });

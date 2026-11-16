@@ -84,9 +84,12 @@ export class LiveStateStore {
     const item = this.items.get(observation.canonicalId);
     if (!item) throw new UntrackedInstrumentError(observation.canonicalId);
     const nowMs = this.now().getTime();
+    // Take ownership: clone the incoming observation so later caller mutation
+    // (including nested native fields and provenance) cannot reach internal state.
+    const cloned = structuredClone(observation);
     const stored: ProviderObservation = {
-      ...observation,
-      freshness: evaluateFreshness(observation, this.session(), this.policy, nowMs)
+      ...cloned,
+      freshness: evaluateFreshness(cloned, this.session(), this.policy, nowMs)
     };
     item.observations = { ...item.observations, [observation.provider]: stored };
     item.updatedAtMs = nowMs;
@@ -136,7 +139,10 @@ export class LiveStateStore {
   }
 
   private materialize(item: LiveItem, nowMs: number): LiveItem {
-    const observations: Partial<Record<ProviderId, ProviderObservation>> = { ...item.observations };
+    // Deep clone the whole item first: values, native fields, provenance and
+    // the existing selection are all detached from internal storage.
+    const copy: LiveItem = structuredClone(item);
+    const observations: Partial<Record<ProviderId, ProviderObservation>> = copy.observations;
     for (const [provider, observation] of Object.entries(observations)) {
       if (observation) {
         observations[provider as ProviderId] = {
@@ -145,13 +151,10 @@ export class LiveStateStore {
         };
       }
     }
-    return {
-      ...item,
-      observations,
-      selected: selectObservation(
-        item.canonicalId, observations, this.connectionStates(), this.session(), this.policy, nowMs
-      )
-    };
+    copy.selected = selectObservation(
+      copy.canonicalId, observations, this.connectionStates(), this.session(), this.policy, nowMs
+    );
+    return copy;
   }
 
   private connectionStates(): Map<ProviderId, ProviderConnectionState> {
