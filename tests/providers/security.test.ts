@@ -23,8 +23,8 @@ function setup() {
   const config = loadConfig({ env: { MARKETHUB_DB_PATH: join(dir, "data", "markethub.sqlite") } });
   const providerConfig = providerConfigFromAppConfig(config);
   const registry = new ProviderRegistry();
-  const upstox = new UpstoxAdapter({ credentials, config: providerConfig, fetchImpl: async () => new Response("{}", { status: 200 }) });
-  const fyers = new FyersAdapter({ credentials, config: providerConfig, fetchImpl: async () => new Response("{}", { status: 200 }) });
+  const upstox = new UpstoxAdapter({ credentials, config: providerConfig, fetchImpl: async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 }) });
+  const fyers = new FyersAdapter({ credentials, config: providerConfig, fetchImpl: async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 }) });
   registry.register(upstox);
   registry.register(fyers);
   const logger = { info() {}, warn() {}, error() {}, debug() {} } as any;

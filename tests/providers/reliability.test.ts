@@ -29,13 +29,13 @@ function setup(overrides: Partial<ProviderConfig> = {}) {
   const registry = new ProviderRegistry({ now: () => new Date("2026-11-16T10:00:00.000Z") });
   const upstox = new UpstoxAdapter({
     credentials, config, retry: false, now: () => new Date("2026-11-16T10:00:00.000Z"),
-    fetchImpl: async () => new Response(JSON.stringify({ status: "success" }), { status: 200 })
+    fetchImpl: async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 })
   });
   const fyers = new FyersAdapter({
     credentials, config, retry: false, now: () => new Date("2026-11-16T10:00:00.000Z"),
     fetchImpl: async (url: string) => url.includes("validate-authcode")
       ? new Response(JSON.stringify({ s: "ok", code: 200, access_token: "f-token" }), { status: 200 })
-      : new Response(JSON.stringify({ s: "ok", code: 200 }), { status: 200 })
+      : new Response(JSON.stringify({ s: "ok", code: 200, data: {} }), { status: 200 })
   });
   registry.register(upstox);
   registry.register(fyers);
@@ -83,7 +83,7 @@ describe("M3 reliability under failure", () => {
     expect(statuses.UPSTOX.authState).toBe("ERROR");
     expect(statuses.FYERS.authState).toBe("AUTHENTICATED");
 
-    (upstox as any).fetchImpl = async () => new Response(JSON.stringify({ status: "success" }), { status: 200 });
+    (upstox as any).fetchImpl = async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 });
     (fyers as any).fetchImpl = async () => { throw new Error("down"); };
     statuses = await registry.validateAll();
     expect(statuses.UPSTOX.authState).toBe("AUTHENTICATED");
@@ -103,7 +103,7 @@ describe("M3 reliability under failure", () => {
   test("5. temporary 5xx outage recovers within bounded retries", async () => {
     let calls = 0;
     const result = await fetchWithRetry(
-      async () => { calls++; return calls < 3 ? new Response("{}", { status: 503 }) : new Response("{}", { status: 200 }); },
+      async () => { calls++; return calls < 3 ? new Response("{}", { status: 503 }) : new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 }); },
       "http://example.test", {}, 100, { sleep: async () => {} }
     );
     expect(result.status).toBe(200);

@@ -69,7 +69,7 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | Check | Result |
 |---|---|
 | `bun run typecheck` | Pass (exit 0) |
-| `bun test` | Pass - 109 tests, 0 failures, 421 expect() calls, 14 files (agent-reported local verification; not CI evidence) |
+| `bun test` | Pass - 120 tests, 0 failures, 457 expect() calls, 15 files (agent-reported local verification; not CI evidence) |
 | `bun run build` | Pass (exit 0) |
 | M1 regression | Config, database, API, runtime, production serving, MCP health-contract, and contract tests pass |
 | M2 migration safety | Clean-install migration and M1 (`app_meta`) → M2 upgrade pass on isolated temporary databases |

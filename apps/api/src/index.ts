@@ -1,5 +1,5 @@
 import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@markethub/config";
-import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, type DatabaseHandle } from "@markethub/database";
+import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings, type DatabaseHandle } from "@markethub/database";
 import { ProviderRegistry } from "@markethub/market-core";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
@@ -31,10 +31,12 @@ async function main() {
   }
 
   const credentials = new SqliteCredentialStore(db);
+  const settings = new SqliteProviderSettings(db);
   const providerConfig = providerConfigFromAppConfig(config);
   const registry = new ProviderRegistry();
-  const upstox = new UpstoxAdapter({ credentials, config: providerConfig });
-  const fyers = new FyersAdapter({ credentials, config: providerConfig });
+  const upstox = new UpstoxAdapter({ credentials, settings, config: providerConfig });
+  const fyers = new FyersAdapter({ credentials, settings, config: providerConfig });
+  await Promise.all([upstox.initialize(), fyers.initialize()]);
   registry.register(upstox);
   registry.register(fyers);
   if (credentials.status().state === "UNAVAILABLE") {
@@ -43,7 +45,7 @@ async function main() {
 
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
-    providerRegistry: registry, credentials, providerConfig, upstox, fyers
+    providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers
   });
 
   try {

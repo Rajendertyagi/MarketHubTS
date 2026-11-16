@@ -33,6 +33,14 @@ export interface CredentialStore {
   reset(): Promise<void>;
 }
 
+/** Durable non-secret settings (App ID, redirect URI, expiry metadata). Never secrets. */
+export interface ProviderSettings {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+  all(): Promise<Record<string, string>>;
+}
+
 // --- Provider status model ---
 export const providerAuthStateSchema = z.enum([
   "DISABLED",

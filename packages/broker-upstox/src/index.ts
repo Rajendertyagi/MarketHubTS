@@ -3,6 +3,7 @@ import type {
   ProviderAdapter,
   ProviderConfig,
   ProviderId,
+  ProviderSettings,
   ProviderStatus
 } from "@markethub/contracts";
 import { emptyProviderStatus } from "@markethub/contracts";
@@ -10,15 +11,24 @@ import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from 
 
 export const UPSTOX_VALIDATION_URL = "https://api.upstox.com/v2/market/status/NSE";
 export const UPSTOX_TOKEN_CREDENTIAL = "analytics_token";
+export const UPSTOX_EXPIRY_SETTING = "upstox.tokenExpiresAt";
 
 export interface UpstoxAdapterOptions {
   credentials: CredentialStore;
   config: ProviderConfig;
+  settings?: ProviderSettings;
   now?: () => Date;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   retry?: boolean;
   retrySleep?: (ms: number) => Promise<void>;
+}
+
+interface TokenValidation {
+  ok: boolean;
+  error?: string;
+  rateLimited?: boolean;
+  expired?: boolean;
 }
 
 export class UpstoxAdapter implements ProviderAdapter {
@@ -43,6 +53,15 @@ export class UpstoxAdapter implements ProviderAdapter {
     }
   }
 
+  /** Load persisted expiry metadata on startup. */
+  async initialize(): Promise<void> {
+    if (!this.options.settings) return;
+    const saved = await this.options.settings.get(UPSTOX_EXPIRY_SETTING);
+    if (saved) {
+      this.status = { ...this.status, expiresAt: saved, expiryKnown: true, restrictions: [] };
+    }
+  }
+
   getStatus(): ProviderStatus {
     return { ...this.status, capabilities: [...this.status.capabilities], limits: [...this.status.limits], restrictions: [...this.status.restrictions] };
   }
@@ -53,47 +72,8 @@ export class UpstoxAdapter implements ProviderAdapter {
     return (await this.options.credentials.get("UPSTOX", UPSTOX_TOKEN_CREDENTIAL)) !== null;
   }
 
-  /** Store a user-supplied Analytics Token. Expiry is metadata only, never calculated. */
-  async setToken(token: string, expiresAt?: string): Promise<ProviderStatus> {
-    if (!this.options.config.enabled) throw new Error("Upstox provider is disabled");
-    if (this.options.credentials.status().state !== "AVAILABLE") {
-      throw new Error(this.options.credentials.status().reason ?? "Credential store unavailable");
-    }
-    const trimmed = token.trim();
-    if (!trimmed) throw new Error("Analytics Token must not be empty");
-    await this.options.credentials.set("UPSTOX", UPSTOX_TOKEN_CREDENTIAL, trimmed);
-    this.status = {
-      ...this.status,
-      authState: "AUTH_REQUIRED",
-      expiresAt: expiresAt ?? null,
-      expiryKnown: Boolean(expiresAt),
-      validatedAt: null,
-      error: null,
-      lastErrorAt: null,
-      restrictions: expiresAt ? [] : ["Token expiry unknown — supply the expiry date shown in the Upstox dashboard"]
-    };
-    return this.getStatus();
-  }
-
-  async validate(): Promise<ProviderStatus> {
-    if (!this.options.config.enabled) {
-      this.status = { ...this.status, authState: "DISABLED", error: null };
-      return this.getStatus();
-    }
-    if (this.options.credentials.status().state !== "AVAILABLE") {
-      this.status = {
-        ...this.status,
-        authState: "CREDENTIALS_UNAVAILABLE",
-        error: this.options.credentials.status().reason ?? "Credential store unavailable"
-      };
-      return this.getStatus();
-    }
-    const token = await this.options.credentials.get("UPSTOX", UPSTOX_TOKEN_CREDENTIAL);
-    if (!token) {
-      this.status = { ...this.status, authState: "AUTH_REQUIRED", error: null, validatedAt: null };
-      return this.getStatus();
-    }
-
+  /** Validate a candidate token without touching stored credentials or status. */
+  private async validateToken(token: string): Promise<TokenValidation> {
     try {
       const init: RequestInit = {
         method: "GET",
@@ -105,68 +85,117 @@ export class UpstoxAdapter implements ProviderAdapter {
             sleep: this.options.retrySleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
           });
 
-      if (response.status === 200) {
-        this.status = {
-          ...this.status,
-          authState: "AUTHENTICATED",
-          validatedAt: this.now().toISOString(),
-          error: null,
-          lastErrorAt: null,
-          capabilities: [
-            { name: "market_quote", state: "UNKNOWN", source: "DOCUMENTATION" },
-            { name: "historical_data", state: "UNKNOWN", source: "DOCUMENTATION" },
-            { name: "option_chain", state: "UNKNOWN", source: "DOCUMENTATION" },
-            { name: "market_information", state: "AVAILABLE", source: "API" }
-          ],
-          limits: [
-            { name: "other_standard_apis_per_second", value: 50, state: "UNKNOWN", source: "DOCUMENTATION", publishedAt: "2026-11-16", note: "Documentation figure, not verified account limit" }
-          ]
-        };
-        return this.getStatus();
-      }
-
       if (response.status === 401 || response.status === 403) {
-        this.status = {
-          ...this.status,
-          authState: "EXPIRED",
-          validatedAt: null,
-          error: "Analytics Token was rejected (invalid, revoked or expired)",
-          lastErrorAt: this.now().toISOString()
-        };
-        return this.getStatus();
+        return { ok: false, expired: true, error: "Analytics Token was rejected (invalid, revoked or expired)" };
       }
-
       if (response.status === 429) {
-        this.status = {
-          ...this.status,
-          authState: "DEGRADED",
-          error: "Upstox rate limit reached",
-          lastErrorAt: this.now().toISOString(),
-          restrictions: ["Rate limited — reduce request frequency; no automatic retry"]
-        };
-        return this.getStatus();
+        return { ok: false, rateLimited: true, error: "Upstox rate limit reached" };
       }
-
-      this.status = {
-        ...this.status,
-        authState: "ERROR",
-        error: `Upstox validation failed with HTTP ${response.status}`,
-        lastErrorAt: this.now().toISOString()
-      };
-      return this.getStatus();
+      if (response.status !== 200) {
+        return { ok: false, error: `Upstox validation failed with HTTP ${response.status}` };
+      }
+      // HTTP 200 alone is insufficient: validate the Market Status response shape.
+      let payload: any;
+      try {
+        payload = await response.json();
+      } catch {
+        return { ok: false, error: "Upstox validation returned a malformed response" };
+      }
+      if (!payload || payload.status !== "success" || typeof payload.data?.exchange !== "string" || typeof payload.data?.status !== "string") {
+        return { ok: false, error: "Upstox validation returned an unexpected response shape" };
+      }
+      return { ok: true };
     } catch (error) {
+      return { ok: false, error: `Upstox validation failed: ${sanitizeError(error)}` };
+    }
+  }
+
+  /** Validate a candidate before replacing a working token. Old token is preserved on any failure. */
+  async setToken(token: string, expiresAt?: string): Promise<ProviderStatus> {
+    if (!this.options.config.enabled) throw new Error("Upstox provider is disabled");
+    if (this.options.credentials.status().state !== "AVAILABLE") {
+      throw new Error(this.options.credentials.status().reason ?? "Credential store unavailable");
+    }
+    const trimmed = token.trim();
+    if (!trimmed) throw new Error("Analytics Token must not be empty");
+
+    const validation = await this.validateToken(trimmed);
+    if (!validation.ok) {
       this.status = {
         ...this.status,
-        authState: "ERROR",
-        error: `Upstox validation failed: ${sanitizeError(error)}`,
-        lastErrorAt: this.now().toISOString()
+        authState: validation.rateLimited ? "DEGRADED" : "ERROR",
+        error: validation.error ?? "Token validation failed",
+        lastErrorAt: this.now().toISOString(),
+        restrictions: validation.rateLimited ? ["Rate limited — no automatic retry"] : this.status.restrictions
+      };
+      throw new Error(validation.error ?? "Token validation failed; existing token preserved");
+    }
+
+    await this.options.credentials.set("UPSTOX", UPSTOX_TOKEN_CREDENTIAL, trimmed);
+    if (expiresAt) {
+      this.options.config.upstoxTokenExpiresAt = expiresAt;
+      await this.options.settings?.set(UPSTOX_EXPIRY_SETTING, expiresAt);
+    }
+    this.status = {
+      ...this.status,
+      authState: "AUTHENTICATED",
+      expiresAt: expiresAt ?? this.status.expiresAt,
+      expiryKnown: Boolean(expiresAt ?? this.status.expiresAt),
+      validatedAt: this.now().toISOString(),
+      error: null,
+      lastErrorAt: null,
+      restrictions: expiresAt || this.status.expiryKnown ? [] : ["Token expiry unknown — supply the expiry date shown in the Upstox dashboard"]
+    };
+    return this.getStatus();
+  }
+
+  async validate(): Promise<ProviderStatus> {
+    if (!this.options.config.enabled) {
+      this.status = { ...this.status, authState: "DISABLED", error: null };
+      return this.getStatus();
+    }
+    if (this.options.credentials.status().state === "UNAVAILABLE") {
+      this.status = { ...this.status, authState: "CREDENTIALS_UNAVAILABLE", error: this.options.credentials.status().reason ?? "Credential store unavailable" };
+      return this.getStatus();
+    }
+    const token = await this.options.credentials.get("UPSTOX", UPSTOX_TOKEN_CREDENTIAL);
+    if (!token) {
+      this.status = { ...this.status, authState: "AUTH_REQUIRED", error: null, validatedAt: null };
+      return this.getStatus();
+    }
+    const validation = await this.validateToken(token);
+    if (!validation.ok) {
+      this.status = {
+        ...this.status,
+        authState: validation.rateLimited ? "DEGRADED" : validation.expired ? "EXPIRED" : "ERROR",
+        error: validation.error ?? "Validation failed",
+        lastErrorAt: this.now().toISOString(),
+        restrictions: validation.rateLimited ? ["Rate limited — no automatic retry"] : this.status.restrictions
       };
       return this.getStatus();
     }
+    this.status = {
+      ...this.status,
+      authState: "AUTHENTICATED",
+      validatedAt: this.now().toISOString(),
+      error: null,
+      lastErrorAt: null,
+      capabilities: [
+        { name: "market_quote", state: "UNKNOWN", source: "DOCUMENTATION" },
+        { name: "historical_data", state: "UNKNOWN", source: "DOCUMENTATION" },
+        { name: "option_chain", state: "UNKNOWN", source: "DOCUMENTATION" },
+        { name: "market_information", state: "AVAILABLE", source: "API" }
+      ],
+      limits: [
+        { name: "other_standard_apis_per_second", value: 50, state: "UNKNOWN", source: "DOCUMENTATION", publishedAt: "2026-11-16", note: "Documentation figure, not verified account limit" }
+      ]
+    };
+    return this.getStatus();
   }
 
   async remove(): Promise<void> {
     await this.options.credentials.delete("UPSTOX", UPSTOX_TOKEN_CREDENTIAL);
+    await this.options.settings?.delete(UPSTOX_EXPIRY_SETTING);
     this.status = {
       ...emptyProviderStatus("UPSTOX", this.options.config.enabled),
       authState: this.options.config.enabled ? "AUTH_REQUIRED" : "DISABLED"

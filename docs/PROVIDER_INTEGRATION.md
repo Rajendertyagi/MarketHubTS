@@ -118,7 +118,12 @@ Each adapter must handle (as applicable and supported):
 - `packages/broker-upstox`: Analytics Token adapter validating via `GET /v2/market/status/NSE`; no OAuth/trading endpoints.
 - `packages/broker-fyers`: V3 non-trading-app OAuth adapter with random single-use state, backend `appIdHash`, loopback callback, daily 06:30 IST expiry, profile validation (PII discarded), logout on removal.
 - `apps/api`: LAN-safe read-only `GET /api/providers/status`; credential-changing routes live on the same app behind one simple local-peer check (no separate management server, no CSRF framework). FYERS callback is loopback-only with single-use state validation.
-- Reliability: bounded timeouts, bounded jittered retry for transient 429/5xx/network failures, atomic credential upserts, empty-replacement rejection, fail-closed key handling, and per-provider fault isolation.
+- Reliability: bounded timeouts, bounded jittered retry for idempotent REST reads (429 respects `Retry-After`; no delay information means no retry), **no retry of the single-use FYERS code exchange**, atomic credential upserts, empty-replacement rejection, fail-closed key handling, and per-provider fault isolation.
+- Durable non-secret settings: `provider_settings` table stores FYERS App ID/redirect URI and Upstox/FYERS expiry metadata; loaded on startup. Secrets remain only in the encrypted `CredentialStore`.
+- Credential replacement: Upstox candidate tokens are validated before replacing a working token (old token preserved on any failure); FYERS App Secret is stored as a candidate and promoted only after a successful authentication exchange.
+- Response validation: HTTP 200 alone is insufficient — Upstox Market Status and FYERS token/profile response shapes are validated; malformed responses produce ERROR status. FYERS profile PII is discarded.
+- FYERS redirect URI must be loopback and point to `/api/provider/fyers/callback`; mismatched or non-loopback URIs are rejected.
+- WebUI provider panel has functional controls for token/config/secret entry, auth start, validate and remove; status diagnostics remain.
 - `apps/web`: minimal provider status panel; no credentials displayed.
 - No broker SDKs installed; no live data flows or live authentication performed. All provider tests use mocked responses.
 

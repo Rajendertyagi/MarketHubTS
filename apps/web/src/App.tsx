@@ -32,6 +32,80 @@ function ProviderRow({ status }: { status: ProviderStatusView }) {
   );
 }
 
+function ProviderControls({ onChanged }: { onChanged: () => void }) {
+  const [upstoxToken, setUpstoxToken] = useState("");
+  const [upstoxExpiry, setUpstoxExpiry] = useState("");
+  const [appId, setAppId] = useState("");
+  const [redirectUri, setRedirectUri] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const post = async (path: string, body: unknown) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await res.json().catch(() => ({})) as any;
+      if (!res.ok) {
+        setMessage(payload?.message ?? `Request failed (${res.status})`);
+      } else {
+        setMessage("Done");
+        onChanged();
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
+  const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
+
+  return (
+    <div className="mt-4 grid gap-4 border-t border-slate-800 pt-4 sm:grid-cols-2">
+      <div className="space-y-2">
+        <h4 className="text-sm font-semibold text-slate-200">Upstox (Analytics Token)</h4>
+        <input aria-label="Upstox Analytics Token" type="password" className={input} placeholder="Analytics Token" value={upstoxToken} onChange={(e) => setUpstoxToken(e.target.value)} />
+        <input aria-label="Upstox token expiry" type="date" className={input} value={upstoxExpiry} onChange={(e) => setUpstoxExpiry(e.target.value)} />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/upstox/token", { token: upstoxToken, expiresAt: upstoxExpiry ? new Date(`${upstoxExpiry}T00:00:00Z`).toISOString() : undefined })}>Save token</button>
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/UPSTOX/validate", {})}>Validate</button>
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/UPSTOX/remove", { confirm: true })}>Remove</button>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <h4 className="text-sm font-semibold text-slate-200">FYERS (non-trading app)</h4>
+        <input aria-label="FYERS App ID" className={input} placeholder="App ID" value={appId} onChange={(e) => setAppId(e.target.value)} />
+        <input aria-label="FYERS redirect URI" className={input} placeholder="http://127.0.0.1:3001/api/provider/fyers/callback" value={redirectUri} onChange={(e) => setRedirectUri(e.target.value)} />
+        <input aria-label="FYERS App Secret" type="password" className={input} placeholder="App Secret" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/fyers/config", { appId, redirectUri })}>Save config</button>
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/fyers/app-secret", { appSecret })}>Save secret</button>
+          <button type="button" disabled={busy} className={button} onClick={async () => {
+            setBusy(true);
+            try {
+              const res = await fetch("/api/provider/fyers/auth/start", { method: "POST" });
+              const payload = await res.json().catch(() => ({})) as any;
+              if (!res.ok) setMessage(payload?.message ?? `Request failed (${res.status})`);
+              else if (payload?.authorizationUrl) window.location.href = payload.authorizationUrl;
+            } finally { setBusy(false); }
+          }}>Start authorization</button>
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/FYERS/validate", {})}>Validate</button>
+          <button type="button" disabled={busy} className={button} onClick={() => void post("/api/provider/FYERS/remove", { confirm: true })}>Remove</button>
+        </div>
+      </div>
+      {message && <p className="sm:col-span-2 text-xs text-slate-300" role="status">{message}</p>}
+      <p className="sm:col-span-2 text-xs text-slate-500">Credential management works only from the application host. From a LAN device you can view status but cannot change credentials.</p>
+    </div>
+  );
+}
+
 function ProviderPanel() {
   const query = useQuery({
     queryKey: ["provider-status"],
@@ -57,6 +131,7 @@ function ProviderPanel() {
           <p className="mt-3 text-xs text-slate-400">
             {query.data?.note} No credentials are shown here.
           </p>
+          <ProviderControls onChanged={() => void query.refetch()} />
         </>
       )}
     </section>

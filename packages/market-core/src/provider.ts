@@ -129,7 +129,17 @@ export async function fetchWithRetry(
   for (let i = 0; i < attempts; i++) {
     try {
       const response = await fetcher(url, init, timeoutMs);
-      if (response.status === 429 || response.status >= 500) {
+      if (response.status === 429) {
+        // Respect Retry-After when present; otherwise stop rather than guess and hammer the provider.
+        const retryAfter = response.headers.get("retry-after");
+        const seconds = retryAfter !== null ? Number(retryAfter) : NaN;
+        if (!Number.isFinite(seconds) || seconds < 0 || i === attempts - 1) return response;
+        lastError = new Error("transient_http_429");
+        const delay = Math.min(max, Math.max(base, seconds * 1000));
+        await sleep(delay);
+        continue;
+      }
+      if (response.status >= 500) {
         lastError = new Error(`transient_http_${response.status}`);
         if (i === attempts - 1) return response;
       } else {

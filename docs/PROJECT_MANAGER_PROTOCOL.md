@@ -83,6 +83,15 @@ This protocol governs how work is planned, executed, reviewed, and reported. It 
 - Do not turn ordinary engineering work into unnecessary questions for the product owner.
 - Do not silently convert assumptions into architectural decisions.
 
+### 3.3 Module and file organization (lean and durable)
+- **One clear responsibility per file.** When a file accumulates several distinct responsibilities (for example normalization, resolution, persistence and error handling), split it into focused modules rather than continuing to append to it. A file that has grown past roughly 300 lines is a signal to review it, not a hard limit — the test is whether its contents share one reason to change.
+- **Prefer small, focused modules over a few large ones.** Splitting is a file-level refactor with no behavior change; it must preserve the public exports (a thin barrel file is acceptable) and be verified by the existing tests. Do not use splitting as an excuse to redesign behavior.
+- **Keep route/transport concerns separate from domain logic.** API route registration may live in its own module that registers on the existing app; this does not imply a second server or a security framework. Domain rules stay in domain packages, provider specifics stay in adapters.
+- **Descriptive, consistent file names.** Name files after their responsibility (`identity.ts`, `credentials.ts`, `provider-routes.ts`, `reliability.test.ts`). Avoid vague names (`utils.ts`, `helpers.ts`, `misc.ts`) unless the contents are genuinely generic and small. Generated files (migrations, snapshots) keep their tool-defined names.
+- **Tests mirror source areas.** Group tests by domain (`tests/market/`, `tests/providers/`) with names that state the scenario (`credentials.test.ts`, `reliability.test.ts`). Keep a shared `tests/helpers/` only for genuinely reusable utilities.
+- **No disconnected scaffolding.** Do not create placeholder files or packages that are not used by the real application. Placeholder packages that already exist must be replaced with real implementations when their milestone arrives, not left alongside parallel copies.
+- **Review file sizes and names before declaring a milestone complete.** Report any file that still concentrates multiple responsibilities, and either split it or explain why the concentration is justified.
+
 ## 4. Agent task format (required for future implementation assignments)
 
 Every implementation assignment must specify:

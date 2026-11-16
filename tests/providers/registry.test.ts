@@ -27,13 +27,13 @@ function setup() {
   const registry = new ProviderRegistry({ now: () => new Date("2026-11-16T10:00:00.000Z") });
   const upstox = new UpstoxAdapter({
     credentials, config, now: () => new Date("2026-11-16T10:00:00.000Z"),
-    fetchImpl: async () => new Response(JSON.stringify({ status: "success" }), { status: 200 })
+    fetchImpl: async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 })
   });
   const fyers = new FyersAdapter({
     credentials, config, now: () => new Date("2026-11-16T10:00:00.000Z"),
     fetchImpl: async (url: string) => {
       if (url.includes("validate-authcode")) return new Response(JSON.stringify({ s: "ok", code: 200, access_token: "f-token" }), { status: 200 });
-      return new Response(JSON.stringify({ s: "ok", code: 200 }), { status: 200 });
+      return new Response(JSON.stringify({ s: "ok", code: 200, data: {} }), { status: 200 });
     }
   });
   registry.register(upstox);
@@ -114,7 +114,7 @@ describe("provider registry independence", () => {
     const registry2 = new ProviderRegistry();
     const upstox2 = new UpstoxAdapter({
       credentials: credentials2, config: { enabled: true },
-      fetchImpl: async () => new Response(JSON.stringify({ status: "success" }), { status: 200 })
+      fetchImpl: async () => new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 })
     });
     registry2.register(upstox2);
     expect((await registry2.validate("UPSTOX")).authState).toBe("AUTHENTICATED");

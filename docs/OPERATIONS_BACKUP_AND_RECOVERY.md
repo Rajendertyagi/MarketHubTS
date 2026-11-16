@@ -32,7 +32,7 @@
 ## 3. Security and sensitive data handling
 
 - Broker API credentials and sensitive tokens must be handled responsibly: **never logged, never exposed through ordinary data APIs**.
-- Credentials/tokens must **never be stored in plaintext**. M3 implements a portable encrypted store (AD-021): AES-256-GCM ciphertext in SQLite plus a 32-byte key file (`data/markethub.key`) beside the database. No OS credential store or native module is used.
+- Credentials/tokens must **never be stored in plaintext**. M3 implements a portable encrypted store (AD-021): AES-256-GCM ciphertext in SQLite plus a 32-byte key file (`data/markethub.key`) beside the database. No OS credential store or native module is used. Non-secret provider settings (App ID, redirect URI, expiry metadata) are stored in the `provider_settings` SQLite table and are loaded on startup.
 - LAN access is required and there is no application-level login/authentication system, but LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation. Safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope); deployment/usage implications should be documented clearly in UI/docs (planned).
 - MCP/REST interfaces must enforce input validation and avoid leaking secrets.
 

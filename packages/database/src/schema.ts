@@ -225,6 +225,15 @@ export const catalogSyncRuns = sqliteTable(
   ]
 );
 
+export const providerSettings = sqliteTable(
+  "provider_settings",
+  {
+    key: text("key").primaryKey(),
+    value: text("value").notNull(),
+    updatedAt: text("updated_at").notNull()
+  }
+);
+
 export const providerCredentials = sqliteTable(
   "provider_credentials",
   {
