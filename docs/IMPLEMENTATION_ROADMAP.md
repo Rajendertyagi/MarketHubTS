@@ -32,7 +32,7 @@
 
 ## 3. Milestones
 
-### M0 — Documentation and verification baseline (current milestone: complete for this task scope)
+### M0 — Documentation and verification baseline (complete)
 **Objective:** authoritative, cross-consistent documentation and verified scaffold status.
 
 **Prerequisites:** repository inspection, existing scaffold present.
@@ -47,10 +47,29 @@
 
 ---
 
-### M1 — Canonical contracts, catalog foundation, and persistence primitives (real application)
+### M1 — Application foundation and runtime (real application)
+**Objective:** turn the minimal scaffold into a properly structured, runnable, maintainable local application foundation (runtime, configuration, database initialization/migrations, API foundation, initial WebUI, LAN capability, development/production workflows, diagnostics and verification) without implementing market-domain features.
+
+**Prerequisites:** M0; existing Bun + TypeScript + React + Hono + SQLite scaffold.
+
+**Key work:** application composition/startup and graceful shutdown lifecycle; centralized validated runtime configuration (`.env.example`, compatibility with existing env vars, no secret exposure); reliable SQLite initialization and versioned Drizzle migrations (including initial app metadata migration) with safe failure handling and data preservation; API foundation (health/readiness, structured errors, logging, deliberate CORS/network boundaries, production static serving of built WebUI where practical); initial WebUI application shell and real system-status screen (honest states, no fabricated market data); configurable LAN-capable local operation (documented, no app-level login, no public exposure); Windows-compatible development (`bun run dev`) and production (`bun run build`, `bun run start`) workflows; automated tests and regression verification (including MCP STDIO health compatibility).
+
+**User-visible deliverables:** runnable local application with real backend status in WebUI, working dev/prod commands, documented LAN mode, and verified foundation behavior.
+
+**Acceptance criteria:** validated config startup; SQLite/migrations initialize safely (fresh and restart, preserving data); accurate health/readiness; WebUI shows real backend information and handles loading/error/recovery; LAN binding/access supported and documented; production build/start serves the application; existing MCP STDIO health functionality remains operational; typecheck/tests/build pass; no market-domain features added.
+
+**Verification:** automated tests (config, database/migrations, API/health/readiness/errors, runtime startup/shutdown, production serving, MCP contract regression) and manual verification (startup, WebUI, API, DB init, production serving, LAN behavior as environment allows, MCP regression).
+
+**Risks:** Windows process/signal behavior, LAN/firewall environment constraints, migration/path edge cases, serving/proxy configuration mismatches.
+
+**Non-goals:** instrument/catalog sync, provider integrations/auth, live/historical/option-chain data, charts, watchlists/alerts/scanners, News/X/Twitter, MCP HTTP transport.
+
+---
+
+### M2 — Canonical contracts, catalog foundation, and persistence primitives (real application)
 **Objective:** establish shared canonical schemas, instrument identity/catalog model, and DB/migration foundations used by all services, as part of the real MarketHubTS application.
 
-**Prerequisites:** M0; verification of exchange universe rules and key provider identifier formats (sufficient to model mappings).
+**Prerequisites:** M1; verification of exchange universe rules and key provider identifier formats (sufficient to model mappings).
 
 **Key work:** canonical data contracts (Zod/shared types), catalog entities/mappings/aliases/status/sync metadata, migration framework and initial domain schema, transactional catalog sync design, provenance/freshness/availability model. Support a **limited initial instrument set** while designing for full intended catalogue expansion; never hardcode changing exchange information.
 
@@ -66,10 +85,10 @@
 
 ---
 
-### M2 — Provider adapter framework and resilient connectivity (Upstox + FYERS)
+### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS)
 **Objective:** connect/configure providers independently with health, auth lifecycle handling, and normalized capability reporting.
 
-**Prerequisites:** M1 (canonical contracts/mappings), verified official auth/connection/API basics, secure credential storage mechanism decision/verification.
+**Prerequisites:** M2 (canonical contracts/mappings), verified official auth/connection/API basics, secure credential storage mechanism decision/verification.
 
 **Key work:** adapter interfaces, credential/config handling (secure), connection/auth/token lifecycle, health/error/limit reporting, provider capability discovery, independent connect/disconnect/remove behavior.
 
@@ -85,10 +104,10 @@
 
 ---
 
-### M3 — Live market data pipeline and in-memory realtime state (first end-to-end vertical slice target)
+### M4 — Live market data pipeline and in-memory realtime state (first end-to-end vertical slice target)
 **Objective:** stream/ingest live quotes/depth/ticks (as supported), normalize into canonical live state, and expose via shared services as part of the real application.
 
-**Prerequisites:** M2, verified feed protocols/subscription limits/field mappings.
+**Prerequisites:** M3, verified feed protocols/subscription limits/field mappings.
 
 **Key work:** subscriptions management (WebUI-owned selections), normalization/provenance/freshness, in-memory bounded live state, source selection, REST/SSE delivery foundations with bounded buffers and drop-overflow-not-subscriber policy. Deliver a **thin end-to-end vertical slice** for a limited initial instrument set proving one complete market-data flow through the actual application and its consumers (e.g. provider → canonical normalization/live state → shared service → REST/SSE and/or MCP/WebUI as implemented), becoming part of the real MarketHubTS application.
 
@@ -104,10 +123,10 @@
 
 ---
 
-### M4 — Historical candles and option-chain snapshot persistence
+### M5 — Historical candles and option-chain snapshot persistence
 **Objective:** reliable historical retrieval/caching and configurable option-chain snapshot capture/storage.
 
-**Prerequisites:** M1–M3 foundations as applicable; verified historical/expired/option-chain APIs and entitlements.
+**Prerequisites:** M2–M4 foundations as applicable; verified historical/expired/option-chain APIs and entitlements.
 
 **Key work:** historical request/sync workflows, local candle cache, gap fill from suitable provider, unavailable-period reporting; snapshot schema/store, WebUI capture config (underlying/expiry/strikes/capture independent of streaming), retention integration.
 
@@ -123,10 +142,10 @@
 
 ---
 
-### M5 — MCP market-data and event interface (AI-first parity)
+### M6 — MCP market-data and event interface (AI-first parity)
 **Objective:** comprehensive MCP access over shared services with correct transport/event behavior and permission boundaries.
 
-**Prerequisites:** M1–M4 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics (including `subscriptions/listen`, supported notifications, and `@modelcontextprotocol/server` v2.4.0 behavior).
+**Prerequisites:** M2–M5 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics (including `subscriptions/listen`, supported notifications, and `@modelcontextprotocol/server` v2.4.0 behavior).
 
 **Key work:** Streamable HTTP MCP endpoint (LAN), SSE-based event/subscription delivery as specified, STDIO compatibility, tool/resource/prompt set for discovery/quotes/depth/candles/option chains/futures/market-wide/freshness/on-demand, discoverable alert-event resources/feeds with cursor/sequence retrieval, multi-client support and isolation.
 
@@ -142,10 +161,10 @@
 
 ---
 
-### M6 — Watchlists, alerts, and scanners (shared workflows)
+### M7 — Watchlists, alerts, and scanners (shared workflows)
 **Objective:** full workflow services usable from WebUI and MCP with correct state, evaluation, and delivery behavior.
 
-**Prerequisites:** M1 (persistence/contracts), M3 (live data) and/or M4 as needed for conditions; M5 for MCP workflow parity.
+**Prerequisites:** M2 (persistence/contracts), M4 (live data) and/or M5 as needed for conditions; M6 for MCP workflow parity.
 
 **Key work:** watchlist CRUD/organization; alert/scanner definition models, condition evaluator (canonical + provider-specific fields, supported operators), durable trigger/event records with event IDs/cursors/sequence, trigger/history persistence, alert states (waiting/active/unavailable/triggered), scanner modes (manual/scheduled/continuous), delivery channels (WebUI/desktop/MCP/webhook).
 
@@ -161,10 +180,10 @@
 
 ---
 
-### M7 — WebUI F&O experience, charts, and market-wide views
+### M8 — WebUI F&O experience, charts, and market-wide views
 **Objective:** complete human-facing data and analysis interface on shared services.
 
-**Prerequisites:** M1–M6 data/services; Vela compatibility validation (or approved alternative decision if required later).
+**Prerequisites:** M2–M7 data/services; Vela compatibility validation (or approved alternative decision if required later).
 
 **Key work:** dashboard/market/options/futures/historical/market-wide modules, customizable layouts/tables/watchlist views, chart integration (candles/indicators/drawings/timeframes/multi-chart/workspace persistence as supported), responsive high-frequency rendering.
 
@@ -180,10 +199,10 @@
 
 ---
 
-### M8 — Operational configuration, diagnostics, and backup/restore
+### M9 — Operational configuration, diagnostics, and backup/restore
 **Objective:** production-grade local operation controls and recoverability.
 
-**Prerequisites:** M2–M7 components/config surfaces; secure credential storage/key-material strategy verified.
+**Prerequisites:** M3–M8 components/config surfaces; secure credential storage/key-material strategy verified.
 
 **Key work:** complete WebUI settings (providers, streaming/sync/capture, retention, preferences, startup/LAN/network, delivery, logging), diagnostics dashboards/logs, full backup/restore including required key material/state, integrity checks.
 
@@ -199,10 +218,10 @@
 
 ---
 
-### M9 — Performance, reliability hardening, and end-to-end acceptance
+### M10 — Performance, reliability hardening, and end-to-end acceptance
 **Objective:** meet non-functional requirements across sustained real-world operation.
 
-**Prerequisites:** M1–M8 feature-complete for in-scope product.
+**Prerequisites:** M2–M9 feature-complete for in-scope product.
 
 **Key work:** profiling/optimization (startup, memory, CPU, DB writes, API/SSE latency, render responsiveness), soak tests, fault injection (disconnects, limits, stale data), finalize acceptance evidence.
 
@@ -218,10 +237,10 @@
 
 ---
 
-### M10 — Future integrations: News and X/Twitter (later phase)
+### M11 — Future integrations: News and X/Twitter (later phase)
 **Objective:** add confirmed later-phase information sources without violating core architecture.
 
-**Prerequisites:** stable canonical/services foundation (post-M9 or when architecture/contracts ready), verified source APIs/terms.
+**Prerequisites:** stable canonical/services foundation (post-M10 or when architecture/contracts ready), verified source APIs/terms.
 
 **Key work:** source adapters/services, storage/provenance/freshness models, UI/MCP exposure as appropriate.
 

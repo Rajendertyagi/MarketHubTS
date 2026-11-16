@@ -2,9 +2,22 @@
 
 :root {
   color-scheme: dark;
+  --mh-bg: #020617;
+  --mh-surface: #0f172a;
+  --mh-border: #1e293b;
+  --mh-text: #e2e8f0;
+  --mh-muted: #94a3b8;
+  --mh-accent: #0284c7;
 }
+
+html, body, #root { min-height: 100%; }
 
 body {
   margin: 0;
+  background: var(--mh-bg);
+  color: var(--mh-text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
 }
+
+* { box-sizing: border-box; }

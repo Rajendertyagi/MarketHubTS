@@ -2,7 +2,7 @@
 
 **AI-first, local-first Indian stock-market data platform** focused on comprehensive NSE and BSE F&O market information.
 
-> **Status:** Phase 1 scaffold/foundation verified in this repository — **not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+> **Status:** Application foundation implemented (runtime/configuration, SQLite migrations, API health/readiness, WebUI system-status shell, LAN-capable local operation, dev/prod workflows). **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
 
 ## What MarketHubTS is (confirmed)
 
@@ -16,44 +16,53 @@
 
 Not an automated trading platform, not an AI trading recommendation/prediction/signal engine, not sentiment analysis, not chat, not broker account management (orders/positions/holdings/funds/margin/personal trade history), and not general CSV/Excel market-data export.
 
-## Current scaffold (implemented & verified)
+## Current implementation (foundation milestone)
 
 - Bun workspace monorepo (`apps/*`, `packages/*`), strict TypeScript baseline.
-- `apps/api`: Hono API with `GET /health` and SQLite health check.
-- `apps/web`: React + Vite shell (TanStack Router/Query, Tailwind) displaying backend health.
-- `apps/mcp-server`: stdio MCP server with `markethub_health` tool reusing local API.
-- `packages/contracts`, `packages/shared`, `packages/database` (`bun:sqlite` + Drizzle scaffold, WAL/foreign_keys/NORMAL/busy_timeout).
-- Placeholder packages: `market-core`, `realtime`, `analytics`, `broker-fyers`, `broker-upstox`.
-- Basic contract test, typecheck, and build passing at scaffold verification.
+- **Runtime/configuration:** centralized validated config (`packages/config`, Zod), `.env.example`, compatibility with `PORT`/`MARKETHUB_DB_PATH`, LAN/local modes, no secret exposure in public diagnostics.
+- **Database:** `packages/database` (`bun:sqlite` + Drizzle) with reliable initialization, WAL/foreign_keys/NORMAL/busy_timeout, versioned migrations, and initial `app_meta` migration.
+- **API (`apps/api`):** Hono + Bun with startup/shutdown lifecycle, `/health` (compatible), `/ready`, `/api/status`, structured errors/logging, deliberate CORS policy, and production static serving of the built WebUI.
+- **WebUI (`apps/web`):** React + Vite application shell (TanStack Router/Query, Tailwind) showing real backend/runtime status with loading/error/recovery states (no fabricated market data).
+- **MCP (`apps/mcp-server`):** stdio `markethub_health` tool preserved (uses local API health contract).
+- **Workflows:** Windows-compatible `bun run dev`, `bun run build`, `bun run start` (single local instance serving API + built WebUI in production).
+- **Tests:** automated coverage for config, database/migrations, API/health/readiness/errors, runtime startup/shutdown, production serving, and MCP contract regression; typecheck/build passing.
+- Placeholder packages remain: `market-core`, `realtime`, `analytics`, `broker-fyers`, `broker-upstox`.
 
 ## Prerequisites
 
 - [Bun](https://bun.sh/) 1.4.4+
 
-## Quick start
+## Quick start (Windows)
 
-```bash
+```powershell
 bun install
 
-# Terminal 1 — API (http://localhost:3001)
+# Development (API + Web, Windows-compatible)
+bun run dev
+# API:  http://127.0.0.1:3001 (default)
+# Web:  http://127.0.0.1:5173 (default, proxies /health, /ready, /api)
+
+# Individual processes (optional)
 bun run dev:api
-
-# Terminal 2 — Web UI (http://localhost:5173, proxies /health to API)
 bun run dev:web
+bun run dev:mcp   # MCP stdio server (MARKETHUB_API_URL=http://localhost:3001)
 
-# MCP stdio server (for MCP hosts; optional MARKETHUB_API_URL=http://localhost:3001)
-bun run dev:mcp
+# Production (single local instance serving built WebUI + API)
+bun run build
+bun run start
 ```
 
-## Checks
+**LAN mode (documented):** set `MARKETHUB_LAN=true` (and/or explicit `MARKETHUB_HOST`/`MARKETHUB_WEB_HOST`) in `.env` to bind for local-network access. LAN access is required by product design but has no app-level login; review exposure boundaries and Windows Firewall implications before enabling on shared networks. Do not expose publicly.
+
+## Checks and database helpers
 
 ```bash
 bun run typecheck
 bun test
 bun run build
+bun run db:generate
+bun run db:migrate
 ```
-
-Database helpers (scaffold): `bun run db:generate`, `bun run db:migrate` (see `packages/database`).
 
 ## Documentation
 
@@ -79,7 +88,7 @@ Start here: [`AGENTS.md`](AGENTS.md) and [`docs/PROJECT_OVERVIEW.md`](docs/PROJE
 
 ## Notes
 
-- **Operating model:** single local owner/application instance on the user’s PC (Windows-first, local-first). **Single-user means one local application owner, not one connected client.** **LAN access is required** (WebUI and MCP HTTP, planned) so other applications/devices/multiple MCP clients can connect to the same running application. Local browser-based WebUI is acceptable; a native desktop wrapper is optional. No cloud hosting, no public internet exposure, no app-level user login (broker credentials/tokens handled responsibly).
+- **Operating model:** single local owner/application instance on the user’s PC (Windows-first, local-first). **Single-user means one local application owner, not one connected client.** **LAN access is required** so other applications/devices/multiple MCP clients can connect to the same running application (WebUI now; MCP HTTP planned). Local browser-based WebUI is acceptable; a native desktop wrapper is optional. No cloud hosting, no public internet exposure, no app-level user login (broker credentials/tokens handled responsibly).
 - **Phased priorities preserved:** News integration, X/Twitter integration, and market-wide information are required later-phase priorities (not unwanted features).
 - Technical details pending official verification are explicitly marked in docs (provider APIs/limits/entitlements, MCP 2026-07-28 transport semantics, Vela compatibility, secure Windows credential storage, etc.).
-- Git repository: `Rajendertyagi/MarketHubTS` (`origin`, branch `main`, local/remote synchronized at `277d5e2` as verified 2026-11-16). Working-tree status is task-specific; preserve existing files and follow the project protocol for any future changes (no commit/push without explicit authorization).
+- **Git workflow:** two permanent branches — `main` (stable) and `develop` (active development). Repository `Rajendertyagi/MarketHubTS` (`origin`). Branch/HEAD/working-tree state is task-specific; follow the project protocol for any future changes (no commit/push without explicit authorization).

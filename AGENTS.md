@@ -1,7 +1,7 @@
 # AGENTS.md — MarketHubTS
 
 > **Scope:** Documentation and repository navigation for MarketHubTS. This file is the entry point for humans and coding agents working in this repository.
-> **Last updated:** 2026-11-15
+> **Last updated:** 2026-11-16
 
 ## 1. Project identity (confirmed)
 
@@ -19,11 +19,11 @@ MarketHubTS is the **only intended future MarketHub application**: a clean, inde
 
 ## 2. Repository status (verified)
 
-- **State:** fresh Phase 1 scaffold/foundation (not a functioning market-data platform).
-- **Git (verified 2026-11-16):** repository `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`), branch `main`; local HEAD and `origin/main` both `277d5e248ea972c0fea984105b86708563205a6a` (`277d5e2 Correct documentation: git state, FPI 150 date, MCP alert events, dependencies, and NSE index catalogue`), synchronized at verification time. Working-tree status is task-specific (not recorded as permanent project state); check `git status --short --branch` in task reports/current session.
+- **State:** application foundation implemented on top of the original scaffold (runtime/configuration, SQLite migrations, API health/readiness, WebUI system-status shell, LAN-capable local operation, dev/prod workflows). **Not** a functioning market-data platform yet.
+- **Git workflow:** two permanent branches — `main` (stable) and `develop` (active development). Repository `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`). Branch/HEAD/working-tree state is task-specific; check `git status --short --branch` and report exact SHAs in task reports.
 - **Workspace:** Bun workspaces (`apps/*`, `packages/*`), Bun 1.4.4, TypeScript 7.0.2.
-- **Implemented (verified):** Hono API `/health` with SQLite check, React+Vite web shell fetching health, MCP stdio server with `markethub_health` tool reusing local API, shared Zod contracts, `bun:sqlite`+Drizzle database scaffold (`app_meta`, WAL/foreign_keys/NORMAL/busy_timeout), basic tests/typecheck/build passing at scaffold time.
-- **Not implemented:** broker integrations, canonical market engine/catalog, live/historical/option-chain data pipelines, realtime SSE, alerts/scanners/watchlists, charts, operational WebUI config, backup/restore, Streamable HTTP MCP, etc. Package scaffolds exist for future modules.
+- **Implemented (foundation):** centralized validated runtime config (`@markethub/config`, `.env.example`), SQLite + Drizzle initialization with versioned migrations (`app_meta`), Hono API with `/health`, `/ready`, `/api/status`, structured errors/logging and deliberate CORS, React+Vite WebUI application shell showing real backend/runtime status with loading/error/recovery states, Windows-compatible dev/prod scripts (`bun run dev`, `bun run build`, `bun run start`) with production static serving, MCP stdio `markethub_health` compatibility preserved.
+- **Not implemented:** broker integrations, canonical market catalog/engine, live/historical/option-chain data pipelines, realtime SSE market streams, alerts/scanners/watchlists, charts, operational WebUI config, backup/restore, Streamable HTTP MCP, News/X/Twitter, etc. Placeholder packages remain for future modules.
 
 See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for details.
 
@@ -73,14 +73,26 @@ Full protocol: [`docs/PROJECT_MANAGER_PROTOCOL.md`](docs/PROJECT_MANAGER_PROTOCO
 - Alerts requiring non-streamed instruments are saved as waiting (not auto-subscribed).
 - No order placement/trading/account-management features.
 
-## 6. Quick commands (current scaffold)
+## 6. Quick commands
 
 ```bash
 bun install
-bun run dev:api   # http://localhost:3001
-bun run dev:web   # http://localhost:5173 (proxies /health)
-bun run dev:mcp   # stdio MCP server
+
+# Development (Windows-compatible, API + Web)
+bun run dev
+
+# Individual processes (troubleshooting)
+bun run dev:api   # API (default http://127.0.0.1:3001)
+bun run dev:web   # Web UI dev server (default http://127.0.0.1:5173, proxies /health,/ready,/api)
+bun run dev:mcp   # MCP stdio server (MARKETHUB_API_URL=http://localhost:3001)
+
+# Production
+bun run build
+bun run start     # serves built WebUI + API from one local instance (requires build)
+
+# Checks and database helpers
 bun run typecheck
 bun test
-bun run build
+bun run db:generate
+bun run db:migrate
 ```

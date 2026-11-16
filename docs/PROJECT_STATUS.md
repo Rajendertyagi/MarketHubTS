@@ -1,83 +1,89 @@
 # Project Status
 
-> **Status:** Verified repository and scaffold condition (updated 2026-11-16 for current Git state and documentation alignment).
+> **Status:** Application foundation implemented (Milestone 1 — Application Foundation and Runtime). Not a functioning market-data platform yet.
 > **Last updated:** 2026-11-16
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Summary
 
-MarketHubTS in this repository is a **fresh Phase 1 scaffold/foundation**. It provides a runnable workspace skeleton (API health endpoint, web health shell, MCP stdio health tool, shared contracts, SQLite/Drizzle scaffolding) but **is not a functioning market-data platform**. No broker integrations, canonical catalog/market engine, live/historical/option-chain pipelines, realtime SSE, alerts/scanners/watchlists, charts, or operational configuration are implemented.
+MarketHubTS now has a **working application foundation** built on the original scaffold: centralized validated runtime configuration, reliable SQLite initialization with versioned Drizzle migrations, an API with health/readiness/lifecycle and deliberate network boundaries, a WebUI application shell showing real backend/runtime status, LAN-capable local operation, and Windows-compatible development/production workflows. This is **not** a functioning market-data platform: no broker integrations, canonical catalog/market engine, live/historical/option-chain pipelines, realtime market SSE, alerts/scanners/watchlists, charts, operational configuration UI, backup/restore, or MCP HTTP transport are implemented.
 
 ## 2. Verified repository state
 
-### 2.1 Verified Git state (pre-publication `main` base, verified 2026-11-16)
+### 2.1 Git workflow (permanent branches)
 
-| Item | Verified state |
+| Item | State |
 |---|---|
-| Path | `D:\Temp\MarketHubTS` |
-| Git repository | **Yes** — `Rajendertyagi/MarketHubTS` |
+| Repository | `Rajendertyagi/MarketHubTS` |
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
-| Verified `main` base | Local `main` and `origin/main` both at `277d5e248ea972c0fea984105b86708563205a6a` (`277d5e2 Correct documentation: git state, FPI 150 date, MCP alert events, dependencies, and NSE index catalogue`) at verification time (synchronized). This is the pre-publication base for the documentation review work; `main` was not modified by that review publication. |
-| Documentation review branch (not merged into `main`) | `review/documentation-alignment-2026-11-16` was published from `277d5e2` for independent review (published review commit `ae613bff4ff76aa75a68022c8218c83507c9454c`, with bounded review corrections committed on the same branch). Review-branch documentation is **not** incorporated into `main` unless/until explicitly merged after review. |
-| Working tree / current branch | Task-specific and temporary; not recorded as permanent project state. Check current `git status --short --branch`, branch, and HEAD in task reports/session. |
-| Previously reported commits | `70c4a873f36e3143d3e5d271ead752ef3409f58f` and `7ebb6abc3bb54710288f80a24dc82a40f3499980` are historical ancestors in lineage context as applicable; history was rewritten earlier (see §2.2) and subsequent documentation commits were added on `main` before the review branch was created. |
-| `project-status.json` | **Not present locally and not tracked** (verified 2026-11-15). Historically observed earlier as an unrelated file/task entry; removed during prior cleanup/history rewrite. No project tooling usage identified in this repository. Reported separately for product-owner review. |
-| Workspace | Bun workspaces configured (`apps/*`, `packages/*`), `packageManager: bun@1.4.4` |
-| Runtime/tooling observed | Bun 1.4.4 installed; TypeScript 7.0.2 in manifests |
-| Lockfile | `bun.lock` present |
-| Build artifacts present | `apps/web/dist/` present (from prior build); `node_modules/` present; `data/` may be created at runtime |
+| Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
+| Branch/HEAD/working tree | **Task-specific and temporary** — not recorded as permanent project state. Check `git status --short --branch`, current branch, and exact HEAD/remote sync in each task report/session. |
 
-### 2.2 Historical repository state (before Git initialization, preserved for context)
+### 2.2 Historical context (preserved)
 
-- Earlier in this environment the directory was **not** a Git repository (`git status` reported: not a git repository, no `.git` history).
-- Git was later initialized, connected to `origin`, and project files were committed/pushed; history was subsequently rewritten to the current single-commit state documented above. This subsection is historical context, not the current state.
+- The directory was previously not a Git repository; Git was later initialized and history rewritten during early setup.
+- Documentation alignment work was previously published on a temporary review branch and later consolidated into the two-branch workflow (`main`/`develop`). Temporary branch names/SHAs and working-tree cleanliness are not permanent project state.
+- `project-status.json` is not present locally and not tracked (historically observed as unrelated and removed earlier). If it reappears, treat as out-of-scope unless explicitly assigned and report for product-owner review.
 
-## 3. Implemented and verified (scaffold)
+### 2.3 Workspace and tooling
 
-| Component | Evidence |
+- Bun workspaces (`apps/*`, `packages/*`), `packageManager: bun@1.4.4`, TypeScript 7.0.2, `bun.lock` present.
+- `apps/web/dist/`, `node_modules/`, and runtime `data/` may exist locally depending on build/run activity.
+
+## 3. Implemented and verified
+
+### 3.1 Previously scaffolded (baseline)
+- Bun workspace monorepo, strict TypeScript baseline, Hono API health scaffold, React+Vite shell, MCP stdio `markethub_health`, shared Zod contracts/helpers, SQLite/Drizzle scaffold, placeholder packages (`market-core`, `realtime`, `analytics`, `broker-fyers`, `broker-upstox`).
+
+### 3.2 Application foundation (this milestone, implemented)
+| Component | Implemented behavior (verified by code/tests/build in this task) |
 |---|---|
-| `apps/api` (Hono + Bun) | `GET /health` and `/` implemented; uses shared contracts and DB health check; CORS enabled; graceful shutdown handlers. Manual verification previously returned valid health payload with `checks.database: ok` and created SQLite DB file. |
-| `apps/web` (React + Vite) | Shell fetches `/health` via TanStack Query/Router setup and displays status; Vite dev proxy `/health -> http://localhost:3001`; production build succeeded (`apps/web/dist/`). |
-| `apps/mcp-server` (STDIO) | `markethub_health` tool registered via `@modelcontextprotocol/server` v2 `serveStdio`; fetches local API and validates contract; diagnostics to stderr. Typechecked/build-checked. |
-| `packages/contracts` | Zod schemas/types for health and API error. |
-| `packages/shared` | Utility helpers (`nowIso`, `getEnv`). |
-| `packages/database` | `bun:sqlite` + Drizzle scaffold: `openDatabase` (WAL, foreign_keys, NORMAL, busy_timeout, mkdir, safe close/checkpoint best-effort), `checkDatabase`, `app_meta` schema, `drizzle.config.ts`, `migrate.ts`; no generated migrations in `drizzle/`. |
-| Placeholder packages | `market-core`, `realtime`, `analytics`, `broker-fyers`, `broker-upstox` contain placeholder exports/config only. |
-| Tests/checks (scaffold) | `tests/health.test.ts` (2 tests) passed; `bun run typecheck` passed across workspace; `bun run build` passed including web Vite build (as previously verified). |
+| `packages/config` | Centralized, validated runtime configuration (Zod): env/host/port/LAN/db/log/web settings, defaults, clear invalid-config errors, compatibility with `PORT` and `MARKETHUB_DB_PATH`, public/redacted config views (no secret exposure). `.env.example` provided. |
+| `packages/database` | Reliable SQLite open/init (directory creation, WAL/foreign_keys/NORMAL/busy_timeout), versioned Drizzle migrations with generated initial `app_meta` migration, safe migration execution/failure handling, health checks, and safe close/checkpoint behavior. |
+| `packages/contracts` | Extended shared contracts for health (compatible), readiness, system status, and API errors. |
+| `apps/api` | Application composition/startup lifecycle: config loaded/validated before dependent components, DB initialized/migrated before ready, Hono API with `/health`, `/ready`, `/api/status`, structured error handling/logging, deliberate CORS policy for local/LAN use, graceful shutdown/resource cleanup, and production static serving of built WebUI when available. |
+| `apps/web` | Coherent application shell and system overview screen consuming real backend status (`/api/status`): loading, success, error/degraded, retry/recovery, responsive layout, reusable status components/tokens; honest “not implemented” foundation notes (no fabricated market data). Vite dev proxy for `/health`, `/ready`, `/api`. |
+| `apps/mcp-server` | Existing MCP STDIO `markethub_health` tool preserved; health contract compatibility maintained. |
+| Scripts/tooling | Windows-compatible `bun run dev` (API + Web), `bun run build`, `bun run start` (production single-instance serving built WebUI + API), plus individual dev/db/check commands. |
+| Tests/checks | Automated tests added/passing for config, database/migrations, API health/readiness/errors, runtime startup/shutdown and invalid-config failure, production API serving behavior, and MCP health-contract regression. `bun run typecheck`, `bun test`, and `bun run build` passed in this task. |
+
+### 3.3 Manual verification notes (this task)
+- **Verified:** application startup/config validation, SQLite initialization/migrations, API health/readiness/status responses, WebUI real-status rendering/error-recovery behavior (via implementation and automated/runtime checks), production build and production startup/serving path, MCP health-contract compatibility.
+- **LAN:** configurable bind/LAN mode implemented and documented; listening/bind behavior is configuration-driven. **External second-device LAN testing was not performed in this environment** (no second device available) — not claimed as verified.
+- **MCP STDIO runtime tool invocation:** contract/regression compatibility verified; interactive host-level STDIO session was not separately exercised beyond build/typecheck/contract checks in this environment.
 
 ## 4. Not implemented (confirmed gaps)
 
 - Provider adapters and live broker connectivity (Upstox/FYERS auth, REST/WS, subscriptions, normalization).
-- Canonical instrument catalog, identity/mapping, transactional sync.
+- Canonical instrument catalog, identity/mapping, transactional sync and market-domain schemas.
 - Canonical market engine and normalization/provenance/freshness pipeline.
-- Live in-memory market state, realtime SSE delivery, bounded buffers/drop policy.
+- Live in-memory market state, realtime SSE market delivery, bounded buffers/drop policy.
 - Historical candle retrieval/sync/caching and option-chain snapshot capture/storage.
 - Watchlists, alerts, scanners, condition evaluation, delivery channels.
-- Market-data REST/MCP tools/resources/events beyond health; Streamable HTTP MCP transport.
+- Market-data REST/MCP tools/resources/events beyond health/status foundation; Streamable HTTP MCP transport.
 - WebUI operational configuration, market modules, charts (Vela integration), customization persistence.
 - Secure credential storage, backup/restore, integrity maintenance, diagnostics UI.
 - News and X/Twitter integrations (later phase).
 
 ## 5. Documentation status
 
-Documentation baseline on verified `main` (`277d5e2`, §2.1) includes `AGENTS.md`, `README.md`, and `docs/` covering overview, requirements, protocol, architecture/decisions, market data/catalog, provider integration, MCP interface, WebUI/config, data lifecycle/storage, roadmap, testing/acceptance, operations/backup/recovery, project status, open questions/risks, and references.
+- Documentation baseline and engineering standards remain authoritative; roadmap sequencing updated to insert **M1 — Application Foundation and Runtime** and renumber subsequent milestones (see [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)).
+- `AGENTS.md`, `README.md`, and this status document updated to reflect the two-branch workflow (`main` stable, `develop` active), current foundation implementation, and task-specific Git-state reporting (no temporary branch/working-tree state treated as permanent).
 
-**2026-11-16 documentation alignment (review branch, not merged into `main`):** on `review/documentation-alignment-2026-11-16` (published from `277d5e2` for independent review), `docs/ENGINEERING_STANDARDS.md` was added as canonical practical standards and linked from relevant docs; specified documentation was aligned on confirmed product direction (MarketHubTS as only intended future app, original Python MarketHub as reference only, single local owner/application instance with **LAN access required** for WebUI/MCP/multiple clients, browser-based WebUI acceptable/native desktop wrapper optional, no cloud/public exposure/no app-level login, provider independence, News/X/Twitter/market-wide as phased priorities) and on Git-state reporting discipline (no temporary branch/working-tree state treated as permanent project state). Bounded review corrections on the same branch clarify Git-state reporting, LAN exposure-boundary review needs, and test-development timing. Existing valid market-domain requirements, provider research, data lifecycle, backup/recovery requirements, and phased roadmap were preserved. These changes remain under independent review until merged.
+## 6. Known notes and limitations
 
-## 6. Known repository notes
-
-- `project-status.json` is not present locally and not tracked (see §2.1); historically observed with unrelated content and removed during prior cleanup/history rewrite.
-- `tsconfig.tsbuildinfo` files and `apps/web/dist/` may exist from prior work/builds; not modified by this documentation correction task.
-- Git-backed repository state is recorded in §2.1 (stable identity/branch/HEAD at verification time); the pre-initialization "not a git repository" condition is historical only (§2.2). Working-tree status must be reported per task, not treated as permanent documentation.
+- LAN access is supported by configuration but has no app-level login; exposure boundaries and Windows Firewall implications must be reviewed by the operator (no automatic firewall/router changes).
+- Production start requires a prior build (`bun run build` then `bun run start`).
+- Runtime/process signal behavior can vary by environment; graceful shutdown is implemented, but exit-code semantics may differ across platforms/tools.
+- `project-status.json` remains out-of-scope if it reappears.
 
 ## 7. Readiness for next phase
 
-**Ready:** documented architecture/requirements/protocol/roadmap baseline; working scaffold and shared foundations to extend.
+**Ready:** runnable, tested application foundation with validated config, migrations, health/readiness API, WebUI status shell, LAN-capable local operation, and dev/prod workflows.
 
-**Next dependencies (per roadmap):** verify key official provider/MCP/chart/credential-storage details; implement canonical contracts/catalog and persistence primitives (M1), then provider connectivity and live pipeline (M2/M3) with measured, test-backed increments.
+**Next dependencies (per roadmap):** verify key official provider/MCP/chart/credential-storage details as needed; proceed to **M2 — Canonical contracts, catalog foundation, and persistence primitives** (renumbered), then provider connectivity and live pipeline milestones with measured, test-backed increments.
 
 ## 8. Notes for future work
 
-- Re-run `git status --short --branch` before future work; §2.1 records the verified pre-publication `main` base (`277d5e2`, synchronized at verification time) and distinguishes it from the unmerged documentation review branch. Record current branch/HEAD/working-tree status in task reports, not as permanent project documentation.
-- If `project-status.json` reappears, treat as out-of-scope unless explicitly assigned and report for product-owner review.
-- Any implementation must follow [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), preserve existing work, and obtain explicit authorization for scope-expanding or destructive actions.
+- Re-run `git status --short --branch` before/after work and report exact branch/HEAD/remote sync and working-tree state in task reports (task-specific, not permanent documentation).
+- Any implementation must follow [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) and [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), preserve existing work, and obtain explicit authorization for scope-expanding, destructive, or commit/push actions.
