@@ -31,6 +31,19 @@ These standards define how MarketHubTS is built and maintained as a **clean, ind
 - **Degradation:** when data/providers are unavailable, report unavailable/stale/limited states clearly; continue operating with locally available and non-broker data where possible.
 - **Testing:** include partial-failure and recovery scenarios (disconnect/reconnect, limits, stale data, interrupted sync, restart) per [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md).
 
+## 3A. External integration correctness rules (learned from M3)
+
+These rules apply to any provider/external API integration. They are the concrete lessons from the M3 correction cycle and must be checked during design and review, not discovered after publication.
+
+- **Credential replacement is a transaction with the provider, not just a local write.** Validate a candidate credential before replacing a working one. On invalid response, network failure, timeout or uncertain validation, keep the old credential and report the failure in status. For flows with a separate secret (e.g. FYERS App Secret), store a candidate and promote it only after a successful authentication exchange.
+- **HTTP success is not response success.** Validate the response body shape (status/code plus required fields) before reporting success. A malformed or unexpected HTTP 200 must produce an explicit error state, never `AUTHENTICATED`. Discard personal/sensitive payload fields after validation; persist only sanitized status and timestamps.
+- **Retry only safe, idempotent operations.** Never retry a single-use authorization-code exchange. Retry bounded idempotent reads with jittered backoff. Honour `Retry-After` in both delta-seconds and HTTP-date forms; stop retrying when the header is missing, invalid, in the past, or implies an unsafe delay. Never retry in a tight loop or amplify rate-limit violations.
+- **Startup must be offline-safe and state-honest.** Loading persisted configuration/credentials must not make network calls. If saved credentials/config exist, report a validation-required state (`AUTH_REQUIRED`), not `NOT_CONFIGURED`. Keep `DISABLED` and `CREDENTIALS_UNAVAILABLE` distinct. Clear the validation-required advisory after successful authentication or validation, while preserving unrelated restrictions (e.g. expiry unknown).
+- **Expiry metadata is source data, never inferred.** Persist user-supplied or provider-supplied expiry timestamps. Do not calculate an expiry from the moment a token was entered, and do not overwrite a known expiry with a recalculated one. When a credential is replaced without expiry metadata, clear the previous expiry from storage, runtime config and status, and report expiry as unknown.
+- **Callback/redirect configuration must match the actual listener.** Validate scheme, loopback host, port and path against the running application's listener. Reject HTTPS when the app serves HTTP and reject a port different from the configured API port. Preserve single-use state validation and never log callback query parameters containing codes.
+- **Durable non-secret settings belong in SQLite, secrets in the encrypted store.** App IDs, redirect URIs and expiry metadata are settings; tokens, app secrets and API secrets are credentials. Keep the two paths separate and load settings on startup.
+- **Durability tradeoffs must be explicit.** WAL + `synchronous=NORMAL` can lose the last commits on power loss without corrupting the database. This is acceptable only when the lost write is re-enterable (e.g. a credential the user still holds). Do not silently change the setting; record the justification and do not claim stronger durability than configured.
+
 ## 4. Code quality
 
 - **TypeScript:** strict typing enabled and meaningful types at module boundaries. Avoid unnecessary `any`; prefer `unknown` + validation/narrowing at boundaries.

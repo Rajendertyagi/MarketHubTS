@@ -126,6 +126,26 @@ These facts were studied to ground the catalog model. Official sources above are
 | shadcn/ui | https://ui.shadcn.com/ | Component patterns (generation/integration pending) |
 | Vela (candidate) | https://www.npmjs.com/package/@luxalgo/vela , https://github.com/luxalgo/vela , https://velacharts.dev/ | Charting library candidate; verify compatibility/features/licensing/attribution before final adoption |
 
+### 9.1 Bun runtime notes (verified 2026-11-16, installed 1.4.4)
+
+Official pages: [SQLite](https://bun.com/docs/runtime/sqlite), [WebSockets](https://bun.com/docs/runtime/http/websockets), [Web APIs](https://bun.com/docs/runtime/web-apis), [Secrets](https://bun.com/docs/runtime/secrets), [Bun APIs](https://bun.com/docs/runtime/bun-apis).
+
+- **SQLite:** `strict: true`, WAL + `synchronous=NORMAL`, and `wal_checkpoint(TRUNCATE)` on close match official guidance. Bun warns that `db.transaction()` wrappers must be synchronous; our manual `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` around async callbacks is the correct pattern. WAL + NORMAL can lose the last commits on power loss without corruption — accepted because lost credential/config writes are re-enterable (see ENGINEERING_STANDARDS §3A).
+- **Web Crypto:** `crypto.subtle` AES-GCM with AAD is supported; TS 7 requires explicit `Uint8Array<ArrayBuffer>` typing for `BufferSource` (already applied in `credentials.ts`).
+- **Secrets API:** `Bun.secrets` uses OS credential stores (Windows Credential Manager / Keychain / libsecret) — deliberately **not used** because the product requires a portable self-contained folder.
+- **M4-relevant WebSocket client:** `new WebSocket(url, { headers, protocols, tls, proxy, perMessageDeflate })` is a Bun-specific extension (custom headers matter for provider auth). Binary frames default to `binaryType = "nodebuffer"` (Buffer), relevant for protobuf decoding. `socket.pause()` / `resume()` provide real TCP backpressure (Bun-specific) — supports bounded buffers and drop-overflow-not-subscriber. Server-side `idleTimeout` defaults 120s, `maxPayloadLength` 16MB.
+- **Other:** `Bun.CSRF` exists but is intentionally unused (no CSRF framework per owner direction). `Database.serialize()` / `deserialize()` may be useful for M9 backup, not M3/M4.
+
+### 9.2 TypeScript 7 notes (verified 2026-11-16, installed 7.0.2)
+
+Official sources: [TS 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0), [TSConfig reference](https://www.typescriptlang.org/tsconfig/), [Handbook](https://www.typescriptlang.org/docs/handbook/intro.html). TypeScript 7 is a native (Go) compiler; it is a tooling change more than a language change.
+
+- **New defaults:** `strict: true`, `module: esnext`, `target` = latest stable ES edition preceding `esnext`, `noUncheckedSideEffectImports: true`, `libReplacement: false`, `stableTypeOrdering: true` (cannot be disabled), `rootDir: ./`, `types: []`.
+- **Removed / hard errors:** `target: es5`, `downlevelIteration`, `moduleResolution: node/node10/classic`, `module: amd/umd/systemjs/none`, `baseUrl` (use `paths` relative to project root). `esModuleInterop` and `allowSyntheticDefaultImports` cannot be `false`; `alwaysStrict` is always `true`; `asserts` imports replaced by `with`; `module` keyword disallowed in namespace declarations.
+- **Recommended for Bun/bundlers:** `module: preserve` with `moduleResolution: bundler` (or `nodenext`). Our `module: ESNext` + `moduleResolution: Bundler` is valid and typechecks cleanly.
+- **Project status:** `tsconfig.base.json` already sets `strict`, `target: ES2022`, `module: ESNext`, `moduleResolution: Bundler`, `noEmit`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `types: ["bun-types"]`. It is TS 7-compatible; **no config change needed**. `bunx tsc --version` reports 7.0.2 and `bun run typecheck` passes.
+- **Practical lesson already applied:** TS 7 strictness forced conditional spreads for `exactOptionalPropertyTypes` and explicit `Uint8Array<ArrayBuffer>` typing for Web Crypto `BufferSource` (in `credentials.ts`). Keep these patterns in M4 feed code.
+
 ## 10. Repository-local evidence (verified 2026-11-15/16)
 
 - Workspace manifests and source inspected under `D:\Temp\MarketHubTS` (apps, packages, docs, tests, configs).

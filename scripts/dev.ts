@@ -60,7 +60,7 @@ process.on("SIGINT", () => void shutdown(0));
 process.on("SIGTERM", () => void shutdown(0));
 
 console.log("[dev] Starting MarketHubTS development (API + Web)...");
-spawn("api", ["bun", "--watch", "src/index.ts"], resolve(root, "apps/api"));
+spawn("api", ["bun", "--watch", "apps/api/src/index.ts"], root);
 spawn("web", ["bun", "run", "dev"], resolve(root, "apps/web"));
 
 await new Promise(() => {});

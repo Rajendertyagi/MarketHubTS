@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "dev": "bun scripts/dev.ts",
-    "dev:api": "bun --cwd apps/api dev",
+    "dev:api": "bun --watch apps/api/src/index.ts",
     "dev:web": "bun --cwd apps/web dev",
     "dev:mcp": "bun --cwd apps/mcp-server dev",
     "build": "bun run build:packages && bun run build:apps",
