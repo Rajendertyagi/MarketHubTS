@@ -85,8 +85,8 @@ Each adapter must handle (as applicable and supported):
 | Auth / Analytics Token | **Verified:** free, read-only, 1-year, no OAuth, no static IP for market-data categories; one per account; GET only. See §1A. |
 | Validation endpoint | **Verified:** `GET /v2/market/status/NSE` (Exchange Status, Market Information). User Profile is excluded (static IP required). |
 | Rate limits | **Verified:** Other Standard APIs 50/s, 500/min, 2000/30min. |
-| SDK/Bun | **Resolved for M3:** direct Bun `fetch`; no broker SDKs installed. |
-| Market data feed (V3) | Protobuf WebSocket feed documented; protocol/field details remain **M4** verification. |
+| SDK/Bun | **M3:** direct Bun `fetch`, no broker SDKs. **M4 Stage B (scoped exception):** official `upstox-js-sdk@2.31.0` (pinned) is used for **market-data streaming only**; no order/trading operation is introduced. This deliberately reverses the earlier no-broker-SDK decision for Upstox streaming. |
+| Market data feed (V3) | Protobuf WebSocket feed; **M4 Stage B** uses the official SDK instead of the removed custom decoder/proto. SDK declares 9 direct dependencies (measured install: 124 packages, 1 blocked transitive `protobufjs` postinstall). Version-specific workarounds: call `autoReconnect(false)` before connect (SDK defaults it on); never use SDK `changeMode()` (it sends `sub` instead of `change_mode`) — use unsubscribe+subscribe; handle Buffer/Uint8Array/string message payloads; wait for SDK protobuf readiness before subscribing. MarketHubTS retains ownership of subscriptions, normalization, freshness and reconnection. |
 | Historical / expired instruments | Historical Data supported by Analytics Token; expired-instruments APIs require Upstox Plus — **M5** entitlement decision. |
 | Option chain / quotes / depth fields | Field availability **(verify)** before M4/M5; never fabricate missing fields. |
 | Instruments/master data | File/field details **(verify)** before bulk ingestion (out of M3 scope). |

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "@markethub/broker-upstox",
   "version": "0.1.0",
   "private": true,
@@ -13,7 +13,7 @@
   "dependencies": {
     "@markethub/contracts": "workspace:*",
     "@markethub/market-core": "workspace:*",
-    "protobufjs": "^8.8.1"
+    "upstox-js-sdk": "2.31.0"
   },
   "devDependencies": {
     "typescript": "7.0.2"

@@ -12,20 +12,19 @@ import { UPSTOX_EXPIRY_SETTING, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_VALIDATION_URL }
 
 export { UPSTOX_VALIDATION_URL, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_EXPIRY_SETTING } from "./constants";
 export {
-  UPSTOX_FEED_AUTHORIZE_URL,
   UPSTOX_V3_LIMITS,
-  UpstoxMarketDataStream
+  UpstoxMarketDataStream,
+  modeLimit,
+  groupByMode
 } from "./stream";
 export type {
   UpstoxFeedMode,
   UpstoxSubscription,
   UpstoxStreamCallbacks,
   UpstoxStreamOptions,
-  StreamSocket,
-  WebSocketFactory
+  SdkStreamer,
+  StreamerFactory
 } from "./stream";
-export { decodeFeedResponse, encodeFeedResponse } from "./decode";
-export type { DecodedFeed, DecodedFeedEntry, UpstoxFeedMessageType } from "./decode";
 
 export interface UpstoxAdapterOptions {
   credentials: CredentialStore;

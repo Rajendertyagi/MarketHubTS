@@ -1,18 +1,37 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { NormalizeObservationInput } from "../../packages/market-core/src/index";
 import { openDatabase, SqliteCredentialStore } from "../../packages/database/src/index";
 import {
-  UPSTOX_FEED_AUTHORIZE_URL,
   UPSTOX_TOKEN_CREDENTIAL,
   UPSTOX_V3_LIMITS,
   UpstoxMarketDataStream,
-  encodeFeedResponse,
-  type StreamSocket
+  type SdkStreamer
 } from "../../packages/broker-upstox/src/index";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
+
+// Resolve the SDK's bundled proto + its own protobufjs for real protobuf-to-JSON
+// serialization tests (version-pinned seam, no second runtime decoder in the app).
+const brokerRequire = createRequire(resolve(import.meta.dir, "../../packages/broker-upstox/src/index.ts"));
+const sdkPath = brokerRequire.resolve("upstox-js-sdk");
+const sdkRequire = createRequire(sdkPath);
+const protobuf = sdkRequire("protobufjs") as typeof import("protobufjs");
+const SDK_PROTO = sdkPath.replace(/dist[\\/]index\.js$/, "dist/feeder/proto/MarketDataFeedV3.proto");
+const root = protobuf.loadSync(SDK_PROTO);
+const FeedResponse = root.lookupType("com.upstox.marketdatafeederv3udapi.rpc.proto.FeedResponse");
+
+function encodeFeed(payload: Record<string, unknown>): Uint8Array {
+  const err = FeedResponse.verify(payload);
+  if (err) throw new Error(err);
+  return FeedResponse.encode(FeedResponse.create(payload)).finish();
+}
+/** Real SDK serialization path: decode binary with SDK schema, then JSON.stringify. */
+function sdkSerialize(payload: Record<string, unknown>): string {
+  return JSON.stringify(FeedResponse.decode(encodeFeed(payload)));
+}
 
 const NOW = 1_700_000_000_000;
 const NIFTY_KEY = "NSE_INDEX|Nifty 50";
@@ -23,518 +42,339 @@ const BANK_CANONICAL = "v1|NSE|INDEX|INDEX|CODE:NIFTYBANK";
 const dirs: string[] = [];
 const handles: Array<{ close: () => void }> = [];
 
-class MockSocket implements StreamSocket {
-  binaryType = "nodebuffer";
-  readyState = 0;
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onclose: ((event: unknown) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  sent: Uint8Array[] = [];
-  closed = false;
+type Listener = (payload?: unknown) => void;
 
-  send(data: string | Uint8Array | ArrayBuffer): void {
-    this.sent.push(typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data as ArrayBuffer));
+class FakeStreamer implements SdkStreamer {
+  streamer = { protobufRoot: {} as unknown }; // ready by default
+  autoReconnectCalls: boolean[] = [];
+  subscribeCalls: Array<{ keys: string[]; mode: string }> = [];
+  unsubscribeCalls: string[][] = [];
+  connectCalls = 0;
+  disconnectCalls = 0;
+  private listeners = new Map<string, Listener[]>();
+  autoReconnect(enable: boolean): void { this.autoReconnectCalls.push(enable); }
+  on(event: string, listener: Listener): void {
+    const arr = this.listeners.get(event) ?? [];
+    arr.push(listener);
+    this.listeners.set(event, arr);
   }
-  close(): void { this.closed = true; this.readyState = 3; this.onclose?.({}); }
-  open(): void { this.readyState = 1; this.onopen?.({}); }
-  emit(bytes: Uint8Array): void { this.onmessage?.({ data: bytes }); }
-  frames(): Array<Record<string, any>> {
-    return this.sent.map((b) => JSON.parse(new TextDecoder().decode(b)));
+  async connect(): Promise<void> { this.connectCalls++; }
+  disconnect(): void { this.disconnectCalls++; }
+  subscribe(keys: string[], mode: string): void { this.subscribeCalls.push({ keys, mode }); }
+  unsubscribe(keys: string[]): void { this.unsubscribeCalls.push(keys); }
+  emit(event: string, payload?: unknown): void {
+    for (const l of this.listeners.get(event) ?? []) l(payload);
   }
+  async open(): Promise<void> { this.emit("open"); }
 }
 
-function ltpFeed(ltp: number, ltt = NOW - 1000, ltq = 75, cp = 26216.05): Record<string, unknown> {
-  return { ltpc: { ltp, ltt, ltq, cp }, requestMode: 0 };
-}
-
-function setup() {
+function setup(opts: { ready?: boolean; streamer?: FakeStreamer } = {}) {
   const dir = join(tmpdir(), `mh-stream-upstox-${crypto.randomUUID()}`);
   mkdirSync(dir, { recursive: true });
   dirs.push(dir);
   const handle = openDatabase({ dbPath: join(dir, "data", "markethub.sqlite"), migrate: true });
   handles.push(handle);
   const credentials = new SqliteCredentialStore(handle);
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const sockets: MockSocket[] = [];
   const observations: NormalizeObservationInput[] = [];
   const states: Array<{ state: string; error?: string | null }> = [];
+  const streamers: FakeStreamer[] = [];
   const stream = new UpstoxMarketDataStream({
     credentials,
     now: () => new Date(NOW),
-    fetchImpl: async (url, init) => {
-      calls.push({ url, init });
-      return new Response(JSON.stringify({
-        status: "success",
-        data: { authorized_redirect_uri: "wss://feed.upstox.test/v3?code=single-use" }
-      }), { status: 200 });
-    },
-    webSocketFactory: () => {
-      const s = new MockSocket();
-      sockets.push(s);
+    protobufReadyTimeoutMs: 100,
+    streamerFactory: () => {
+      const s = opts.streamer ?? new FakeStreamer();
+      if (opts.ready === false) s.streamer = { protobufRoot: undefined };
+      streamers.push(s);
       return s;
     }
   });
-  return { stream, credentials, calls, sockets, observations, states, handle };
+  return { stream, credentials, observations, states, streamers, handle };
 }
 
 async function configure(stream: UpstoxMarketDataStream, credentials: SqliteCredentialStore) {
   await credentials.set("UPSTOX", UPSTOX_TOKEN_CREDENTIAL, "test-token");
   return stream;
 }
+const cbs = (h: ReturnType<typeof setup>) => ({
+  onObservation: (o: NormalizeObservationInput) => h.observations.push(o),
+  onConnectionState: (s: any, e?: string | null) => h.states.push({ state: s, error: e })
+});
 
 afterEach(() => {
   while (handles.length) { try { handles.pop()?.close(); } catch {} }
   while (dirs.length) { try { removeTempDir(dirs.pop()!); } catch {} }
 });
 
-describe("Upstox V3 stream — authorize and connect", () => {
-  test("uses the versioned authorize URL with Bearer token and no generic retry", async () => {
+describe("SDK integration — auth, factory, lifecycle", () => {
+  test("configures SDK token without exposing credentials; empty initial list; autoReconnect(false) before connect", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: (s, e) => h.states.push({ state: s, error: e }) }
-    );
-    expect(h.calls.length).toBe(1);
-    expect(h.calls[0]!.url).toBe(UPSTOX_FEED_AUTHORIZE_URL);
-    expect(h.calls[0]!.init?.headers).toMatchObject({ Authorization: "Bearer test-token" });
-    expect(h.sockets.length).toBe(1);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    expect(s.autoReconnectCalls).toEqual([false]);
+    expect(s.connectCalls).toBe(1);
+    expect(s.subscribeCalls.length).toBe(0); // no subscribe before open
     expect(h.stream.getConnectionState()).toBe("CONNECTING");
-  });
-
-  test("rejects a malformed authorize response without opening a socket", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    h.stream["fetchImpl"] = async () => new Response(JSON.stringify({ status: "success", data: {} }), { status: 200 });
-    await expect(h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    )).rejects.toThrow();
-    expect(h.sockets.length).toBe(0);
-    expect(h.stream.getConnectionState()).toBe("ERROR");
   });
 
   test("fails when no token is configured", async () => {
     const h = setup();
-    await expect(h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    )).rejects.toThrow("not configured");
-    expect(h.calls.length).toBe(0);
+    await expect(h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h)))
+      .rejects.toThrow("not configured");
+    expect(h.streamers.length).toBe(0);
+  });
+
+  test("fresh SDK instance per connection attempt", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    h.stream.stop();
+    await h.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], cbs(h));
+    expect(h.streamers.length).toBe(2);
+    expect(h.streamers[0]).not.toBe(h.streamers[1]);
   });
 });
 
-describe("Upstox V3 stream — binary subscribe frames", () => {
-  test("sends a binary sub frame on open with mode and instrument keys", async () => {
+describe("protobuf readiness gate", () => {
+  test("initial subscriptions sent once after open AND readiness", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "ltpc" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: (s, e) => h.states.push({ state: s, error: e }) }
-    );
-    h.sockets[0]!.open();
-    const frames = h.sockets[0]!.frames();
-    expect(frames.length).toBe(1);
-    expect(frames[0]!.method).toBe("sub");
-    expect(frames[0]!.data.mode).toBe("ltpc");
-    expect(frames[0]!.data.instrumentKeys).toEqual([NIFTY_KEY]);
-    expect(typeof frames[0]!.guid).toBe("string");
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    expect(s.subscribeCalls).toEqual([{ keys: [NIFTY_KEY], mode: "ltpc" }]);
     expect(h.stream.getConnectionState()).toBe("STREAMING");
   });
 
-  test("updateSubscriptions sends unsub and sub frames", async () => {
-    const h = setup();
+  test("delayed readiness does not lose the first subscribed snapshot", async () => {
+    const h = setup({ ready: false });
     await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    await h.stream.updateSubscriptions([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }]);
-    const frames = h.sockets[0]!.frames();
-    expect(frames.map((f) => f.method)).toEqual(["sub", "unsub", "sub"]);
-    expect(frames[1]!.data.instrumentKeys).toEqual([NIFTY_KEY]);
-    expect(frames[1]!.data.mode).toBeUndefined();
-    expect(frames[2]!.data.instrumentKeys).toEqual([BANK_KEY]);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    // Not ready yet — no subscribe, no STREAMING.
+    expect(s.subscribeCalls.length).toBe(0);
+    // Simulate SDK finishing schema load.
+    s.streamer = { protobufRoot: {} as unknown };
+    await Bun.sleep(20);
+    expect(s.subscribeCalls).toEqual([{ keys: [NIFTY_KEY], mode: "ltpc" }]);
+    // First feed snapshot after readiness is processed.
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 100, ltt: NOW, ltq: 5, cp: 99 }, requestMode: 0 } } }));
+    expect(h.observations.length).toBe(1);
+    expect(h.observations[0]!.value.ltp).toBe(100);
   });
 
-  test("enforces per-mode individual and combined subscription limits", async () => {
-    const h = setup();
+  test("readiness timeout enters ERROR and cleans up", async () => {
+    const h = setup({ ready: false });
     await configure(h.stream, h.credentials);
-    const singleMode = Array.from({ length: UPSTOX_V3_LIMITS.ltpc.individual + 1 }, (_, i) => ({
-      instrumentKey: `K${i}`, canonicalId: `C${i}`, mode: "ltpc" as const
-    }));
-    await expect(h.stream.start(singleMode, { onObservation: () => {}, onConnectionState: () => {} }))
-      .rejects.toThrow("ltpc subscription count 5001 exceeds limit 5000");
-
-    const mixed = Array.from({ length: UPSTOX_V3_LIMITS.ltpc.combined + 2 }, (_, i) => ({
-      instrumentKey: `K${i}`, canonicalId: `C${i}`, mode: (i === 0 ? "full" : "ltpc") as "full" | "ltpc"
-    }));
-    await expect(h.stream.start(mixed, { onObservation: () => {}, onConnectionState: () => {} }))
-      .rejects.toThrow("ltpc subscription count 2001 exceeds limit 2000");
-  });
-
-  test("sends one binary frame per mode for mixed-mode subscriptions", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [
-        { instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "ltpc" },
-        { instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL, mode: "full" }
-      ],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    const frames = h.sockets[0]!.frames();
-    expect(frames.length).toBe(2);
-    expect(frames.map((f) => f.data.mode).sort()).toEqual(["full", "ltpc"]);
-    expect(frames.find((f) => f.data.mode === "ltpc")!.data.instrumentKeys).toEqual([NIFTY_KEY]);
-    expect(frames.find((f) => f.data.mode === "full")!.data.instrumentKeys).toEqual([BANK_KEY]);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(150);
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
+    expect(s.disconnectCalls).toBe(1);
   });
 });
 
-describe("Upstox V3 stream — protobuf decode and validation", () => {
-  test("decodes an LTPC feed into a canonical observation with provenance", async () => {
+describe("message handling — payload types and market_info", () => {
+  test("accepts Buffer, Uint8Array and string payloads", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: (s, e) => h.states.push({ state: s, error: e }) }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: ltpFeed(26188.1) } }));
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    const json = sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 100, ltt: NOW, ltq: 5, cp: 99 }, requestMode: 0 } } });
+    s.emit("message", Buffer.from(json, "utf8"));
+    s.emit("message", new TextEncoder().encode(json));
+    s.emit("message", json);
+    expect(h.observations.length).toBe(3);
+  });
 
+  test("market_info without feeds is ignored, not an error", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 2, currentTs: NOW, feeds: {}, marketInfo: { segmentStatus: { NSE_FO: 2 } } }));
+    expect(h.observations.length).toBe(0);
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(false);
+  });
+
+  test("SDK pre-readiness null payload is ignored without crashing", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", null);
+    expect(h.observations.length).toBe(0);
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(false);
+  });
+
+  test("malformed SDK message produces controlled error, no fabricated observation", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", "not-json");
+    expect(h.observations.length).toBe(0);
+    expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
+  });
+});
+
+describe("subscription lifecycle", () => {
+  test("added, removed and mode-changed subscriptions (unsubscribe+subscribe, never changeMode)", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "ltpc" }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    await h.stream.updateSubscriptions([
+      { instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL, mode: "full" },
+      { instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "option_greeks" }
+    ]);
+    expect(s.unsubscribeCalls).toContainEqual([NIFTY_KEY]); // mode change uses unsubscribe
+    expect(s.subscribeCalls.some((c) => c.keys.includes(BANK_KEY) && c.mode === "full")).toBe(true);
+    expect(s.subscribeCalls.some((c) => c.keys.includes(NIFTY_KEY) && c.mode === "option_greeks")).toBe(true);
+    expect((s as any).changeMode).toBeUndefined(); // SDK changeMode never used
+  });
+
+  test("updates while connecting are deferred and applied on open", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await h.stream.updateSubscriptions([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }]);
+    expect(s.subscribeCalls.length).toBe(0); // deferred
+    await s.open();
+    await Bun.sleep(20);
+    expect(s.subscribeCalls).toEqual([{ keys: [BANK_KEY], mode: "ltpc" }]);
+  });
+
+  test("per-mode individual and combined limits enforced", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    const single = Array.from({ length: UPSTOX_V3_LIMITS.ltpc.individual + 1 }, (_, i) => ({ instrumentKey: `K${i}`, canonicalId: `C${i}`, mode: "ltpc" as const }));
+    await expect(h.stream.start(single, cbs(h))).rejects.toThrow("exceeds limit 5000");
+    const mixed = Array.from({ length: UPSTOX_V3_LIMITS.ltpc.combined + 2 }, (_, i) => ({ instrumentKey: `K${i}`, canonicalId: `C${i}`, mode: (i === 0 ? "full" : "ltpc") as "full" | "ltpc" }));
+    await expect(h.stream.start(mixed, cbs(h))).rejects.toThrow("exceeds limit 2000");
+  });
+
+  test("unexpected close preserves desired subscriptions; stop clears them", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("close");
+    expect(h.stream.getSubscriptions().length).toBe(1);
+    h.stream.stop();
+    expect(h.stream.getSubscriptions().length).toBe(0);
+    expect(h.states.some((x) => x.state === "DISCONNECTED")).toBe(true);
+  });
+
+  test("concurrent start and stop-during-connect generation guards", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    await expect(h.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], cbs(h))).rejects.toThrow("already in progress");
+    h.stream.stop();
+    await first;
+    expect(h.streamers.length).toBe(1);
+    // stale event from old streamer must not affect state
+    h.streamers[0]!.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1 }, requestMode: 0 } } }));
+    expect(h.observations.length).toBe(0);
+  });
+});
+
+describe("field mapping via real SDK serialization", () => {
+  async function emitAndGet(payload: Record<string, unknown>): Promise<NormalizeObservationInput> {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize(payload));
     expect(h.observations.length).toBe(1);
-    const o = h.observations[0]!;
+    return h.observations[0]!;
+  }
+
+  test("LTPC fields and int64 string conversion", async () => {
+    const o = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 75, cp: 26216.05 }, requestMode: 0 } } });
     expect(o.provider).toBe("UPSTOX");
     expect(o.canonicalId).toBe(NIFTY_CANONICAL);
     expect(o.value).toMatchObject({ ltp: 26188.1, lastTradedQuantity: 75, close: 26216.05 });
-    expect(o.rawProviderTimestamp).toBe(NOW - 1000);
+    expect(o.rawProviderTimestamp).toBe(NOW);
     expect(o.providerTimestampUnit).toBe("MS");
-    expect(o.providerTimestampMeaning).toBe("last traded time");
-    expect(o.receivedAtMs).toBe(NOW);
     expect(o.sourceVersion).toBe("v3");
   });
 
-  test("ignores market_info and unsubscribed instruments", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({ type: 2, currentTs: NOW, feeds: {} }));
-    h.sockets[0]!.emit(encodeFeedResponse({ type: 1, currentTs: NOW, feeds: { [BANK_KEY]: ltpFeed(50000) } }));
-    expect(h.observations.length).toBe(0);
-  });
-
-  test("malformed protobuf produces an error state, never an observation", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: (s, e) => h.states.push({ state: s, error: e }) }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(new Uint8Array([0xff, 0xff, 0xff]));
-    expect(h.observations.length).toBe(0);
-    expect(h.states.some((s) => s.state === "ERROR")).toBe(true);
-  });
-
-  test("preserves provider-native fields without fabricating missing ones", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: { [NIFTY_KEY]: { fullFeed: { indexFF: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 } } }, requestMode: 3 } }
-    }));
-    expect(h.observations.length).toBe(1);
-    expect(h.observations[0]!.value.ltp).toBe(26188.1);
-    expect(h.observations[0]!.value.native).toBeUndefined();
-  });
-
-  test("decodes market-feed depth, OHLC and Greeks without fabrication", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          fullFeed: {
-            marketFF: {
-              ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
-              marketLevel: { bidAskQuote: [
-                { bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 },
-                { bidQ: 300, bidP: 26187.5, askQ: 400, askP: 26189 }
-              ] },
-              marketOHLC: { ohlc: [
-                { interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW }
-              ] },
-              optionGreeks: { delta: 0.5, theta: -0.1, gamma: 0.02, vega: 0.3, rho: 0.05 },
-              oi: 12345, iv: 18.5, vtt: 9999, atp: 26190, tbq: 1000, tsq: 900
-            }
-          },
-          requestMode: 1
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native.depth).toHaveLength(2);
-    expect(native.depth[0]).toMatchObject({ bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 });
-    expect(native.ohlc).toHaveLength(1);
-    expect(native.ohlc[0]).toMatchObject({ interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW });
-    expect(native.optionGreeks).toMatchObject({ delta: 0.5, theta: -0.1, gamma: 0.02, vega: 0.3, rho: 0.05 });
-    expect(native).toMatchObject({ oi: 12345, iv: 18.5, vtt: 9999, atp: 26190, tbq: 1000, tsq: 900 });
-  });
-
-  test("decodes first-level depth and Greeks for option_greeks mode", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "option_greeks" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          firstLevelWithGreeks: {
-            ltpc: { ltp: 220.5, ltt: NOW, ltq: 5, cp: 230 },
-            firstDepth: { bidQ: 10, bidP: 220, askQ: 20, askP: 221 },
-            optionGreeks: { delta: 0.4, theta: -0.2, gamma: 0.03, vega: 0.25, rho: 0.01 },
-            oi: 500, iv: 20, vtt: 100
-          },
-          requestMode: 2
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native.firstDepth).toMatchObject({ bidQ: 10, bidP: 220, askQ: 20, askP: 221 });
-    expect(native.optionGreeks).toMatchObject({ delta: 0.4, gamma: 0.03 });
-    expect(native).toMatchObject({ oi: 500, iv: 20, vtt: 100 });
-  });
-
-  test("extracts all documented CAS fields from marketFF", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          fullFeed: { marketFF: {
-            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
-            iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
-          } },
-          requestMode: 1
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native).toMatchObject({
+  test("depth, OHLC, Greeks and CAS fields preserved", async () => {
+    const o = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { fullFeed: { marketFF: {
+      ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
+      marketLevel: { bidAskQuote: [{ bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 }] },
+      marketOHLC: { ohlc: [{ interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW }] },
+      optionGreeks: { delta: 0.5, theta: -0.1, gamma: 0.02, vega: 0.3, rho: 0.05 },
+      oi: 12345, iv: 18.5, vtt: 9999, atp: 26190, tbq: 1000, tsq: 900,
       iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
-    });
+    } }, requestMode: 1 } } });
+    const n = o.value.native as any;
+    expect(n.depth[0]).toMatchObject({ bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 });
+    expect(n.ohlc[0]).toMatchObject({ interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW });
+    expect(n.optionGreeks).toMatchObject({ delta: 0.5, gamma: 0.02 });
+    expect(n).toMatchObject({ oi: 12345, iv: 18.5, vtt: 9999, atp: 26190, tbq: 1000, tsq: 900, iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true });
   });
 
-  test("extracts ltpc.iep from the protobuf DoubleValue wrapper", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: { [NIFTY_KEY]: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216, iep: { value: 26150.75 } }, requestMode: 0 } }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native.ltpcIep).toBe(26150.75);
+  test("explicit zeros and omitted proto3 scalar defaults preserved", async () => {
+    const o = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { fullFeed: { marketFF: {
+      ltpc: { ltp: 1, ltt: NOW, ltq: 0, cp: 0, iep: { value: 0 } },
+      iep: 0, rp: 0, ieq: 0, iiqTotal: 0, iiqM: 0, casEligible: false
+    } }, requestMode: 1 } } });
+    const n = o.value.native as any;
+    expect(n.ltpcIep).toBe(0);
+    expect(n.iep).toBe(0);
+    expect(n.rp).toBe(0);
+    expect(n.ieq).toBe(0);
+    expect(n.iiqTotal).toBe(0);
+    expect(n.iiqM).toBe(0);
+    expect(n.casEligible).toBe(false);
+    expect(o.value.lastTradedQuantity).toBe(0);
+    expect(o.value.close).toBe(0);
   });
 
-  test("preserves explicit zero CAS values and DoubleValue zero", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          fullFeed: { marketFF: {
-            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216, iep: { value: 0 } },
-            iep: 0, rp: 0, ieq: 0, iiqTotal: 0, iiqM: 0, casEligible: false
-          } },
-          requestMode: 1
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native.ltpcIep).toBe(0);
-    expect(native.iep).toBe(0);
-    expect(native.rp).toBe(0);
-    expect(native.ieq).toBe(0);
-    expect(native.iiqTotal).toBe(0);
-    expect(native.iiqM).toBe(0);
-    expect(native.casEligible).toBe(false);
+  test("absent vs present-zero DoubleValue wrapper", async () => {
+    const present = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1, ltt: NOW, ltq: 1, cp: 1, iep: { value: 0 } }, requestMode: 0 } } });
+    expect((present.value.native as any).ltpcIep).toBe(0);
+    const absent = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1, ltt: NOW, ltq: 1, cp: 1 }, requestMode: 0 } } });
+    expect((absent.value.native as any)?.ltpcIep).toBeUndefined();
   });
 
-  test("leaves absent optional CAS fields undefined", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          fullFeed: { marketFF: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 } } },
-          requestMode: 1
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    // ltpc.iep is a message wrapper: absent decodes to null and must stay undefined.
-    expect(native.ltpcIep).toBeUndefined();
-    // proto3 scalars decode absent to 0/false; these are preserved as supplied,
-    // not fabricated — the decoder does not invent non-zero CAS values.
-    expect(native.iep).toBe(0);
-    expect(native.casEligible).toBe(false);
+  test("unsafe int64 does not silently round", async () => {
+    const Long = (protobuf as any).util.Long;
+    const unsafe = Long.fromString("9007199254740993"); // 2^53 + 1, not safely representable
+    const o = await emitAndGet({ type: 1, currentTs: NOW, feeds: { [NIFTY_KEY]: { ltpc: { ltp: 1, ltt: unsafe, ltq: 1, cp: 1 }, requestMode: 0 } } });
+    expect(o.rawProviderTimestamp).toBeNull(); // unsafe -> unset, no silent rounding
   });
 
-  test("existing depth, OHLC and Greeks decoding remains unchanged with CAS fields present", async () => {
+  test("unsubscribed instrument keys never produce observations", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
-      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.emit(encodeFeedResponse({
-      type: 1, currentTs: NOW,
-      feeds: {
-        [NIFTY_KEY]: {
-          fullFeed: { marketFF: {
-            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
-            marketLevel: { bidAskQuote: [{ bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 }] },
-            marketOHLC: { ohlc: [{ interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW }] },
-            optionGreeks: { delta: 0.5, theta: -0.1, gamma: 0.02, vega: 0.3, rho: 0.05 },
-            iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
-          } },
-          requestMode: 1
-        }
-      }
-    }));
-    expect(h.observations.length).toBe(1);
-    const native = h.observations[0]!.value.native as any;
-    expect(native.depth).toHaveLength(1);
-    expect(native.ohlc).toHaveLength(1);
-    expect(native.optionGreeks).toMatchObject({ delta: 0.5, gamma: 0.02 });
-    expect(native.iep).toBe(26100.5);
-    expect(native.casEligible).toBe(true);
-  });
-});
-
-describe("Upstox V3 stream — lifecycle", () => {
-  test("stop closes the socket and clears subscriptions", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: (s) => h.states.push({ state: s }) }
-    );
-    h.sockets[0]!.open();
-    h.stream.stop();
-    expect(h.sockets[0]!.closed).toBe(true);
-    expect(h.stream.getSubscriptions().length).toBe(0);
-    expect(h.stream.getConnectionState()).toBe("DISCONNECTED");
-  });
-
-  test("socket close reports DISCONNECTED without destroying state", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    await h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: (s) => h.states.push({ state: s }) }
-    );
-    h.sockets[0]!.open();
-    h.sockets[0]!.close();
-    expect(h.states.map((s) => s.state)).toContain("DISCONNECTED");
-    expect(h.stream.getSubscriptions().length).toBe(1);
-  });
-
-  test("rejects a concurrent start while authorization is pending", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    let release!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    h.stream["fetchImpl"] = async () => {
-      await gate;
-      return new Response(JSON.stringify({
-        status: "success", data: { authorized_redirect_uri: "wss://feed.upstox.test/v3?code=x" }
-      }), { status: 200 });
-    };
-    const first = h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    );
-    await expect(h.stream.start(
-      [{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    )).rejects.toThrow("already in progress");
-    release();
-    await first;
-    expect(h.sockets.length).toBe(1);
-  });
-
-  test("stop during pending authorization prevents a socket from opening", async () => {
-    const h = setup();
-    await configure(h.stream, h.credentials);
-    let release!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    h.stream["fetchImpl"] = async () => {
-      await gate;
-      return new Response(JSON.stringify({
-        status: "success", data: { authorized_redirect_uri: "wss://feed.upstox.test/v3?code=x" }
-      }), { status: 200 });
-    };
-    const pending = h.stream.start(
-      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
-      { onObservation: () => {}, onConnectionState: () => {} }
-    );
-    h.stream.stop();
-    release();
-    await pending;
-    expect(h.sockets.length).toBe(0);
-    expect(h.stream.getConnectionState()).toBe("DISCONNECTED");
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    s.emit("message", sdkSerialize({ type: 1, currentTs: NOW, feeds: { [BANK_KEY]: { ltpc: { ltp: 1 }, requestMode: 0 } } }));
+    expect(h.observations.length).toBe(0);
   });
 });
