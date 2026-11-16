@@ -27,7 +27,7 @@ function setup(now = new Date("2026-11-16T10:00:00.000Z")) {
   const config: ProviderConfig = {
     enabled: true,
     fyersAppId: "TESTAPP-100",
-    fyersRedirectUri: "http://127.0.0.1:4899/api/provider/fyers/callback"
+    fyersRedirectUri: "http://127.0.0.1:3001/api/provider/fyers/callback"
   };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const adapter = new FyersAdapter({
@@ -59,7 +59,7 @@ describe("FYERS V3 non-trading adapter", () => {
     const started = await adapter.startAuth();
     expect(started.authorizationUrl).toContain(FYERS_AUTH_URL);
     expect(started.authorizationUrl).toContain("client_id=TESTAPP-100");
-    expect(started.authorizationUrl).toContain(encodeURIComponent("http://127.0.0.1:4899/api/provider/fyers/callback"));
+    expect(started.authorizationUrl).toContain(encodeURIComponent("http://127.0.0.1:3001/api/provider/fyers/callback"));
     expect(started.state).toMatch(/^[a-f0-9]{32}$/);
     expect(started.expiresAt).toBe("2026-11-16T10:05:00.000Z");
   });

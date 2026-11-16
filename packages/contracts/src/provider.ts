@@ -10,7 +10,10 @@ export const providerConfigSchema = z.object({
   fyersAppId: z.string().min(1).optional(),
   fyersRedirectUri: z.string().url().optional(),
   // Optional user-supplied expiry metadata (Upstox Analytics Token dashboard date).
-  upstoxTokenExpiresAt: z.string().datetime().optional()
+  upstoxTokenExpiresAt: z.string().datetime().optional(),
+  // Actual application listener, used to validate the FYERS loopback callback URI.
+  apiPort: z.number().int().min(1).max(65535).optional(),
+  apiSecure: z.boolean().optional()
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 

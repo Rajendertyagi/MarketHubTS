@@ -53,12 +53,20 @@ export class UpstoxAdapter implements ProviderAdapter {
     }
   }
 
-  /** Load persisted expiry metadata on startup. */
+  /** Load persisted expiry metadata on startup. Never contacts the provider. */
   async initialize(): Promise<void> {
-    if (!this.options.settings) return;
-    const saved = await this.options.settings.get(UPSTOX_EXPIRY_SETTING);
+    const saved = this.options.settings ? await this.options.settings.get(UPSTOX_EXPIRY_SETTING) : null;
     if (saved) {
+      this.options.config.upstoxTokenExpiresAt = saved;
       this.status = { ...this.status, expiresAt: saved, expiryKnown: true, restrictions: [] };
+    }
+    if (this.options.config.enabled && await this.isConfigured()) {
+      // Credentials exist from a previous session; validation is required but startup stays offline-safe.
+      this.status = {
+        ...this.status,
+        authState: "AUTH_REQUIRED",
+        restrictions: [...this.status.restrictions, "Stored credentials found; validation required"]
+      };
     }
   }
 
@@ -135,16 +143,20 @@ export class UpstoxAdapter implements ProviderAdapter {
     if (expiresAt) {
       this.options.config.upstoxTokenExpiresAt = expiresAt;
       await this.options.settings?.set(UPSTOX_EXPIRY_SETTING, expiresAt);
+    } else {
+      // A replacement token with no expiry must not inherit the previous token's metadata.
+      delete this.options.config.upstoxTokenExpiresAt;
+      await this.options.settings?.delete(UPSTOX_EXPIRY_SETTING);
     }
     this.status = {
       ...this.status,
       authState: "AUTHENTICATED",
-      expiresAt: expiresAt ?? this.status.expiresAt,
-      expiryKnown: Boolean(expiresAt ?? this.status.expiresAt),
+      expiresAt: expiresAt ?? null,
+      expiryKnown: Boolean(expiresAt),
       validatedAt: this.now().toISOString(),
       error: null,
       lastErrorAt: null,
-      restrictions: expiresAt || this.status.expiryKnown ? [] : ["Token expiry unknown — supply the expiry date shown in the Upstox dashboard"]
+      restrictions: expiresAt ? [] : ["Token expiry unknown — supply the expiry date shown in the Upstox dashboard"]
     };
     return this.getStatus();
   }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, providerConfigFromAppConfig } from "../../packages/config/src/index";
 import { openDatabase, SqliteCredentialStore, SqliteProviderSettings } from "../../packages/database/src/index";
-import { ProviderRegistry, fetchWithRetry } from "../../packages/market-core/src/index";
+import { ProviderRegistry, fetchWithRetry, parseRetryAfter } from "../../packages/market-core/src/index";
 import { UpstoxAdapter } from "../../packages/broker-upstox/src/index";
 import { FyersAdapter, isValidFyersRedirectUri, nextIstExpiry } from "../../packages/broker-fyers/src/index";
 import { createApp } from "../../apps/api/src/app";
@@ -163,9 +163,9 @@ describe("M3 independent-review corrections", () => {
   });
 
   test("non-loopback FYERS redirect URI is rejected", async () => {
-    expect(isValidFyersRedirectUri("http://127.0.0.1:3001/api/provider/fyers/callback")).toBe(true);
-    expect(isValidFyersRedirectUri("https://evil.example/api/provider/fyers/callback")).toBe(false);
-    expect(isValidFyersRedirectUri("http://127.0.0.1:3001/other")).toBe(false);
+    expect(isValidFyersRedirectUri("http://127.0.0.1:3001/api/provider/fyers/callback", 3001)).toBe(true);
+    expect(isValidFyersRedirectUri("https://evil.example/api/provider/fyers/callback", 3001)).toBe(false);
+    expect(isValidFyersRedirectUri("http://127.0.0.1:3001/other", 3001)).toBe(false);
     const { fyers } = setup();
     let threw = false;
     try { await fyers.setConfig("APP-100", "https://evil.example/api/provider/fyers/callback"); } catch { threw = true; }
@@ -188,5 +188,91 @@ describe("M3 independent-review corrections", () => {
     expect((await call("/api/provider/FYERS/validate", {})).status).toBe(200);
     expect((await call("/api/provider/UPSTOX/remove", { confirm: true })).status).toBe(200);
     expect((await call("/api/provider/FYERS/remove", { confirm: true })).status).toBe(200);
+  });
+});
+
+describe("final M3 corrections", () => {
+  test("Upstox replacement without expiry clears previous expiry from settings, config and status", async () => {
+    const { upstox, settings, providerConfig } = setup();
+    await upstox.setToken("first-token", "2027-06-01T00:00:00.000Z");
+    expect(await settings.get("upstox.tokenExpiresAt")).toBe("2027-06-01T00:00:00.000Z");
+    expect(upstox.getStatus().expiryKnown).toBe(true);
+
+    await upstox.setToken("second-token");
+    expect(await settings.get("upstox.tokenExpiresAt")).toBeNull();
+    expect(providerConfig.upstoxTokenExpiresAt).toBeUndefined();
+    expect(upstox.getStatus().expiresAt).toBeNull();
+    expect(upstox.getStatus().expiryKnown).toBe(false);
+    expect(upstox.getStatus().restrictions.join(" ")).toContain("expiry unknown");
+  });
+
+  test("FYERS callback URI matches the actual listener port and scheme", () => {
+    const path = "/api/provider/fyers/callback";
+    expect(isValidFyersRedirectUri(`http://127.0.0.1:3001${path}`, 3001)).toBe(true);
+    expect(isValidFyersRedirectUri(`http://127.0.0.1:4100${path}`, 4100)).toBe(true);
+    expect(isValidFyersRedirectUri(`http://127.0.0.1:4100${path}`, 3001)).toBe(false);
+    expect(isValidFyersRedirectUri(`https://127.0.0.1:3001${path}`, 3001, false)).toBe(false);
+    expect(isValidFyersRedirectUri(`https://127.0.0.1:3001${path}`, 3001, true)).toBe(true);
+    expect(isValidFyersRedirectUri(`http://192.168.1.5:3001${path}`, 3001)).toBe(false);
+    expect(isValidFyersRedirectUri("http://127.0.0.1:3001/other", 3001)).toBe(false);
+  });
+
+  test("startup with persisted credentials reports validation-required, not NOT_CONFIGURED, and stays offline-safe", async () => {
+    const { dbPath, handle, credentials, settings, providerConfig, registry, upstox, fyers } = setup();
+    await upstox.setToken("u-token", "2027-06-01T00:00:00.000Z");
+    await fyers.setConfig("APP-100", "http://127.0.0.1:3001/api/provider/fyers/callback");
+    await fyers.setAppSecret("f-secret");
+    const started = await fyers.startAuth();
+    await fyers.completeAuth({ code: "c", state: started.state });
+    handle.close();
+
+    const h2 = openDatabase({ dbPath, migrate: true });
+    handles.push(h2);
+    const c2 = loadConfig({ env: { MARKETHUB_DB_PATH: dbPath } });
+    const pc2 = providerConfigFromAppConfig(c2);
+    const u2 = new UpstoxAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => { throw new Error("offline"); } });
+    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => { throw new Error("offline"); } });
+    await Promise.all([u2.initialize(), f2.initialize()]);
+    const r2 = new ProviderRegistry();
+    r2.register(u2); r2.register(f2);
+    const initial = r2.getStatuses();
+    expect(initial.UPSTOX.authState).toBe("AUTH_REQUIRED");
+    expect(initial.FYERS.authState).toBe("AUTH_REQUIRED");
+    expect(initial.UPSTOX.authState).not.toBe("NOT_CONFIGURED");
+    expect(initial.FYERS.authState).not.toBe("NOT_CONFIGURED");
+
+    const after = await r2.validateAll();
+    expect(after.UPSTOX.authState).toBe("ERROR");
+    expect(after.FYERS.authState).toBe("ERROR");
+  });
+
+  test("Retry-After supports numeric seconds and HTTP-date; missing or unsafe headers stop retries", async () => {
+    const nowMs = Date.parse("2026-11-16T10:00:00.000Z");
+    expect(parseRetryAfter("2", nowMs)).toBe(2000);
+    expect(parseRetryAfter("Wed, 16 Nov 2026 10:00:03 GMT", nowMs)).toBe(3000);
+    expect(parseRetryAfter(null, nowMs)).toBeNull();
+    expect(parseRetryAfter("not-a-date", nowMs)).toBeNull();
+    expect(parseRetryAfter("Wed, 16 Nov 2026 09:59:00 GMT", nowMs)).toBeNull();
+
+    let calls = 0;
+    await fetchWithRetry(
+      async () => { calls++; return new Response("{}", { status: 429, headers: { "Retry-After": "Wed, 16 Nov 2026 10:00:01 GMT" } }); },
+      "http://example.test", {}, 100, { sleep: async () => {}, now: () => nowMs }
+    );
+    expect(calls).toBe(3);
+
+    let unsafeCalls = 0;
+    await fetchWithRetry(
+      async () => { unsafeCalls++; return new Response("{}", { status: 429, headers: { "Retry-After": "Wed, 16 Nov 2026 10:00:03 GMT" } }); },
+      "http://example.test", {}, 100, { sleep: async () => {}, now: () => nowMs }
+    );
+    expect(unsafeCalls).toBe(1);
+
+    let missingCalls = 0;
+    await fetchWithRetry(
+      async () => { missingCalls++; return new Response("{}", { status: 429 }); },
+      "http://example.test", {}, 100, { sleep: async () => {}, now: () => nowMs }
+    );
+    expect(missingCalls).toBe(1);
   });
 });

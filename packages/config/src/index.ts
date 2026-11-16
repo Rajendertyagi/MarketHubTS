@@ -173,9 +173,13 @@ export function providerConfigFromAppConfig(config: AppConfig): {
   fyersAppId?: string;
   fyersRedirectUri?: string;
   upstoxTokenExpiresAt?: string;
+  apiPort: number;
+  apiSecure: boolean;
 } {
   return {
     enabled: true,
+    apiPort: config.port,
+    apiSecure: false,
     ...(config.fyersAppId ? { fyersAppId: config.fyersAppId } : {}),
     ...(config.fyersRedirectUri ? { fyersRedirectUri: config.fyersRedirectUri } : {}),
     ...(config.upstoxTokenExpiresAt ? { upstoxTokenExpiresAt: config.upstoxTokenExpiresAt } : {})

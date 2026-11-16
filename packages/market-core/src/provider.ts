@@ -113,6 +113,20 @@ export interface RetryOptions {
   now?: () => number;
 }
 
+/** Parse Retry-After as delta-seconds or HTTP-date. Returns delay in ms, or null when unusable. */
+export function parseRetryAfter(value: string | null, nowMs: number): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null;
+  }
+  const timestamp = Date.parse(trimmed);
+  if (!Number.isFinite(timestamp)) return null;
+  const delay = timestamp - nowMs;
+  return delay >= 0 ? delay : null;
+}
+
 /** Retry only transient failures (network errors, 429, 5xx). Bounded, jittered, no tight loops. */
 export async function fetchWithRetry(
   fetcher: FetchLike,
@@ -130,12 +144,10 @@ export async function fetchWithRetry(
     try {
       const response = await fetcher(url, init, timeoutMs);
       if (response.status === 429) {
-        // Respect Retry-After when present; otherwise stop rather than guess and hammer the provider.
-        const retryAfter = response.headers.get("retry-after");
-        const seconds = retryAfter !== null ? Number(retryAfter) : NaN;
-        if (!Number.isFinite(seconds) || seconds < 0 || i === attempts - 1) return response;
+        // Respect Retry-After (seconds or HTTP-date). Invalid, past or excessive delays stop retries.
+        const delay = parseRetryAfter(response.headers.get("retry-after"), (options.now ?? Date.now)());
+        if (delay === null || delay > max || i === attempts - 1) return response;
         lastError = new Error("transient_http_429");
-        const delay = Math.min(max, Math.max(base, seconds * 1000));
         await sleep(delay);
         continue;
       }

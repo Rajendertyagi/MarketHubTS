@@ -44,14 +44,16 @@ export function nextIstExpiry(now: Date): Date {
   return new Date(candidate.getTime() - IST_OFFSET_MS);
 }
 
-/** Redirect must be loopback and point at the actual callback route. */
-export function isValidFyersRedirectUri(uri: string): boolean {
+/** Redirect must be loopback, use the application's actual scheme/port, and point at the callback route. */
+export function isValidFyersRedirectUri(uri: string, apiPort: number, apiSecure = false): boolean {
   try {
     const u = new URL(uri);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const expectedProtocol = apiSecure ? "https:" : "http:";
+    if (u.protocol !== expectedProtocol) return false;
     const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     const loopback = host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host);
-    return loopback && u.pathname === FYERS_CALLBACK_PATH && !u.username && !u.password;
+    const port = u.port ? Number(u.port) : (expectedProtocol === "https:" ? 443 : 80);
+    return loopback && port === apiPort && u.pathname === FYERS_CALLBACK_PATH && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -81,19 +83,27 @@ export class FyersAdapter implements ProviderAdapter {
     }
   }
 
-  /** Load persisted config and expiry metadata on startup. */
+  /** Load persisted config and expiry metadata on startup. Never contacts the provider. */
   async initialize(): Promise<void> {
-    if (!this.options.settings) return;
-    const [appId, redirectUri, expiry] = await Promise.all([
-      this.options.settings.get(FYERS_APP_ID_SETTING),
-      this.options.settings.get(FYERS_REDIRECT_URI_SETTING),
-      this.options.settings.get(FYERS_EXPIRY_SETTING)
-    ]);
-    if (appId) this.options.config.fyersAppId = appId;
-    if (redirectUri) this.options.config.fyersRedirectUri = redirectUri;
-    if (expiry) {
-      this.tokenExpiresAt = expiry;
-      this.status = { ...this.status, expiresAt: expiry, expiryKnown: true };
+    if (this.options.settings) {
+      const [appId, redirectUri, expiry] = await Promise.all([
+        this.options.settings.get(FYERS_APP_ID_SETTING),
+        this.options.settings.get(FYERS_REDIRECT_URI_SETTING),
+        this.options.settings.get(FYERS_EXPIRY_SETTING)
+      ]);
+      if (appId) this.options.config.fyersAppId = appId;
+      if (redirectUri) this.options.config.fyersRedirectUri = redirectUri;
+      if (expiry) {
+        this.tokenExpiresAt = expiry;
+        this.status = { ...this.status, expiresAt: expiry, expiryKnown: true };
+      }
+    }
+    if (this.options.config.enabled && await this.isConfigured()) {
+      this.status = {
+        ...this.status,
+        authState: "AUTH_REQUIRED",
+        restrictions: [...this.status.restrictions, "Stored credentials found; validation required"]
+      };
     }
   }
 
@@ -102,7 +112,12 @@ export class FyersAdapter implements ProviderAdapter {
   }
 
   private configured(): boolean {
-    return Boolean(this.options.config.enabled && this.options.config.fyersAppId && this.options.config.fyersRedirectUri && isValidFyersRedirectUri(this.options.config.fyersRedirectUri));
+    return Boolean(
+      this.options.config.enabled &&
+      this.options.config.fyersAppId &&
+      this.options.config.fyersRedirectUri &&
+      isValidFyersRedirectUri(this.options.config.fyersRedirectUri, this.options.config.apiPort ?? 3001, this.options.config.apiSecure ?? false)
+    );
   }
 
   async isConfigured(): Promise<boolean> {
@@ -114,8 +129,8 @@ export class FyersAdapter implements ProviderAdapter {
   /** Persist non-secret config after validating the loopback callback URI. */
   async setConfig(appId: string, redirectUri: string): Promise<void> {
     if (!appId.trim()) throw new Error("FYERS App ID must not be empty");
-    if (!isValidFyersRedirectUri(redirectUri.trim())) {
-      throw new Error(`FYERS redirect URI must be loopback and point to ${FYERS_CALLBACK_PATH}`);
+    if (!isValidFyersRedirectUri(redirectUri.trim(), this.options.config.apiPort ?? 3001, this.options.config.apiSecure ?? false)) {
+      throw new Error(`FYERS redirect URI must be loopback, use the application's port ${this.options.config.apiPort ?? 3001}, and point to ${FYERS_CALLBACK_PATH}`);
     }
     this.options.config.fyersAppId = appId.trim();
     this.options.config.fyersRedirectUri = redirectUri.trim();

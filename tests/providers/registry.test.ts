@@ -22,7 +22,7 @@ function setup() {
   const config: ProviderConfig = {
     enabled: true,
     fyersAppId: "APP-100",
-    fyersRedirectUri: "http://127.0.0.1:4899/api/provider/fyers/callback"
+    fyersRedirectUri: "http://127.0.0.1:3001/api/provider/fyers/callback"
   };
   const registry = new ProviderRegistry({ now: () => new Date("2026-11-16T10:00:00.000Z") });
   const upstox = new UpstoxAdapter({
