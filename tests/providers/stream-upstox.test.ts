@@ -328,6 +328,140 @@ describe("Upstox V3 stream — protobuf decode and validation", () => {
     expect(native.optionGreeks).toMatchObject({ delta: 0.4, gamma: 0.03 });
     expect(native).toMatchObject({ oi: 500, iv: 20, vtt: 100 });
   });
+
+  test("extracts all documented CAS fields from marketFF", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start(
+      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
+      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
+    );
+    h.sockets[0]!.open();
+    h.sockets[0]!.emit(encodeFeedResponse({
+      type: 1, currentTs: NOW,
+      feeds: {
+        [NIFTY_KEY]: {
+          fullFeed: { marketFF: {
+            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
+            iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
+          } },
+          requestMode: 1
+        }
+      }
+    }));
+    expect(h.observations.length).toBe(1);
+    const native = h.observations[0]!.value.native as any;
+    expect(native).toMatchObject({
+      iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
+    });
+  });
+
+  test("extracts ltpc.iep from the protobuf DoubleValue wrapper", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start(
+      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }],
+      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
+    );
+    h.sockets[0]!.open();
+    h.sockets[0]!.emit(encodeFeedResponse({
+      type: 1, currentTs: NOW,
+      feeds: { [NIFTY_KEY]: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216, iep: { value: 26150.75 } }, requestMode: 0 } }
+    }));
+    expect(h.observations.length).toBe(1);
+    const native = h.observations[0]!.value.native as any;
+    expect(native.ltpcIep).toBe(26150.75);
+  });
+
+  test("preserves explicit zero CAS values and DoubleValue zero", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start(
+      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
+      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
+    );
+    h.sockets[0]!.open();
+    h.sockets[0]!.emit(encodeFeedResponse({
+      type: 1, currentTs: NOW,
+      feeds: {
+        [NIFTY_KEY]: {
+          fullFeed: { marketFF: {
+            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216, iep: { value: 0 } },
+            iep: 0, rp: 0, ieq: 0, iiqTotal: 0, iiqM: 0, casEligible: false
+          } },
+          requestMode: 1
+        }
+      }
+    }));
+    expect(h.observations.length).toBe(1);
+    const native = h.observations[0]!.value.native as any;
+    expect(native.ltpcIep).toBe(0);
+    expect(native.iep).toBe(0);
+    expect(native.rp).toBe(0);
+    expect(native.ieq).toBe(0);
+    expect(native.iiqTotal).toBe(0);
+    expect(native.iiqM).toBe(0);
+    expect(native.casEligible).toBe(false);
+  });
+
+  test("leaves absent optional CAS fields undefined", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start(
+      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
+      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
+    );
+    h.sockets[0]!.open();
+    h.sockets[0]!.emit(encodeFeedResponse({
+      type: 1, currentTs: NOW,
+      feeds: {
+        [NIFTY_KEY]: {
+          fullFeed: { marketFF: { ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 } } },
+          requestMode: 1
+        }
+      }
+    }));
+    expect(h.observations.length).toBe(1);
+    const native = h.observations[0]!.value.native as any;
+    // ltpc.iep is a message wrapper: absent decodes to null and must stay undefined.
+    expect(native.ltpcIep).toBeUndefined();
+    // proto3 scalars decode absent to 0/false; these are preserved as supplied,
+    // not fabricated — the decoder does not invent non-zero CAS values.
+    expect(native.iep).toBe(0);
+    expect(native.casEligible).toBe(false);
+  });
+
+  test("existing depth, OHLC and Greeks decoding remains unchanged with CAS fields present", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start(
+      [{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL, mode: "full" }],
+      { onObservation: (o) => h.observations.push(o), onConnectionState: () => {} }
+    );
+    h.sockets[0]!.open();
+    h.sockets[0]!.emit(encodeFeedResponse({
+      type: 1, currentTs: NOW,
+      feeds: {
+        [NIFTY_KEY]: {
+          fullFeed: { marketFF: {
+            ltpc: { ltp: 26188.1, ltt: NOW, ltq: 10, cp: 26216 },
+            marketLevel: { bidAskQuote: [{ bidQ: 100, bidP: 26188, askQ: 200, askP: 26188.5 }] },
+            marketOHLC: { ohlc: [{ interval: "1m", open: 26180, high: 26200, low: 26170, close: 26188.1, vol: 5000, ts: NOW }] },
+            optionGreeks: { delta: 0.5, theta: -0.1, gamma: 0.02, vega: 0.3, rho: 0.05 },
+            iep: 26100.5, rp: 26000, ieq: 100, iiqTotal: 250, iiqM: -75, casEligible: true
+          } },
+          requestMode: 1
+        }
+      }
+    }));
+    expect(h.observations.length).toBe(1);
+    const native = h.observations[0]!.value.native as any;
+    expect(native.depth).toHaveLength(1);
+    expect(native.ohlc).toHaveLength(1);
+    expect(native.optionGreeks).toMatchObject({ delta: 0.5, gamma: 0.02 });
+    expect(native.iep).toBe(26100.5);
+    expect(native.casEligible).toBe(true);
+  });
 });
 
 describe("Upstox V3 stream — lifecycle", () => {

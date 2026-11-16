@@ -80,6 +80,15 @@ export interface UpstoxNativeFields {
   depth?: DecodedDepthLevel[];
   firstDepth?: DecodedDepthLevel;
   ohlc?: DecodedOhlc[];
+  /** LTPC indicative equilibrium price (google.protobuf.DoubleValue wrapper). */
+  ltpcIep?: number;
+  /** Closing Auction Session fields from MarketFullFeed. */
+  iep?: number;
+  rp?: number;
+  ieq?: number;
+  iiqTotal?: number;
+  iiqM?: number;
+  casEligible?: boolean;
 }
 
 export interface DecodedFeedEntry {
@@ -115,6 +124,17 @@ function depthLevel(quote: any): DecodedDepthLevel {
   };
 }
 
+/**
+ * Extract a google.protobuf.DoubleValue wrapper. Decoded shapes observed:
+ *   absent -> null; value -> { value: N }; explicit zero -> {} with .value === 0.
+ * Reading .value directly (not hasOwnProperty, not truthiness) preserves zero.
+ */
+function doubleValue(wrapper: any): number | undefined {
+  if (wrapper === null || wrapper === undefined) return undefined;
+  const value = toNumber(wrapper.value);
+  return value === null ? undefined : value;
+}
+
 function ohlcBar(bar: any): DecodedOhlc {
   return {
     interval: typeof bar?.interval === "string" ? bar.interval : null,
@@ -129,6 +149,14 @@ function ohlcBar(bar: any): DecodedOhlc {
 
 function nativeFields(feed: any): UpstoxNativeFields {
   const native: UpstoxNativeFields = {};
+
+  // LTPC indicative equilibrium price (DoubleValue wrapper). The LTPC may live
+  // directly on the feed or inside a full/greeks variant — use the same resolver.
+  // Extract before the full-feed early return so pure ltpc feeds are covered.
+  const ltpc = extractLtpc(feed);
+  const ltpcIep = doubleValue(ltpc?.iep);
+  if (ltpcIep !== undefined) native.ltpcIep = ltpcIep;
+
   const marketFF = feed?.fullFeed?.marketFF;
   const indexFF = feed?.fullFeed?.indexFF;
   const greeksFeed = feed?.firstLevelWithGreeks;
@@ -160,6 +188,17 @@ function nativeFields(feed: any): UpstoxNativeFields {
   const ohlcSource = marketFF?.marketOHLC?.ohlc ?? indexFF?.marketOHLC?.ohlc;
   if (Array.isArray(ohlcSource) && ohlcSource.length > 0) {
     native.ohlc = ohlcSource.map(ohlcBar);
+  }
+
+  // Closing Auction Session fields on MarketFullFeed. toNumber preserves zero
+  // and converts int64 Long values; absent proto3 scalars decode to 0/false,
+  // which are preserved as supplied rather than fabricated or dropped.
+  if (marketFF) {
+    for (const key of ["iep", "rp", "ieq", "iiqTotal", "iiqM"] as const) {
+      const value = toNumber(marketFF[key]);
+      if (value !== null) native[key] = value;
+    }
+    if (typeof marketFF.casEligible === "boolean") native.casEligible = marketFF.casEligible;
   }
   return native;
 }
