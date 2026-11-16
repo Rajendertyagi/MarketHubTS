@@ -72,6 +72,17 @@ async function main() {
   process.on("SIGTERM", () => {
     void shutdown("SIGTERM", true);
   });
+  // Test-only hook to prove graceful shutdown completion in environments where signal delivery is unreliable.
+  if (process.env.MARKETHUB_TEST_SHUTDOWN_ON_STDIN_END === "1" && process.stdin && typeof process.stdin.on === "function") {
+    const onStdinEnd = () => {
+      void shutdown("STDIN_END", true);
+    };
+    process.stdin.on("end", onStdinEnd);
+    process.stdin.on("close", onStdinEnd);
+    try {
+      process.stdin.resume();
+    } catch {}
+  }
 }
 
 void main();

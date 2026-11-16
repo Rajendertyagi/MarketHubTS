@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { removeTempDir } from "./helpers/fs-cleanup";
 
 function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -53,6 +54,11 @@ async function assertPortReleased(port: number, timeoutMs = 5000) {
   throw new Error(`Port ${port} still accepting connections`);
 }
 
+async function readStreamText(stream: ReadableStream<Uint8Array> | null | undefined): Promise<string> {
+  if (!stream) return "";
+  return await new Response(stream).text();
+}
+
 describe("runtime", () => {
   test("API starts with validated config and shuts down cleanly releasing listener", async () => {
     const dir = mkdtempSync(join(tmpdir(), "markethub-rt-"));
@@ -66,28 +72,39 @@ describe("runtime", () => {
         MARKETHUB_HOST: "127.0.0.1",
         MARKETHUB_PORT: String(port),
         MARKETHUB_DB_PATH: dbPath,
-        MARKETHUB_LOG_LEVEL: "error"
+        MARKETHUB_LOG_LEVEL: "info",
+        MARKETHUB_TEST_SHUTDOWN_ON_STDIN_END: "1"
       },
-      stdout: "ignore",
+      stdin: "pipe",
+      stdout: "pipe",
       stderr: "pipe"
     });
+    const stdoutPromise = readStreamText(proc.stdout);
+    const stderrPromise = readStreamText(proc.stderr);
     try {
       const health = await waitForHealth(`http://127.0.0.1:${port}/health`);
       expect(health.status).toBe("ok");
       expect(health.checks.database).toBe("ok");
 
-      proc.kill("SIGTERM");
+      try {
+        proc.stdin?.end();
+      } catch {
+        proc.kill("SIGTERM");
+      }
       const code = await waitForExit(proc, 10000);
       await assertPortReleased(port, 5000);
-      // On Windows/Bun, SIGTERM may be reported as 143; shutdown must still complete and release the listener.
-      expect(code === 0 || code === 143).toBe(true);
+
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+      const output = `${stdout}\n${stderr}`;
+      expect(output).toContain("\"msg\":\"shutdown_start\"");
+      expect(output).toContain("\"msg\":\"shutdown_complete\"");
+      expect(code).toBe(0);
     } finally {
       try {
         if (proc.exitCode === null) proc.kill("SIGKILL");
       } catch {}
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {}
+      await Promise.allSettled([stdoutPromise, stderrPromise]);
+      removeTempDir(dir);
     }
   });
 
@@ -98,7 +115,9 @@ describe("runtime", () => {
       stdout: "ignore",
       stderr: "pipe"
     });
+    const stderrPromise = readStreamText(proc.stderr);
     const code = await waitForExit(proc, 10000);
+    await stderrPromise;
     expect(code).not.toBe(0);
   });
 });

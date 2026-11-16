@@ -25,6 +25,7 @@ export interface AppDependencies {
   db: DatabaseHandle;
   logger: Logger;
   startedAt: number;
+  webDistDir?: string;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -175,7 +176,7 @@ export function createApp(deps: AppDependencies) {
     return c.json(payload);
   });
 
-  const distDir = resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
+  const distDir = deps.webDistDir ?? resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
   const indexPath = resolve(distDir, "index.html");
   const serveWeb = deps.config.env === "production" && existsSync(indexPath);
 

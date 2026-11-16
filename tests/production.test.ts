@@ -1,21 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../packages/config/src/index";
 import { defaultMigrationsFolder, openDatabase, runMigrations } from "../packages/database/src/index";
 import { createApp } from "../apps/api/src/app";
 import { createLogger } from "../apps/api/src/lib/logger";
+import { closeDatabaseHandle, removeTempDir } from "./helpers/fs-cleanup";
 
-function findBuiltAsset(distDir: string): string {
+function createWebDistFixture(baseDir: string): { distDir: string; assetPath: string } {
+  const distDir = join(baseDir, "dist");
   const assetsDir = join(distDir, "assets");
-  if (!existsSync(assetsDir)) throw new Error(`Missing assets directory: ${assetsDir}`);
-  const files = readdirSync(assetsDir);
-  const js = files.find((f) => f.endsWith(".js"));
-  const css = files.find((f) => f.endsWith(".css"));
-  const pick = js ?? css;
-  if (!pick) throw new Error("No built JS/CSS asset found in dist/assets");
-  return `/assets/${pick}`;
+  mkdirSync(assetsDir, { recursive: true });
+  const assetPath = "/assets/app-test.js";
+  writeFileSync(join(assetsDir, "app-test.js"), "console.log('markethub-test-asset');\n", "utf8");
+  writeFileSync(
+    join(distDir, "index.html"),
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>MarketHubTS Test</title></head><body><div id=\"root\"></div><script type=\"module\" src=\"/assets/app-test.js\"></script></body></html>",
+    "utf8"
+  );
+  return { distDir, assetPath };
 }
 
 describe("production serving", () => {
@@ -26,10 +30,9 @@ describe("production serving", () => {
     const config = loadConfig({ env: { MARKETHUB_ENV: "production", MARKETHUB_DB_PATH: dbPath, MARKETHUB_PORT: "3998" } });
     const db = openDatabase({ dbPath });
     runMigrations(db.db, defaultMigrationsFolder);
-    const deps = { config, db, logger: createLogger("error"), startedAt: Date.now() };
-    const distDir = resolve(import.meta.dir, "../apps/web/dist");
+    const { distDir, assetPath } = createWebDistFixture(dir);
+    const deps = { config, db, logger: createLogger("error"), startedAt: Date.now(), webDistDir: distDir };
     try {
-      expect(existsSync(join(distDir, "index.html"))).toBe(true);
       const app = createApp(deps);
 
       const root = await app.request("/");
@@ -39,23 +42,18 @@ describe("production serving", () => {
       expect(html).toContain("<div id=\"root\">");
       expect(html).not.toContain("\"name\":\"MarketHubTS API\"");
 
-      const assetPath = findBuiltAsset(distDir);
       const asset = await app.request(assetPath);
       expect(asset.status).toBe(200);
       const assetType = asset.headers.get("content-type") ?? "";
-      expect(assetType.includes("javascript") || assetType.includes("css") || assetType.includes("text/plain")).toBe(true);
+      expect(assetType.includes("javascript") || assetType.includes("text/plain")).toBe(true);
 
       const health = await app.request("/health");
       expect(health.status).toBe(200);
       const status = await app.request("/api/status");
       expect(status.status).toBe(200);
     } finally {
-      try {
-        db.close();
-      } catch {}
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {}
+      closeDatabaseHandle(db);
+      removeTempDir(dir);
     }
   });
 });

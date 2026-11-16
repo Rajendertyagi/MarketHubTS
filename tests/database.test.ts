@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkDatabase, defaultMigrationsFolder, openDatabase, repoRoot, resolveDatabasePath, runMigrations } from "../packages/database/src/index";
+import { closeDatabaseHandle, removeTempDir } from "./helpers/fs-cleanup";
 
 function tempDbPath(name: string) {
   const dir = mkdtempSync(join(tmpdir(), "markethub-db-"));
   return { dir, path: join(dir, name) };
-}
-function safeRm(dir: string) {
-  try {
-    rmSync(dir, { recursive: true, force: true });
-  } catch {}
 }
 
 describe("database", () => {
@@ -24,9 +20,9 @@ describe("database", () => {
       expect(checkDatabase(handle.sqlite)).toBe("ok");
       const tables = handle.sqlite.query("SELECT name FROM sqlite_master WHERE type='table' AND name='app_meta'").all();
       expect(tables.length).toBe(1);
-      handle.close();
+      closeDatabaseHandle(handle);
     } finally {
-      safeRm(dir);
+      removeTempDir(dir);
     }
   });
 
@@ -36,16 +32,16 @@ describe("database", () => {
       const h1 = openDatabase({ dbPath: path });
       runMigrations(h1.db, defaultMigrationsFolder);
       h1.sqlite.exec("INSERT INTO app_meta(key,value,updated_at) VALUES ('k','v',1)");
-      h1.close();
+      closeDatabaseHandle(h1);
 
       const h2 = openDatabase({ dbPath: path });
       runMigrations(h2.db, defaultMigrationsFolder);
       const row = h2.sqlite.query("SELECT value FROM app_meta WHERE key='k'").get() as { value: string } | null;
       expect(row?.value).toBe("v");
       expect(checkDatabase(h2.sqlite)).toBe("ok");
-      h2.close();
+      closeDatabaseHandle(h2);
     } finally {
-      safeRm(dir);
+      removeTempDir(dir);
     }
   });
 
@@ -54,9 +50,9 @@ describe("database", () => {
     try {
       const handle = openDatabase({ dbPath: path });
       expect(() => runMigrations(handle.db, join(dir, "nope"))).toThrow();
-      handle.close();
+      closeDatabaseHandle(handle);
     } finally {
-      safeRm(dir);
+      removeTempDir(dir);
     }
   });
 
@@ -64,10 +60,10 @@ describe("database", () => {
     const { dir, path } = tempDbPath("closed.sqlite");
     try {
       const handle = openDatabase({ dbPath: path });
-      handle.close();
+      closeDatabaseHandle(handle);
       expect(checkDatabase(handle.sqlite)).toBe("error");
     } finally {
-      safeRm(dir);
+      removeTempDir(dir);
     }
   });
 

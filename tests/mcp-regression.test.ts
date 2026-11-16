@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../packages/config/src/index";
@@ -7,6 +7,7 @@ import { defaultMigrationsFolder, openDatabase, runMigrations } from "../package
 import { createApp } from "../apps/api/src/app";
 import { createLogger } from "../apps/api/src/lib/logger";
 import { healthStatusSchema } from "../packages/contracts/src/index";
+import { closeDatabaseHandle, removeTempDir } from "./helpers/fs-cleanup";
 
 describe("mcp regression", () => {
   test("health endpoint remains compatible with MCP health tool contract", async () => {
@@ -24,8 +25,8 @@ describe("mcp regression", () => {
       expect(res.ok).toBe(true);
       expect(parsed.success).toBe(true);
     } finally {
-      try { db.close(); } catch {}
-      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+      closeDatabaseHandle(db);
+      removeTempDir(dir);
     }
   });
 });

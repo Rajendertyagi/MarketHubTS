@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../packages/config/src/index";
@@ -7,15 +7,7 @@ import { defaultMigrationsFolder, openDatabase, runMigrations } from "../package
 import { createApp, isAllowedCorsOrigin } from "../apps/api/src/app";
 import { createLogger } from "../apps/api/src/lib/logger";
 import { healthStatusSchema, readinessStatusSchema, systemStatusSchema } from "../packages/contracts/src/index";
-
-function safeCleanup(dir: string, close?: () => void) {
-  try {
-    close?.();
-  } catch {}
-  try {
-    rmSync(dir, { recursive: true, force: true });
-  } catch {}
-}
+import { closeDatabaseHandle, removeTempDir } from "./helpers/fs-cleanup";
 
 function makeDeps() {
   resetConfigCache();
@@ -26,7 +18,11 @@ function makeDeps() {
   runMigrations(db.db, defaultMigrationsFolder);
   const logger = createLogger("error");
   const deps = { config, db, logger, startedAt: Date.now() - 1000 };
-  return { deps, dir, cleanup: () => safeCleanup(dir, () => db.close()) };
+  const cleanup = () => {
+    closeDatabaseHandle(db);
+    removeTempDir(dir);
+  };
+  return { deps, dir, db, cleanup };
 }
 
 describe("api", () => {
@@ -75,9 +71,9 @@ describe("api", () => {
   });
 
   test("readiness reports error when database is closed", async () => {
-    const { deps, dir } = makeDeps();
+    const { deps, dir, db } = makeDeps();
     try {
-      deps.db.close();
+      db.close();
       const app = createApp(deps);
       const res = await app.request("/ready");
       expect(res.status).toBe(503);
@@ -85,7 +81,7 @@ describe("api", () => {
       expect(json.ready).toBe(false);
       expect(json.checks.database).toBe("error");
     } finally {
-      safeCleanup(dir);
+      removeTempDir(dir);
     }
   });
 
