@@ -13,7 +13,10 @@ const configSchema = z.object({
   webHost: z.string().min(1),
   webPort: z.number().int().min(1).max(65535),
   apiUrl: z.string().url(),
-  version: z.string().min(1)
+  version: z.string().min(1),
+  fyersAppId: z.string().optional(),
+  fyersRedirectUri: z.string().optional(),
+  upstoxTokenExpiresAt: z.string().optional()
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -31,6 +34,7 @@ export interface PublicConfig {
   apiUrl: string;
   version: string;
   dbPathConfigured: boolean;
+  fyersConfigured: boolean;
 }
 
 export interface ConfigIssue {
@@ -103,8 +107,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
 
   const defaultApiUrl = `http://localhost:${port}`;
   const apiUrl = source.MARKETHUB_API_URL && source.MARKETHUB_API_URL !== "" ? source.MARKETHUB_API_URL : defaultApiUrl;
+  const fyersAppId = source.MARKETHUB_FYERS_APP_ID || undefined;
+  const fyersRedirectUri = source.MARKETHUB_FYERS_REDIRECT_URI || undefined;
+  const upstoxTokenExpiresAt = source.MARKETHUB_UPSTOX_TOKEN_EXPIRES_AT || undefined;
 
-  const candidate = { env, host, port, lan, dbPath, logLevel, webHost, webPort, apiUrl, version };
+  const candidate = { env, host, port, lan, dbPath, logLevel, webHost, webPort, apiUrl, version, fyersAppId, fyersRedirectUri, upstoxTokenExpiresAt };
   const parsed = configSchema.safeParse(candidate);
   if (!parsed.success) {
     const issues: ConfigIssue[] = parsed.error.issues.map((i) => ({
@@ -151,11 +158,26 @@ export function toPublicConfig(config: AppConfig): PublicConfig {
     webPort: config.webPort,
     apiUrl: sanitizeApiUrlForLog(config.apiUrl),
     version: config.version,
-    dbPathConfigured: config.dbPath.length > 0
+    dbPathConfigured: config.dbPath.length > 0,
+    fyersConfigured: Boolean(config.fyersAppId && config.fyersRedirectUri)
   };
 }
 
 export function redactConfigForLog(config: AppConfig): Record<string, unknown> {
   // Intentionally excludes raw dbPath and strips credentials from apiUrl.
   return { ...toPublicConfig(config) };
+}
+
+export function providerConfigFromAppConfig(config: AppConfig): {
+  enabled: boolean;
+  fyersAppId?: string;
+  fyersRedirectUri?: string;
+  upstoxTokenExpiresAt?: string;
+} {
+  return {
+    enabled: true,
+    ...(config.fyersAppId ? { fyersAppId: config.fyersAppId } : {}),
+    ...(config.fyersRedirectUri ? { fyersRedirectUri: config.fyersRedirectUri } : {}),
+    ...(config.upstoxTokenExpiresAt ? { upstoxTokenExpiresAt: config.upstoxTokenExpiresAt } : {})
+  };
 }

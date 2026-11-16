@@ -35,14 +35,14 @@
 |---|---|---|
 | NSE universe/eligibility | Current official eligibility/specs and actual available contracts for NIFTY 50, BANK NIFTY, FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, NIFTY India FPI 150 (NIFTY India FPI 150 introduction date 08 December 2025 per official NSE press release is distinct from current eligibility/contracts); contract details/changes | Correct supported universe and catalog rules |
 | BSE scope | Official SENSEX derivatives scope/specs; confirmation of excluded instruments | Prevent scope creep/errors |
-| Upstox APIs | Current V3 feed/historical/expired-instruments/option-chain/quotes/instruments endpoints, fields, auth/session, protobuf schemas, rate/subscription limits, plan entitlements | Adapter design, normalization, limits handling |
-| FYERS APIs | Current v3 data socket/REST capabilities, symbol/connection limits, historical/option-chain/quotes fields, auth, entitlements | Adapter design, normalization, limits handling |
-| Upstox/FYERS SDKs on Bun | Official SDK package names, APIs, Node dependencies, Bun compatibility | Implementation choice and reliability |
+| Upstox auth / limits | **Verified for M3:** Analytics Token (free, read-only, 1-year, no OAuth/static IP for market data), validation via `GET /v2/market/status/NSE`, Standard rate limits. Remaining: exact field availability and feed protocols (M4), expired-instruments entitlement (M5). | M3 adapter design; later data work |
+| FYERS auth / limits | **Verified for M3:** V3 individual-app OAuth with non-trading app, loopback redirect, daily 6:30 AM expiry, no assumed refresh, Standard limits effective 16 Oct 2026. Remaining: exact field availability and feed protocols (M4), historical/expired entitlements (M5). | M3 adapter design; later data work |
+| Upstox/FYERS SDKs on Bun | **Resolved for M3:** direct Bun `fetch` REST; no broker SDKs or new runtime dependencies. | Implementation simplicity and reliability |
 | Market-wide sources | Official/usable sources and terms for India VIX, breadth, sectors, FII/DII, participant-wise derivatives OI, reports/bhavcopies, calendars/status | Data availability and compliance |
 | MCP spec/SDK (2026-07-28) | Exact Streamable HTTP behavior, SSE-based event/subscription delivery semantics, multi-client/session/stateless details, legacy HTTP+SSE compatibility needs, SDK APIs | Correct MCP transport and interoperability |
 | Vela charting | React/provider integration, required features (candles/indicators/drawings/multi-chart/workspace persistence), performance/memory, licensing/attribution, Bun/Vite fit | Chart milestone feasibility |
-| Secure Windows credential storage | Appropriate mechanism (e.g. OS-backed), encryption/key management, portability with backup/restore | Security and full recoverability |
-| Backup key material | What key/state must accompany DB for encrypted credential recovery; safe backup format/process | True full restore |
+| Secure credential storage | **Implemented (M3, AD-021):** portable encrypted SQLite + one local key file in the app folder; no Windows/OS credential store, no plaintext. | Security, portability, owner workflow |
+| Backup key material | AD-014 preserved: the folder (DB + key file) is the backup unit; a DB-only copy is not complete. M9 must design encrypted export/import and clean-install restore drills. | True full restore; no false claims |
 
 ## 4. Compatibility issues (known/possible)
 

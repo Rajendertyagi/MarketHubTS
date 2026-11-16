@@ -66,7 +66,7 @@
 
 ---
 
-### M2 — Canonical contracts, catalog foundation, and persistence primitives (real application) — **Implemented in app (pending commit)**
+### M2 — Canonical contracts, catalog foundation, and persistence primitives (real application) — **Published on `develop` (`fa40420`, `484c0a6`)**
 **Objective:** establish shared canonical schemas, instrument identity/catalog model, and DB/migration foundations used by all services, as part of the real MarketHubTS application.
 
 **Prerequisites:** M1; verification of exchange universe rules and key provider identifier formats (sufficient to model mappings).
@@ -84,22 +84,29 @@
 **Non-goals (preserved):** live broker connectivity, bulk catalog downloads/seeding, UI market views/search, MCP market tools/HTTP transport.
 ---
 
-### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS)
+### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS) — **Implemented in working tree (uncommitted)**
 **Objective:** connect/configure providers independently with health, auth lifecycle handling, and normalized capability reporting.
 
-**Prerequisites:** M2 (canonical contracts/mappings), verified official auth/connection/API basics, secure credential storage mechanism decision/verification.
+**Prerequisites (met):** M2 published; official Upstox/FYERS auth, rate-limit and app-type research complete and recorded in [REFERENCES.md](REFERENCES.md) and [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md); credential-storage decision approved by owner.
 
-**Key work:** adapter interfaces, credential/config handling (secure), connection/auth/token lifecycle, health/error/limit reporting, provider capability discovery, independent connect/disconnect/remove behavior.
+**Owner-directed technical decisions (approved):**
+- **Portable, self-contained folder:** no Windows Credential Manager, no `Bun.secrets`, no DPAPI, no OS keychain, no native modules. Secrets encrypted inside SQLite with one random key file in the same app folder, using built-in Bun crypto. Copying the folder preserves credentials; losing the key requires re-authentication. Accepted tradeoff (documented): a folder copy includes the key. Never plaintext.
+- **Upstox:** Analytics Token (free, read-only, 1-year, no OAuth, no static IP for market-data categories), entered in local WebUI; validate with `GET /v2/market/status/NSE` (Market Information category, non-sensitive GET). No daily OAuth, no trading/account APIs. One token per account; explain regeneration/revocation in UI.
+- **FYERS:** V3 individual-app authorization-code flow using a **non-trading (data-only) app** (no static IP, no order placement). Random state verified on callback; `appIdHash = SHA-256(app_id:app_secret)` computed backend; single-use code exchange; daily 6:30 AM expiry; no assumed refresh; profile used only to validate; logout on removal. Loopback callback on a configurable port matching the registered redirect URI; no public callback collector.
+- **HTTP:** Bun native `fetch`; no broker SDKs; no new runtime dependencies.
+- **Limits:** no hardcoded plan caps; design for FYERS Standard limits and report actual capability/restrictions; unknown entitlements stay unknown.
 
-**User-visible deliverables:** WebUI/diagnostics can show provider states (connected/disconnected/degraded/error) and restrictions; app operates with either/neither provider.
+**Key work:** adapter interfaces, portable encrypted credential store, connection/auth/token lifecycle, health/error/limit reporting, provider capability discovery, independent connect/disconnect/remove behavior, loopback-only privileged boundary, minimal WebUI diagnostics.
 
-**Acceptance criteria:** provider-state matrix behaviors satisfied for connectivity; one provider failure does not impact other; no plaintext secrets; clear diagnostics.
+**User-visible deliverables:** WebUI/diagnostics show honest provider states (disabled/not configured/auth required/authenticated/expired/degraded/error), expiry, capability restrictions and sanitized errors; app operates with both, either, or neither provider. Streaming status explicitly "not started" until M4.
 
-**Verification:** integration tests/mocks + controlled live verification where authorized; reconnect/failure scenarios.
+**Acceptance criteria:** provider-state matrix satisfied; one provider failure does not impact the other; no plaintext secrets; LAN clients cannot submit/replace credentials or initiate privileged provider configuration; clear diagnostics; no app-level login introduced.
 
-**Risks:** SDK/Bun incompatibility, auth/session complexity, undocumented limits/entitlements.
+**Verification:** mocked integration tests for all provider states and failure scenarios; real local credential-store round trip; full typecheck/test/build; no live broker authentication without separate authorization.
 
-**Non-goals:** full market feature set, order placement.
+**Risks:** FYERS loopback redirect registration must match exactly (report concrete blocker if unsupported); Analytics Token generation eligibility on the account; Bun crypto/SQLite integration details; no live verification in this assignment.
+
+**Non-goals:** live WebSocket/tick ingestion (M4), historical candles/caching (M5), option-chain snapshots (M5), bulk catalogue download, search UI, MCP market tools/HTTP transport, watchlists/alerts/scanners, charts, trading/order/account functionality, backup/restore implementation.
 
 ---
 
@@ -252,7 +259,7 @@
 ## 4. Cross-cutting dependencies and gates
 
 - **Engineering standards gate:** implementation follows [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (modular monolith boundaries, fault containment, validation, bounded resources, testing, dependency discipline).
-- **Official verification gates:** Upstox/FYERS capabilities/limits/entitlements/SDK-Bun fit; NSE/BSE universe/contract details; MCP 2026-07-28 transport semantics; Vela compatibility; Windows secure credential storage and backup key material.
+- **Official verification gates:** Upstox/FYERS auth and published limits verified for M3 (see [REFERENCES.md](REFERENCES.md)); remaining — actual account entitlements, NSE/BSE universe/contract details, MCP 2026-07-28 transport semantics, Vela compatibility. Credential storage is decided (portable encrypted SQLite + local key file); backup/restore design remains M9.
 - **Security gate:** no plaintext secrets, no credential exposure/logging, safe LAN behavior documented (LAN access required, no app-level login).
 - **Parity gate:** MCP/REST/SSE/WebUI consistency on canonical data/state.
 - **Recoverability gate:** clean-install restore proof including credential recovery requirements.

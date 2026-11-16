@@ -32,7 +32,7 @@
 ## 3. Security and sensitive data handling
 
 - Broker API credentials and sensitive tokens must be handled responsibly: **never logged, never exposed through ordinary data APIs**.
-- Credentials/tokens must **never be stored in plaintext**. A secure local credential-storage mechanism for Windows must be verified and implemented **(pending verification/implementation)**.
+- Credentials/tokens must **never be stored in plaintext**. M3 implements a portable encrypted store (AD-021): AES-256-GCM ciphertext in SQLite plus a 32-byte key file (`data/markethub.key`) beside the database. No OS credential store or native module is used.
 - LAN access is required and there is no application-level login/authentication system, but LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation. Safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope); deployment/usage implications should be documented clearly in UI/docs (planned).
 - MCP/REST interfaces must enforce input validation and avoid leaking secrets.
 
@@ -43,7 +43,7 @@
 - Design must account for the **complete database and any associated key material required to recover encrypted broker credentials** (and any other state required for full recovery).
 
 ### 4.2 Critical rule
-- **A database-only copy must not be described as a successful full recovery** if required encryption keys or application state are missing.
+- **A database-only copy must not be described as a successful full recovery** if required encryption keys or application state are missing. With M3's portable store, the backup unit is the closed data folder (database + key file). Copying both to another installation/OS preserves credentials; copying only the database does not. The accepted tradeoff is that anyone copying the whole folder can decrypt the credentials.
 
 ### 4.3 Restore validation
 - Restore must be **tested on a clean installation**, not merely asserted from source code.
@@ -70,10 +70,10 @@
 ## 7. Current implementation status
 
 - **Implemented:** API graceful shutdown handlers (SIGINT/SIGTERM) closing DB/server; DB open with WAL/foreign_keys/NORMAL/busy_timeout and best-effort checkpoint on close; basic health diagnostics endpoint.
-- **Not implemented:** configurable startup/background service behavior, LAN configuration UI, comprehensive diagnostics/logging UI, backup/restore, integrity maintenance workflows, secure credential storage, MCP HTTP/LAN serving.
+- **Not implemented:** configurable startup/background service behavior, LAN configuration UI, comprehensive diagnostics/logging UI, backup/restore, integrity maintenance workflows, MCP HTTP/LAN serving. **Implemented (M3, uncommitted):** portable encrypted credential storage with key file and explicit reset path.
 
 ## 8. Risks and open items
 
-- Secure Windows credential storage mechanism and key-material backup strategy **not yet verified/implemented** (critical for true full restore).
+- Credential storage is implemented (portable encrypted SQLite + key file). Backup/restore implementation and clean-install restore drills remain M9; a database-only backup is explicitly insufficient.
 - LAN exposure without app-level auth requires careful documentation and safe defaults.
 - Restore procedures must be proven on clean installs once implemented. See [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md).

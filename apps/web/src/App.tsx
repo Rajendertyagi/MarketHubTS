@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet } from "@tanstack/react-router";
-import { fetchSystemStatus, formatUptime } from "./lib/status";
+import { fetchProvidersStatus, fetchSystemStatus, formatUptime, type ProviderStatusView } from "./lib/status";
 import { StatusBadge, toneForState } from "./components/StatusBadge";
 
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -10,6 +10,56 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <dt className="text-sm text-slate-400">{label}</dt>
       <dd className="text-right text-sm font-medium text-slate-100 break-all">{value}</dd>
     </div>
+  );
+}
+
+function ProviderRow({ status }: { status: ProviderStatusView }) {
+  const tone = status.authState === "AUTHENTICATED" ? "ok" : status.authState === "ERROR" || status.authState === "EXPIRED" ? "error" : "warn";
+  return (
+    <li className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-slate-100">{status.id}</span>
+        <StatusBadge label={status.authState.replaceAll("_", " ")} tone={tone} />
+      </div>
+      <dl className="mt-2 space-y-1 text-xs text-slate-400">
+        <div className="flex justify-between gap-2"><dt>Streaming</dt><dd className="text-slate-300">{status.streamingState.replaceAll("_", " ")} (M4)</dd></div>
+        <div className="flex justify-between gap-2"><dt>Validated</dt><dd className="text-slate-300">{status.validatedAt ?? "never"}</dd></div>
+        <div className="flex justify-between gap-2"><dt>Expiry</dt><dd className="text-slate-300">{status.expiryKnown ? (status.expiresAt ?? "unknown") : "unknown"}</dd></div>
+      </dl>
+      {status.error && <p className="mt-2 text-xs text-rose-300">{status.error}</p>}
+      {status.restrictions.length > 0 && <p className="mt-1 text-xs text-amber-300">{status.restrictions.join("; ")}</p>}
+    </li>
+  );
+}
+
+function ProviderPanel() {
+  const query = useQuery({
+    queryKey: ["provider-status"],
+    queryFn: fetchProvidersStatus,
+    refetchInterval: 10000,
+    retry: 1
+  });
+  const providers = query.data?.providers;
+  return (
+    <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-base font-semibold">Providers</h3>
+        <button type="button" onClick={() => void query.refetch()} className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800">Refresh</button>
+      </div>
+      {query.isError && <p className="text-sm text-rose-300">Unable to read provider status.</p>}
+      {!providers && !query.isError && <p className="text-sm text-slate-400">Loading provider status...</p>}
+      {providers && (
+        <>
+          <ul className="grid gap-3 sm:grid-cols-2">
+            <ProviderRow status={providers.UPSTOX} />
+            <ProviderRow status={providers.FYERS} />
+          </ul>
+          <p className="mt-3 text-xs text-slate-400">
+            {query.data?.note} No credentials are shown here.
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -138,6 +188,7 @@ export function App() {
           </div>
         )}
 
+        <ProviderPanel />
         <Outlet />
       </main>
     </div>

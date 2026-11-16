@@ -30,6 +30,30 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   return parsed.data;
 }
 
+export interface ProviderStatusView {
+  id: "UPSTOX" | "FYERS";
+  enabled: boolean;
+  authState: string;
+  streamingState: string;
+  validatedAt: string | null;
+  expiresAt: string | null;
+  expiryKnown: boolean;
+  restrictions: string[];
+  error: string | null;
+}
+
+export interface ProvidersStatusResponse {
+  providers: Record<"UPSTOX" | "FYERS", ProviderStatusView> | null;
+  localManagement: boolean;
+  note: string;
+}
+
+export async function fetchProvidersStatus(): Promise<ProvidersStatusResponse> {
+  const res = await fetch("/api/providers/status", { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`Provider status request failed (${res.status})`);
+  return (await res.json()) as ProvidersStatusResponse;
+}
+
 export function formatUptime(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);

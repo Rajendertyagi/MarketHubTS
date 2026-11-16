@@ -1,6 +1,6 @@
 # Project Status
 
-> **Status:** Milestone 1 (application foundation/runtime) implemented; Milestone 2 (canonical contracts, catalog foundation, persistence/sync primitives) implemented in the real application (uncommitted working tree at verification). Not a functioning market-data platform yet.
+> **Status:** Milestones 1 and 2 are **published on `develop`**. Milestone 3 (provider adapter framework and resilient connectivity) is **implemented in the working tree** (uncommitted). Not a functioning market-data platform yet — no live streaming, historical or option-chain data.
 > **Last updated:** 2026-11-16
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
@@ -20,8 +20,9 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
 | `main` / `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (unchanged) |
-| `develop` / `origin/develop` (last pushed) | `ccbb66b41cd213c7595e236d443beb94efd83cf0` — "Harden Milestone 1 test quality and shutdown verification" |
-| Working tree at verification | **Uncommitted M2 implementation work present** on `develop` (contracts, market-core, database schema/migration/repository, tests, docs). Branch/HEAD/remote sync and working-tree state are task-specific; re-check with `git status --short --branch`. |
+| `develop` / `origin/develop` (published baseline) | `484c0a6add7bfde04b294c523a453f3bff4b5b1f` — "fix(m2): resolve catalog sync identity collisions and identifier normalization" |
+| M2 publication | `fa40420` "feat(m2): implement canonical instrument catalog", followed by corrective commit `484c0a6`. Both published on `develop`; `main` untouched. |
+| Working tree at verification | Clean (`## develop...origin/develop`). Branch/HEAD/remote sync and working-tree state are task-specific; re-check with `git status --short --branch`. |
 
 ### 2.2 Historical context (preserved)
 
@@ -46,7 +47,7 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | `apps/mcp-server` | Existing MCP STDIO `markethub_health` tool preserved; health contract compatibility maintained. |
 | Scripts/tooling | Windows-compatible `bun run dev`, `bun run build`, `bun run start`, plus individual dev/db/check commands. |
 
-### 3.2 Milestone 2 — canonical catalog foundation (implemented in working tree)
+### 3.2 Milestone 2 — canonical catalog foundation (published)
 | Component | Implemented behavior (verified by code/tests/build in this task) |
 |---|---|
 | `packages/contracts` | `market.ts` adds Zod-validated canonical market-domain schemas/types: exchange/segment/classification, canonical instruments, derivative specs (future/option), index-eligibility metadata, provider mappings, aliases, provenance/freshness/availability concepts, sync scope/batch/result/conflicts. Validation rejects invalid derivative combinations (e.g. future with option type/strike, option without strike/type, cash/index modeled as derivative). |
@@ -68,7 +69,7 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | Check | Result |
 |---|---|
 | `bun run typecheck` | Pass (exit 0) |
-| `bun test` | Pass - 56 tests, 0 failures, 237 expect() calls, 8 files |
+| `bun test` | Pass - 109 tests, 0 failures, 421 expect() calls, 14 files (agent-reported local verification; not CI evidence) |
 | `bun run build` | Pass (exit 0) |
 | M1 regression | Config, database, API, runtime, production serving, MCP health-contract, and contract tests pass |
 | M2 migration safety | Clean-install migration and M1 (`app_meta`) → M2 upgrade pass on isolated temporary databases |
@@ -93,13 +94,13 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 
 ## 5. Documentation status
 
-- Roadmap updated to reflect M1 implemented and M2 implemented in application (pending commit) with M3 as next dependency gate.
+- Roadmap updated to reflect M1 and M2 published on `develop`, with M3 as the active implementation milestone.
 - Architecture/catalog/semantics/lifecycle/decisions/references updated to record M2 implementation, persistence ownership, sync semantics, and remaining unverified/provider-integration gaps.
 - `AGENTS.md` and `README.md` remain aligned with the two-branch workflow and current foundation state; task reports must record exact Git state.
 
 ## 6. Known notes and limitations
 
-- M2 work is currently **uncommitted** on `develop`; no commit/push performed without authorization.
+- M2 is published on `develop` at `fa40420` + `484c0a6`; `main` remains unchanged.
 - Catalog domain is not yet wired to API/UI/MCP market surfaces and has no real provider data.
 - Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before M3.
 - Production start requires a prior build (`bun run build` then `bun run start`).
@@ -107,6 +108,6 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 
 ## 7. Readiness for next phase
 
-**Ready:** M1 runtime foundation and M2 canonical catalog/persistence/sync primitives are implemented and verified in the real application.
+**Ready:** M1 runtime foundation and M2 canonical catalog/persistence/sync primitives are published and verified in the real application. The M3 readiness/research gate is complete (official Upstox and FYERS auth, rate-limit and app-type findings recorded in [REFERENCES.md](REFERENCES.md) and [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md)).
 
-**Next dependencies (per roadmap):** verify official Upstox/FYERS instrument/auth/market-data details and current NSE/BSE eligibility/contracts from authoritative sources; then proceed to **M3 — Provider integration: Upstox and FYERS** (adapters, auth/config, catalog ingestion/mapping, independent connectivity) without starting bulk downloads/search UI prematurely. Commit/push M2 only with explicit authorization.
+**Active milestone:** **M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS)** is implemented in the working tree: portable encrypted SQLite credential store with a local key file, Upstox Analytics Token adapter, FYERS V3 non-trading-app OAuth adapter with loopback callback, independent provider registry, credential routes on the main app behind a single local-peer check, LAN-safe read-only diagnostics and minimal WebUI provider status. Reliability work covers bounded timeouts/retries, atomic credential updates, fail-closed key handling and provider independence. No live broker authentication was performed; all provider tests use mocks. M3 remains uncommitted.

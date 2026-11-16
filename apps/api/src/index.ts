@@ -1,5 +1,8 @@
-import { loadConfig, redactConfigForLog } from "@markethub/config";
-import { openDatabase, runMigrations, defaultMigrationsFolder, type DatabaseHandle } from "@markethub/database";
+import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@markethub/config";
+import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, type DatabaseHandle } from "@markethub/database";
+import { ProviderRegistry } from "@markethub/market-core";
+import { UpstoxAdapter } from "@markethub/broker-upstox";
+import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
 import { createLogger } from "./lib/logger";
 
@@ -22,14 +25,26 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "database", message });
-    try {
-      db?.close();
-    } catch {}
+    try { db?.close(); } catch {}
     process.exitCode = 1;
     return;
   }
 
-  const app = createApp({ config, db, logger, startedAt: Date.now() });
+  const credentials = new SqliteCredentialStore(db);
+  const providerConfig = providerConfigFromAppConfig(config);
+  const registry = new ProviderRegistry();
+  const upstox = new UpstoxAdapter({ credentials, config: providerConfig });
+  const fyers = new FyersAdapter({ credentials, config: providerConfig });
+  registry.register(upstox);
+  registry.register(fyers);
+  if (credentials.status().state === "UNAVAILABLE") {
+    logger.warn("credentials_unavailable", { reason: credentials.status().reason ?? "unknown" });
+  }
+
+  const app = createApp({
+    config, db, logger, startedAt: Date.now(),
+    providerRegistry: registry, credentials, providerConfig, upstox, fyers
+  });
 
   try {
     server = Bun.serve({ hostname: config.host, port: config.port, fetch: app.fetch });
@@ -37,9 +52,7 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "server", message });
-    try {
-      db?.close();
-    } catch {}
+    try { db?.close(); } catch {}
     process.exitCode = 1;
     return;
   }
@@ -49,14 +62,10 @@ async function main() {
     shuttingDown = true;
     shutdownPromise = (async () => {
       logger.info("shutdown_start", { signal });
-      try {
-        if (server) await server.stop(true);
-      } catch (error) {
+      try { if (server) await server.stop(true); } catch (error) {
         logger.warn("server_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
-      try {
-        db?.close();
-      } catch (error) {
+      try { db?.close(); } catch (error) {
         logger.warn("db_close_error", { message: error instanceof Error ? error.message : String(error) });
       }
       logger.info("shutdown_complete", { signal });
@@ -66,22 +75,13 @@ async function main() {
     return shutdownPromise;
   };
 
-  process.on("SIGINT", () => {
-    void shutdown("SIGINT", true);
-  });
-  process.on("SIGTERM", () => {
-    void shutdown("SIGTERM", true);
-  });
-  // Test-only hook to prove graceful shutdown completion in environments where signal delivery is unreliable.
+  process.on("SIGINT", () => { void shutdown("SIGINT", true); });
+  process.on("SIGTERM", () => { void shutdown("SIGTERM", true); });
   if (process.env.MARKETHUB_TEST_SHUTDOWN_ON_STDIN_END === "1" && process.stdin && typeof process.stdin.on === "function") {
-    const onStdinEnd = () => {
-      void shutdown("STDIN_END", true);
-    };
+    const onStdinEnd = () => { void shutdown("STDIN_END", true); };
     process.stdin.on("end", onStdinEnd);
     process.stdin.on("close", onStdinEnd);
-    try {
-      process.stdin.resume();
-    } catch {}
+    try { process.stdin.resume(); } catch {}
   }
 }
 

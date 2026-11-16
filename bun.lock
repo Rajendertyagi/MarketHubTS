@@ -13,9 +13,12 @@
       "name": "@markethub/api",
       "version": "0.1.0",
       "dependencies": {
+        "@markethub/broker-fyers": "workspace:*",
+        "@markethub/broker-upstox": "workspace:*",
         "@markethub/config": "workspace:*",
         "@markethub/contracts": "workspace:*",
         "@markethub/database": "workspace:*",
+        "@markethub/market-core": "workspace:*",
         "@markethub/shared": "workspace:*",
         "hono": "4.13.18",
         "zod": "4.6.7",
@@ -69,6 +72,10 @@
     "packages/broker-fyers": {
       "name": "@markethub/broker-fyers",
       "version": "0.1.0",
+      "dependencies": {
+        "@markethub/contracts": "workspace:*",
+        "@markethub/market-core": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "7.0.2",
       },
@@ -76,6 +83,10 @@
     "packages/broker-upstox": {
       "name": "@markethub/broker-upstox",
       "version": "0.1.0",
+      "dependencies": {
+        "@markethub/contracts": "workspace:*",
+        "@markethub/market-core": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "7.0.2",
       },

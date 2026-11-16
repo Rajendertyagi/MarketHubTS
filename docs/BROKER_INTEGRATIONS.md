@@ -8,8 +8,11 @@
 - App must continue working with either provider alone, or with neither (using locally available/non-broker data).
 - Provider-specific logic stays inside adapters; additional providers must not require MCP/WebUI contract changes.
 
-## Current implementation
-- `packages/broker-fyers` and `packages/broker-upstox`: **placeholder scaffolds only** (no auth, connections, subscriptions, or normalization).
+## Current implementation (M3, uncommitted)
+- `packages/broker-upstox`: Analytics Token REST validation adapter.
+- `packages/broker-fyers`: V3 non-trading-app OAuth adapter with loopback callback.
+- Encrypted SQLite credential store with portable key file; independent provider registry; loopback-only privileged management API; LAN-safe read-only status.
+- No live authentication, subscriptions, normalization pipelines or market data flows yet (M4+).
 
 ## Target adapter responsibilities
 - Authentication and token lifecycle (secure storage, no plaintext).
@@ -18,11 +21,18 @@
 - Health/error/limit reporting and normalization into canonical models with attribution/timestamps/freshness.
 - Preserve provider-specific fields; never fabricate raw provider-supplied market fields.
 
-## Verification required before implementation
-- Official Upstox (current V3) and FYERS API capabilities, fields, limits, entitlements, auth/session behavior.
-- Official SDK package names and **Bun compatibility** (not verified/installed).
-- Secure Windows credential storage mechanism and backup/key-material implications.
-- Use current official docs; do not rely on discontinued Upstox legacy endpoints.
+## M3 readiness (verified 2026-11-16)
+- Upstox: **Analytics Token** (free, read-only, 1-year, no OAuth/static IP for market data); validate with `GET /v2/market/status/NSE`. No daily OAuth or trading APIs in M3.
+- FYERS: V3 individual-app OAuth using a **non-trading (data-only) app** (no static IP, no order placement); loopback callback matching the registered redirect URI; daily 6:30 AM expiry; no assumed refresh.
+- HTTP: Bun native `fetch`; no broker SDKs; no new runtime dependencies.
+- Credentials: portable encrypted SQLite + local key file (AD-021); no Windows/OS credential store, no plaintext.
+- Limits: no hardcoded caps; FYERS Standard limits as of 16 Oct 2026; report actual capability/restrictions.
+- Full source list and details: [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [REFERENCES.md](REFERENCES.md).
+
+## Still to verify
+- Actual account entitlements and Analytics Token generation on the account.
+- Exact provider field availability and feed protocols (M4/M5).
+- Backup/restore design with key material (M9).
 
 ## Safety
 - Do not place orders during testing.

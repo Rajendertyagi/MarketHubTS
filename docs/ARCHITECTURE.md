@@ -10,7 +10,7 @@ MarketHubTS is the **only intended future MarketHub application** (clean, indepe
 
 It collects, normalizes, organizes, maintains, and exposes market data through a **single canonical data and application-services foundation** consumed by **MCP** (AI agents/applications) and **REST/SSE + WebUI** (humans, devices, and LAN clients). **LAN access is required** so other applications, devices, and multiple MCP clients can connect to the same running application. Local browser-based WebUI is acceptable; a native desktop wrapper is optional (do not prematurely force either). No cloud hosting, no public internet exposure, no application-level login/authentication. LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation; safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope).
 
-**Current state:** Phase 1 scaffold only (health API, web shell, MCP stdio health tool, DB/contracts scaffolding). No market-data pipelines, broker integrations, catalog, realtime streams, alerts/scanners, or operational configuration are implemented.
+**Current state:** M1 runtime foundation and M2 canonical catalog/persistence/sync are **published on `develop`** (`fa40420`, `484c0a6`). M3 (provider adapter framework and resilient connectivity) is **implemented in the working tree** (uncommitted): encrypted credential store, Upstox/FYERS auth adapters, independent registry, loopback-only management API and read-only diagnostics. No live/historical/option-chain pipelines, realtime streams, alerts/scanners, or operational configuration are implemented yet.
 
 **Engineering approach:** modular monolith with clear module boundaries, defined interfaces/contracts, fault containment, and bounded resources per [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (not microservices; no claim of absolute isolation in a shared process).
 
@@ -88,7 +88,7 @@ flowchart TB
 
 | Subsystem | Responsibility (planned unless noted) | Current state |
 |---|---|---|
-| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | Placeholder packages (no API/SDK integration) |
+| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | **Implemented (M3):** Upstox Analytics Token REST validation; FYERS V3 non-trading OAuth with loopback callback; no WS/subscriptions yet (M4) |
 | Canonical catalog & identity (`packages/market-core`, `packages/contracts`) | Canonical instrument/contract identity, mappings, aliases, lifecycle, transactional sync, validation | **Implemented (M2):** contracts, normalized identity keys, sync service, repository ports; not yet fed by real providers |
 | Normalization/provenance | Stable canonical fields + preserved provider-specific fields, attribution, timestamps, freshness/availability | **Partially implemented (M2):** domain structures/rules and preservation fields; no live/provider normalization pipeline |
 | Source selection | Automatic choice by capability/availability/freshness/reliability/limits; optional manual preferences (WebUI) | Not implemented |
@@ -107,6 +107,7 @@ flowchart TB
 - Adapters emit normalized records + provider-native details/attribution into canonical foundation.
 - No adapter logic in MCP, WebUI, or shared service consumers.
 - Adapters are independently connectable/disconnectable/removable; failure of one must not break others.
+- **M3 implementation:** Upstox uses the read-only Analytics Token (validated via `GET /v2/market/status/NSE`); FYERS uses V3 individual-app OAuth with a non-trading (data-only) app and a loopback callback. REST via Bun native `fetch`; no broker SDKs. Provider state distinguishes disabled / not configured / auth required / authenticated (REST validated) / expired or revoked / degraded / error; streaming remains explicitly unstarted until M4. Credential-changing routes are on the main app behind a single local-peer check; no separate management server or CSRF framework. No app-level login is introduced. See [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md) and AD-021/AD-022.
 
 ## 5. Canonical catalog and identity architecture
 
@@ -201,7 +202,7 @@ flowchart TB
 - **Implemented (M1/M2):** `app_meta` and catalog persistence (`canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `catalog_sync_runs`) with versioned migrations, PK/FK/unique/index constraints, JSON fields for extensible/provider-specific metadata, and transactional repository/sync support.
 - **Planned:** cached historical candles, option-chain snapshots, watchlists, alert/scanner definitions and history/results, operational configuration/state, diagnostics metadata as needed.
 - **Not stored per-event:** every raw tick or every market-depth change.
-- Safe shutdown/recovery, backup/restore, integrity verification (planned). Credentials/tokens never stored in plaintext; full restore must include required key material/state.
+- Safe shutdown/recovery, backup/restore, integrity verification (planned). Credentials/tokens never stored in plaintext. **Approved M3 storage (AD-021):** encrypted in SQLite with one local key file in the app folder; no Windows/OS credential store. Full restore must include that key file — a database-only copy is not a complete backup (AD-014 preserved).
 
 ## 17. Startup/shutdown lifecycle
 

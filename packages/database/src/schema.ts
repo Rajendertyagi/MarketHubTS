@@ -225,6 +225,21 @@ export const catalogSyncRuns = sqliteTable(
   ]
 );
 
+export const providerCredentials = sqliteTable(
+  "provider_credentials",
+  {
+    provider: text("provider").notNull(),
+    name: text("name").notNull(),
+    formatVersion: integer("format_version").notNull(),
+    nonce: text("nonce").notNull(), // base64
+    ciphertext: text("ciphertext").notNull(), // base64
+    tag: text("tag").notNull(), // base64
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => [uniqueIndex("provider_credentials_identity_uq").on(t.provider, t.name)]
+);
+
 export type CanonicalInstrumentRow = typeof canonicalInstruments.$inferSelect;
 export type NewCanonicalInstrumentRow = typeof canonicalInstruments.$inferInsert;
 export type DerivativeContractRow = typeof derivativeContracts.$inferSelect;
