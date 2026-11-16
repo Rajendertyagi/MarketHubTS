@@ -66,23 +66,22 @@
 
 ---
 
-### M2 — Canonical contracts, catalog foundation, and persistence primitives (real application)
+### M2 — Canonical contracts, catalog foundation, and persistence primitives (real application) — **Implemented in app (pending commit)**
 **Objective:** establish shared canonical schemas, instrument identity/catalog model, and DB/migration foundations used by all services, as part of the real MarketHubTS application.
 
 **Prerequisites:** M1; verification of exchange universe rules and key provider identifier formats (sufficient to model mappings).
 
-**Key work:** canonical data contracts (Zod/shared types), catalog entities/mappings/aliases/status/sync metadata, migration framework and initial domain schema, transactional catalog sync design, provenance/freshness/availability model. Support a **limited initial instrument set** while designing for full intended catalogue expansion; never hardcode changing exchange information.
+**Key work (completed):** canonical market-domain contracts (Zod/shared types), instrument/derivative/index-eligibility/mapping/alias/provenance/sync models, normalized identity-key rules, `market-core` domain/sync service and repository ports, SQLite schema + additive migration (`0001`), `SqliteCatalogRepository`, and transactional source-independent sync primitives. Supports synthetic/limited fixtures while designed for full intended catalogue expansion; no hardcoded changing exchange information.
 
-**User-visible deliverables:** none or minimal internal diagnostics; enables subsequent data features and the first end-to-end vertical slice.
+**User-visible deliverables:** none (internal domain foundation); enables subsequent provider ingestion and data features.
 
-**Acceptance criteria:** schemas/types compile and are consumed by services; migrations run safely; catalog can be loaded/updated transactionally without destroying previous valid state in tests; identity/mapping rules documented and implemented.
+**Acceptance criteria (met in verification):** schemas/types compile and are consumed by domain/database code; migrations run safely (clean install and M1→M2 upgrade preserving `app_meta`); catalog can be loaded/updated transactionally without destroying previous valid state; duplicate/ambiguous identities and mappings handled safely; identity/mapping/sync rules documented and implemented; M1 regression intact.
 
-**Verification:** unit/integration tests for schema validation, migrations, transactional sync failure safety (automated guardrails introduced progressively).
+**Verification:** automated tests for schema/domain validation, migrations, persistence, transactional sync safety/failure recovery, and required M2 scenarios (`tests/market/catalog.test.ts`) plus full typecheck/test/build.
 
-**Risks:** incomplete provider/exchange metadata; identity edge cases for expired/changed contracts.
+**Risks/remaining verification:** incomplete provider/exchange metadata; current NSE index F&O eligibility and provider-native identifier formats require official verification before M3.
 
-**Non-goals:** live broker connectivity, UI market views, MCP market tools beyond scaffolding.
-
+**Non-goals (preserved):** live broker connectivity, bulk catalog downloads/seeding, UI market views/search, MCP market tools/HTTP transport.
 ---
 
 ### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS)

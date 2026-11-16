@@ -104,6 +104,8 @@
       "name": "@markethub/database",
       "version": "0.1.0",
       "dependencies": {
+        "@markethub/contracts": "workspace:*",
+        "@markethub/market-core": "workspace:*",
         "drizzle-orm": "0.45.4",
       },
       "devDependencies": {
@@ -114,6 +116,9 @@
     "packages/market-core": {
       "name": "@markethub/market-core",
       "version": "0.1.0",
+      "dependencies": {
+        "@markethub/contracts": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "7.0.2",
       },

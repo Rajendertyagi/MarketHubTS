@@ -97,3 +97,4 @@ export function getDatabaseInfo(sqlite: Database): { ok: boolean; journalMode?: 
 }
 
 export { schema };
+export { SqliteCatalogRepository } from "./repositories/catalog";

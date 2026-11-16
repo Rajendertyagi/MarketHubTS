@@ -1,10 +1,10 @@
 # Market Data Semantics
 
 > **Status:** Aligned summary. Authoritative details: [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [ARCHITECTURE.md](ARCHITECTURE.md).
-> **Last updated:** 2026-11-15
+> **Last updated:** 2026-11-16
 
 ## Current state
-Phase 1 does not implement market data processing or normalization.
+M1/M2 implement the application foundation and canonical catalog domain foundation (contracts, identity, persistence, transactional sync primitives) with synthetic/test validation. **Live market data processing/normalization, provider ingestion, historical/option-chain pipelines, and consumer-facing market surfaces are not implemented.** No raw provider-supplied market fields are fabricated.
 
 ## Confirmed canonical rules (target)
 - **Single source of truth** for instrument identity, symbol normalization, exchange/segment, quotes, depth, OHLC candles, timestamps, ordering, and freshness.

@@ -1,7 +1,7 @@
 # Data Lifecycle and Storage
 
-> **Status:** Confirmed lifecycle requirements and target storage design; implementation largely pending.
-> **Last updated:** 2026-11-15
+> **Status:** Confirmed lifecycle requirements and target storage design; M1/M2 persistence foundations implemented (app metadata + canonical catalog/sync storage). Live/historical/option-chain data lifecycles remain pending.
+> **Last updated:** 2026-11-16
 > **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
 
 ## 1. Storage principles (confirmed)
@@ -60,11 +60,12 @@
 
 ## 6. Database design and operations (target)
 
-### 6.1 Current scaffold (verified)
-- `packages/database`: `openDatabase()` creates dirs, opens `bun:sqlite` DB (`MARKETHUB_DB_PATH` or `./data/markethub.sqlite`), sets `PRAGMA journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout=5000`, returns Drizzle handle + sqlite handle + safe close (best-effort WAL checkpoint).
-- `checkDatabase()` runs `SELECT 1`.
-- Schema: `app_meta(key, value, updated_at)` only.
-- Drizzle config (`drizzle.config.ts`, sqlite, `./drizzle` out) and migration runner (`src/migrate.ts`) scaffolded; **no generated migration files yet**.
+### 6.1 Current implementation (verified)
+- `packages/database`: `openDatabase()` creates dirs, opens `bun:sqlite` DB (`MARKETHUB_DB_PATH` or `./data/markethub.sqlite`), sets `PRAGMA journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout=5000`, returns Drizzle handle + sqlite handle + safe close (best-effort WAL checkpoint). `checkDatabase()` runs `SELECT 1`.
+- **Migrations (versioned, additive):** `0000_tan_la_nuit.sql` (`app_meta`) and `0001_good_agent_brand.sql` (catalog foundation). Drizzle config (`drizzle.config.ts`, sqlite, `./drizzle` out) and migration runner (`src/migrate.ts`) implemented.
+- **Catalog schema (M2):** `canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `catalog_sync_runs` with PK/FK/unique/index constraints and JSON fields for extensible/provider-specific metadata/provenance.
+- **Repository/transactions (M2):** `SqliteCatalogRepository` provides lookups and transactional catalog writes used by `CatalogSyncService`; failed/conflicting syncs roll back catalog changes (no partial catalog writes). Failed-run audit persistence is best-effort outside rolled-back catalog transactions when supported.
+- **Not yet implemented:** domain schemas/storage for candles, option-chain snapshots, watchlists, alerts/scanners/history, operational config persistence beyond foundation, backup/restore, integrity maintenance workflows.
 
 ### 6.2 Planned capabilities
 - Versioned migrations committed and applied appropriately.

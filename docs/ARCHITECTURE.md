@@ -86,22 +86,21 @@ flowchart TB
 
 ## 3. Main subsystem responsibilities
 
-| Subsystem | Responsibility (planned unless noted) | Current scaffold |
+| Subsystem | Responsibility (planned unless noted) | Current state |
 |---|---|---|
-| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | Placeholder packages |
-| Canonical catalog & identity (`packages/market-core`) | Canonical instrument/contract identity, mappings, aliases, lifecycle, transactional sync | Placeholder |
-| Normalization/provenance | Stable canonical fields + preserved provider-specific fields, attribution, timestamps, freshness/availability | Not implemented |
+| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | Placeholder packages (no API/SDK integration) |
+| Canonical catalog & identity (`packages/market-core`, `packages/contracts`) | Canonical instrument/contract identity, mappings, aliases, lifecycle, transactional sync, validation | **Implemented (M2):** contracts, normalized identity keys, sync service, repository ports; not yet fed by real providers |
+| Normalization/provenance | Stable canonical fields + preserved provider-specific fields, attribution, timestamps, freshness/availability | **Partially implemented (M2):** domain structures/rules and preservation fields; no live/provider normalization pipeline |
 | Source selection | Automatic choice by capability/availability/freshness/reliability/limits; optional manual preferences (WebUI) | Not implemented |
 | Live state | In-memory ticks/quotes/depth for display/consumption; repopulated from streams on restart | Not implemented |
 | Historical service | On-demand retrieval, user-configured sync, local candle cache, gap fill from suitable provider, clear unavailability | Not implemented |
 | Option-chain snapshots | Persistent snapshots per WebUI capture config (underlying/expiry/strikes/capture/streaming independent) | Not implemented |
-| Shared services | Market data, watchlists, alerts, scanners, config, diagnostics — single implementation for all consumers | Health check only |
+| Shared services | Market data, watchlists, alerts, scanners, config, diagnostics — single implementation for all consumers | Health/status foundation only |
 | MCP (`apps/mcp-server`) | AI-facing tools/resources/events over shared services; no separate market logic | STDIO `markethub_health` only |
-| REST/SSE (`apps/api`) | Human/UI and programmatic access over shared services; SSE for realtime/events (planned) | `/health`, `/` only |
-| WebUI (`apps/web`) | Human interface and operational control centre | Health display shell |
-| Database (`packages/database`) | SQLite persistence, migrations, WAL, controlled writes, backup/restore support | `app_meta` scaffold, open/check/migrate helpers |
+| REST/SSE (`apps/api`) | Human/UI and programmatic access over shared services; SSE for realtime/events (planned) | `/health`, `/ready`, `/api/status` foundation; no market endpoints/SSE |
+| WebUI (`apps/web`) | Human interface and operational control centre | System-status shell (real backend/runtime status) |
+| Database (`packages/database`) | SQLite persistence, migrations, WAL, controlled writes, backup/restore support | **Implemented foundation + M2 catalog:** `app_meta` and catalog tables/migration/repository/transactions |
 | Realtime/analytics (`packages/realtime`, `analytics`) | Bounded event delivery, derived indicators/analytics (separately labelled) | Placeholders |
-
 ## 4. Provider-adapter boundary
 
 - All provider-specific protocols, auth, identifiers, field names, limits, and quirks remain inside adapters.
@@ -199,9 +198,10 @@ flowchart TB
 ## 16. Database responsibilities
 
 - SQLite (`bun:sqlite`) + Drizzle; local single-user, WAL, controlled writes/transactions, prepared statements (planned), batched persistence where appropriate.
-- Stores: catalog/sync metadata, cached historical candles, option-chain snapshots, watchlists, alert/scanner definitions and history/results, configuration/state, diagnostics metadata as needed (planned).
+- **Implemented (M1/M2):** `app_meta` and catalog persistence (`canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `catalog_sync_runs`) with versioned migrations, PK/FK/unique/index constraints, JSON fields for extensible/provider-specific metadata, and transactional repository/sync support.
+- **Planned:** cached historical candles, option-chain snapshots, watchlists, alert/scanner definitions and history/results, operational configuration/state, diagnostics metadata as needed.
 - **Not stored per-event:** every raw tick or every market-depth change.
-- Versioned migrations, safe shutdown/recovery, backup/restore, integrity verification (planned). Credentials/tokens never stored in plaintext; full restore must include required key material/state.
+- Safe shutdown/recovery, backup/restore, integrity verification (planned). Credentials/tokens never stored in plaintext; full restore must include required key material/state.
 
 ## 17. Startup/shutdown lifecycle
 
