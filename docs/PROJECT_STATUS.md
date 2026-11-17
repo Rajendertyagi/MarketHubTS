@@ -1,6 +1,6 @@
 # Project Status
 
-> **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stages D and E are published on `develop` and accepted**. **M4 Stage F is implemented and published on `develop` (`35b5d2e`), pending independent review before any merge into `main`.** Stage D delivers the provider-ready backend, Stage E delivers the WebUI live-data experience, and Stage F hardens reconnect/recovery/concurrency/resource paths — but none constitutes a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stages C and G remain outstanding.
+> **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stages D and E are published on `develop` and accepted**. **M4 Stage F is implemented and published on `develop` (`d95c3ac`) and has passed independent code review; merging into `main` remains a separate authorization decision.** Stage D delivers the provider-ready backend, Stage E delivers the WebUI live-data experience, and Stage F hardens reconnect/recovery/concurrency/resource paths — but none constitutes a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stages C and G remain outstanding.
 > **Last updated:** 2026-11-17
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
@@ -20,8 +20,8 @@ This is **not** a functioning market-data platform: no live provider connection 
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
 | `main` / `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (unchanged) |
-| `develop` / `origin/develop` | Current HEAD is the Stage F implementation commit `35b5d2e82b04984fd36ef84fd25410730459623c` (synced with remote). Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
-| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (`4dcce71` implementation, `650c8ff` first fix-forward, `d2f72fc` final review corrections + V3 references, `a0aa0ae` reconnect/pending-update lifecycle, `f51e7db` stale reconnect-timer cancellation); M4 Stage E (`ea0cae0` initial implementation, `00e6830` named SSE / manual retry / review fixes, `a8f4eef` initial-sync and retry-cancellation corrections, plus this documentation closeout which also includes the final refresh-before-snapshot and stale-snapshot fixes); M4 Stage F (`bf1044b` supervisor lifecycle/retirement/retry ownership, `21c92c7` retry sleep + hub timer seam + stress tests, `06b644c` hub scheduler typing, `35b5d2e` final-review fixes). `main` untouched throughout. |
+| `develop` / `origin/develop` | Current HEAD is the Stage F documentation-closeout commit `d95c3aceb4cbdf6b11404b7fd8eb98696808fb7f` (synced with remote). Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
+| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (`4dcce71` implementation, `650c8ff` first fix-forward, `d2f72fc` final review corrections + V3 references, `a0aa0ae` reconnect/pending-update lifecycle, `f51e7db` stale reconnect-timer cancellation); M4 Stage E (`ea0cae0` initial implementation, `00e6830` named SSE / manual retry / review fixes, `a8f4eef` initial-sync and retry-cancellation corrections, plus this documentation closeout which also includes the final refresh-before-snapshot and stale-snapshot fixes); M4 Stage F (`bf1044b` supervisor lifecycle/retirement/retry ownership, `21c92c7` retry sleep + hub timer seam + stress tests, `06b644c` hub scheduler typing, `35b5d2e` final-review fixes, `0c6e2fb` status documentation, `d95c3ac` independent-review fixes: stale-timer cancellation, factory-based test harness, timeout recovery tests). `main` untouched throughout. |
 
 ### 2.2 Historical context (preserved)
 
@@ -87,29 +87,32 @@ This is **not** a functioning market-data platform: no live provider connection 
 - **State (`apps/web/src/store/live-store.ts`):** Zustand store persisting across StrictMode controller remounts.
 - **Tests:** 45 focused web tests across 3 files with deterministic fake EventSource/fetch; no real network, no fake production endpoint, no driver unlock.
 
-### 3.8 M4 Stage F — reconnect/recovery/concurrency/resource hardening (published on `develop`, pending independent review)
+### 3.8 M4 Stage F — reconnect/recovery/concurrency/resource hardening (published on `develop`, independent code review passed)
 
 - **Supervisor (`apps/api/src/stream-supervisor.ts`):** mandatory `AbortSignal` on driver `start`/`updateSubscriptions`; `createDriver` factory with lazy acquisition; typed five-variant `OperationOutcome` (`applied`, `failed`, `timed-out`, `callback-retired`, `shutdown`) with supervisor-owned logical completion so the serialized queue is released independently of driver settlement; `appliedGeneration` advances only on `applied`. Every driver instance is terminal — one idempotent retirement owner calls `stop()` at most once, and every restart uses a fresh factory instance (disconnect, error, failed start/update, timeout, callback retirement, shutdown). Instance-level callback gate closed synchronously before abort; both timeout quiescence branches retire; callback-triggered retirement owns the single retry decision; explicit retry exhaustion after both ERROR and DISCONNECTED sets canonical ERROR with a meaningful `lastError`; jittered backoff with no budget reset on start resolution; shutdown releases all outstanding logical completions with `shutdown`.
 - **Composition (`apps/api/src/index.ts`):** `createDriver: () => new LockedUpstoxDriver()` — no real SDK, socket or provider connection; locked driver schedules no retries; factory failure is retried and never classified as locked.
 - **WebUI (`apps/web/src/lib/retry-sleep.ts` new, `components/LivePanel.tsx`):** abort-safe retry sleep with listener removal on every terminal path and immediate resolution for an already-aborted signal.
 - **Realtime (`packages/realtime/src/hub.ts`, `types.ts`):** narrow `IntervalScheduler` seam with global defaults; refresh timer armed/cleared deterministically; no production telemetry.
-- **Tests:** six new Stage F files (supervisor await points, timeout/lifecycle/quarantine/exhaustion, hub soak/timer, store stress, WebUI recovery/refresh, retry-sleep) plus in-place migration of `tests/market/supervisor.test.ts` to `createDriver` and mandatory-signal fakes. All deterministic; no real-time waiting in new tests. A fresh-context final review found 0 Critical and 2 Important findings, both fixed with RED→GREEN tests and a green full suite.
-- **Status:** implemented, verified and published on `develop`; **not yet accepted** — independent review and explicit authorization are required before merging into `main`.
+- **Tests:** six new Stage F files (supervisor await points, timeout/lifecycle/quarantine/exhaustion, hub soak/timer, store stress, WebUI recovery/refresh, retry-sleep) plus in-place migration of `tests/market/supervisor.test.ts` to `createDriver` and mandatory-signal fakes. All deterministic; no real-time waiting in new tests. A fresh-context final review found 0 Critical and 2 Important findings, both fixed with RED→GREEN tests and a green full suite. A subsequent independent review found three further issues — stale reconnect timer on confirmed STREAMING, single-instance test helpers, and timeout unresolved-operation recovery — all fixed with deterministic tests and a green full suite.
+- **Status:** implemented, verified and published on `develop`; **independent code review has passed**. Merging into `main` remains a separate authorization decision and has not been performed.
 
 ### 3.9 Verification snapshot (final, 2026-11-17)
 
 | Check | Result |
 |---|---|
-| `bun run typecheck` | Pass (exit 0) — all 12 workspaces |
-| `bun test` | Pass — **349 tests, 0 failures, 4990 expect() calls, 32 files** (local verification; not GitHub CI evidence) |
+| `bun run typecheck` | Pass (exit 0) — all 12 workspaces (local verification; not CI evidence) |
+| `bun test` | Pass — **352 tests, 0 failures, 5063 expect() calls, 32 files** (local verification; not GitHub CI evidence) |
 | Focused web tests | Pass — **55 tests, 0 failures, 777 expect() calls, 5 files** (local verification; not CI evidence) |
-| Focused Stage D tests | Pass — 69 tests, 0 failures, 270 expect() calls, 6 files |
-| Focused supervisor tests | Pass — 24 tests, 0 failures, 121 expect() calls (migrated to `createDriver` + mandatory signals) |
-| Focused Stage F tests | Pass — 69 tests across 6 new files (timeout/lifecycle 19, supervisor await 8, hub 6, store 5, recovery/refresh 5, retry-sleep 5) |
-| `bun run build` | Pass (exit 0) — packages/apps checks; web Vite build succeeded |
-| `git diff --check` | Pass (exit 0) |
+| Focused Stage D tests | Pass — 69 tests, 0 failures, 270 expect() calls, 6 files (local verification; not CI evidence) |
+| Focused supervisor tests | Pass — **25 tests, 0 failures, 160 expect() calls** (`tests/market/supervisor.test.ts`, migrated to `createDriver` + mandatory signals; local verification) |
+| Focused timeout tests | Pass — **21 tests, 0 failures, 105 expect() calls** (`tests/market/stage-f-timeout.test.ts`; local verification) |
+| Focused Stage F tests (aggregate) | Pass — **50 tests, 0 failures, 3862 expect() calls across 6 new files**: timeout/lifecycle 21 (105 assertions), supervisor await 8 (21), hub 6 (109), store 5 (3009), recovery/refresh 5 (512), retry-sleep 5 (106). Recomputed from actual per-file runs; local verification, not CI evidence. |
+| `bun run build` | Pass (exit 0) — packages/apps checks; web Vite build succeeded (local verification; not CI evidence) |
+| `git diff --check` | Pass (exit 0) (local verification; not CI evidence) |
 | Migration safety | Clean-install and M3→M4 upgrade tests pass on isolated temporary databases |
 | Locked boundary | No SDK construction, socket or provider contact in API/realtime/contracts source; production composes only `LockedUpstoxDriver` |
+
+All results above are **local verification** from this working tree. No GitHub Actions runs or commit status checks were found or relied upon; none of these results are GitHub CI evidence.
 
 ### 3.10 Manual/official verification notes
 
@@ -135,7 +138,7 @@ This is **not** a functioning market-data platform: no live provider connection 
 
 ## 6. Known notes and limitations
 
-- M1–M3, M4 Stages A/B/D/E and Stage F are published on `develop`; `main` remains unchanged. Stage D and Stage E are accepted; Stage F is implemented and published but pending independent review before merge.
+- M1–M3, M4 Stages A/B/D/E and Stage F are published on `develop`; `main` remains unchanged. Stage D and Stage E are accepted; Stage F is implemented, published and has passed independent code review, but merging into `main` remains a separate authorization decision.
 - The canonical catalog and live pipeline are now consumed by WebUI live views; MCP market surfaces remain unwired and no real provider data is loaded.
 - Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before live integration.
 - Production start requires a prior build (`bun run build` then `bun run start`).
@@ -143,6 +146,6 @@ This is **not** a functioning market-data platform: no live provider connection 
 
 ## 7. Readiness for next phase
 
-**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D/E/F live-data pipeline, WebUI experience and hardening are implemented, verified and published on `develop`. **Stage D and Stage E are accepted; Stage F is implemented and published but pending independent review before merge into `main`.** The production driver remains locked; no live provider connection is attempted and no real feed has been tested.
+**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D/E/F live-data pipeline, WebUI experience and hardening are implemented, verified and published on `develop`. **Stage D and Stage E are accepted; Stage F is implemented, published and has passed independent code review. Merging `develop` into `main` remains a separate authorization decision and has not been performed.** The production driver remains locked; no live provider connection is attempted and no real feed has been tested.
 
-**Next:** independent review of Stage F and a decision on merging `develop` into `main`; then **Stage C** (FYERS Data Socket adapter), then **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.
+**Next:** a decision on merging `develop` into `main` (separate authorization); then **Stage C** (FYERS Data Socket adapter), then **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.
