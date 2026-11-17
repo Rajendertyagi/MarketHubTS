@@ -1,6 +1,6 @@
 import type { LiveChangeEvent, LiveEventSource } from "@markethub/contracts";
 import type {
-  ClientSession, CursorInput, HubStats, LiveEventHubOptions, OpenStreamResult, OutboundEvent
+  ClientSession, CursorInput, HubStats, IntervalScheduler, LiveEventHubOptions, OpenStreamResult, OutboundEvent
 } from "./types";
 
 /** Approximate retained payload size. UTF-16 length is a deterministic, documented proxy for bytes. */
@@ -162,8 +162,11 @@ export class LiveEventHub {
     private readonly opts: LiveEventHubOptions
   ) {}
 
-  private get timerScheduler() {
-    return this.opts.timerScheduler ?? { setInterval, clearInterval };
+  private get timerScheduler(): IntervalScheduler {
+    return this.opts.timerScheduler ?? {
+      setInterval: (fn, ms) => setInterval(fn, ms),
+      clearInterval: (handle) => clearInterval(handle)
+    };
   }
 
   start(): void {

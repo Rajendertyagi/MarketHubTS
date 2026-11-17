@@ -16,10 +16,13 @@ export interface LiveEventHubOptions {
   /** 0 disables the periodic refresh timer (useful in tests). */
   refreshIntervalMs: number;
   /** Narrow seam for deterministic refresh-timer control in tests. Defaults to globals. */
-  timerScheduler?: {
-    setInterval(fn: () => void, ms: number): ReturnType<typeof setInterval>;
-    clearInterval(handle: ReturnType<typeof setInterval>): void;
-  };
+  timerScheduler?: IntervalScheduler;
+}
+
+/** Narrow interval-timer seam used by LiveEventHub. */
+export interface IntervalScheduler {
+  setInterval(fn: () => void, ms: number): ReturnType<typeof setInterval>;
+  clearInterval(handle: ReturnType<typeof setInterval>): void;
 }
 
 export interface CursorInput {
