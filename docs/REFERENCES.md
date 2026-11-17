@@ -157,7 +157,7 @@ Official sources: [TS 7.0 announcement](https://devblogs.microsoft.com/typescrip
 
 ## 10A. Multi-provider streaming architecture research (accessed 2026-11-17)
 
-Additional official sources reviewed for [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md). These extend §2–§6; detailed findings and capability matrix are in that document.
+Additional official sources reviewed for [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md). These extend §2–§6; detailed findings and capability matrix are in that document. Field-level semantics were re-verified directly from the Upstox Market Data Feed V3 page and the FYERS Symbol Update / Indices Update / Depth Update pages on **2026-11-17** for the AD-024 finalization: Upstox LTPC is documented as "only the latest trading price (LTP) and close price (CP) changes"; Full/Full D30 add five/30 market levels, OHLC, `atp`, `vtt`, OI/IV and Greeks; FYERS `sf` supplies `prev_close_price`, day OHLC, `vol_traded_today`, `avg_trade_price`, `ch`/`chp` and L1 bid/ask, while `if` explicitly omits volume and bid/ask. Upstox `cp` ("Close price") and FYERS `prev_close_price` ("Previous day's close") both denote the **previous session close**; the canonical `close` field is documented accordingly with an additive `previousClose` migration (no current contract change). FYERS `last_traded_time` is documented only as an integer — unit/precision unverified, a bounded live-validation item.
 
 **Upstox (V3 feed, verified 2026-11-17):**
 | Source | URL | Verified notes |

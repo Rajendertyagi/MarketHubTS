@@ -33,8 +33,8 @@ This section reflects the actual `develop` source (unchanged since `2e2384b`), n
 
 | Area | Verified implementation |
 |---|---|
-| Canonical service | `packages/market-core/src/live/service.ts` — `MarketDataService` facade over `LiveStateStore`; **owns canonical storage and freshness evaluation** (freshness via `evaluateFreshness` in `live/freshness.ts`); one instance composed in `apps/api/src/index.ts` and shared by REST, SSE and the supervisor. |
-| Live state | `packages/market-core/src/live/store.ts` — `LiveStateStore` holds `LiveItem` per canonical ID; each item has `observations: Partial<Record<ProviderId, ProviderObservation>>` and one derived `selected: SelectedObservation`. Bounded by `maxInstruments`; monotonic revision; synchronous detached notifications; defensive `structuredClone`. |
+| Canonical service (façade) | `packages/market-core/src/live/service.ts` — `MarketDataService` is the **application-facing façade** (`track`/`untrack`, `applyProviderUpdate`, `getSnapshot`, `subscribe`, connection status); it delegates all storage and evaluation to `LiveStateStore`. One instance is composed in `apps/api/src/index.ts` and shared by REST, SSE and the supervisor. |
+| Live state (actual holder) | `packages/market-core/src/live/store.ts` — `LiveStateStore` is the **actual in-memory state holder** and **invokes freshness evaluation** (`evaluateFreshness` in `live/freshness.ts`) on write and on materialization. It holds `LiveItem` per canonical ID; each item has `observations: Partial<Record<ProviderId, ProviderObservation>>` and one derived `selected: SelectedObservation`. Bounded by `maxInstruments`; monotonic revision; synchronous detached notifications; defensive `structuredClone`. |
 | Observation model | `packages/contracts/src/live.ts` — `ProviderObservation` carries provider, canonical ID, `CanonicalLiveValue` (ltp, ltq, close, open, high, low, volume, `native`), source/receipt timestamps with unit and meaning, freshness, availability and provenance. `CanonicalLiveValue` has **no depth field**; depth is only ever inside `native`. |
 | Source selection | `packages/market-core/src/live/selection.ts` — `selectObservation()` picks **one whole observation from one provider**; connected + FRESH observations win, ranked by compatible source timestamp or `receivedAt`; otherwise LAST_KNOWN fallback. |
 | Freshness | `packages/market-core/src/live/freshness.ts` — session-aware (OPEN/CLOSED/UNKNOWN), source-vs-receipt age basis, bounded retained age. |
@@ -111,7 +111,7 @@ Official sources reviewed on 2026-11-17 (full URL list in §16).
 - **Limits (verified):** Data Socket 100 symbols Standard / 5,000 Prime, **per user across all connections**; TBT 1/15. Over-limit → connection not established. Current limits need at least Node SDK v1.1.1.
 - **Reconnection:** opt-in; Node `autoReconnect(count)` (max 50), docs also spell `autoreconnect(trycount)` — casing discrepancy, requires live verification. With auto-reconnect on, previous symbols are resubscribed automatically. MarketHubTS should keep its own reconnection ownership (§9).
 - **SDK:** `fyers-api-v3@2.4.1`; `DataSocket.getInstance(token, logPath, loggingFlag)` (README) vs `new FyersSocket(...)` (docs) — construction form and logging-flag polarity require live verification. `engines: node >=14`. Dependencies include `ws`, `axios`, `protobufjs`; shipped code is **obfuscated** (`javascript-obfuscator`). `setQueueProcessInterval(ms)` 1–2000 ms.
-- **Timestamps:** `last_traded_time`/`exch_feed_time` are 10-digit Unix epoch **seconds** (inferred from sample values, not explicitly documented); `exch_feed_time` is not in the attribute tables.
+- **Timestamps:** `last_traded_time` is documented only as an integer; its **unit and precision are not stated** and must not be inferred from the type or sample magnitude (bounded live-validation item, §17). `exch_feed_time` appears in samples but is not in the attribute tables. Until verified, store verbatim with unit unverified and do not use as a trusted ordering key (§12).
 - **Bun compatibility:** **not documented.** Node compatibility must not be assumed to imply Bun compatibility.
 
 ### 6.1 Native Bun WebSocket vs official SDK — recommendation
@@ -124,6 +124,7 @@ The capability matrix (§7) and the component model (§9) describe **live stream
 
 - **FYERS OI, IV and Greeks are not streaming fields.** They do not appear in any Data Socket message (`sf`/`if`/`dp`/lite). They are available only through **REST** endpoints (`getOptionChain`, `get_fno_historical_data` with `include_oi`/`include_greeks`), which are plan-dependent and subject to REST rate limits. They therefore belong to the **option-chain / historical milestones (M5)**, not to the live `derivatives` component. A live FYERS `derivatives` component must be reported **unavailable/unsupported**, never populated from a REST call on a tick and never fabricated.
 - **Upstox OI/IV/Greeks are streaming fields** in the full / option-greeks feed (§5), so an Upstox `derivatives` component is legitimate; account entitlement remains unverified.
+- **No REST polling disguised as streaming.** A REST endpoint must **not** be polled on every market tick to imitate a live derivatives stream. If REST-derived derivatives data is introduced later, it is a **separately sourced, independently timestamped data path** with its own rate limits, freshness and provenance — exposed distinctly from the live `derivatives` component and never silently combined with streaming data into one apparent live value.
 - **REST retrieval does not mutate operational config.** MCP on-demand option-chain/historical retrieval must not change saved capture/streaming settings (confirmed requirement, AD-008/AD-010). REST-only fields are not part of a streaming capability request (§10) and must not be advertised as available in live views.
 - **Historical data** is REST-only for both providers and is likewise out of the streaming component model.
 
@@ -138,7 +139,7 @@ Statuses: **Verified** / **Plan-dependent** / **Not documented** / **Not availab
 | LTP | Verified (`LTPC.ltp`) | Verified (`ltp` in `sf`/`if`/lite) |
 | OHLC | Verified (`MarketOHLC`, full mode) | Verified (`open/high/low_price` in `sf`/`if`; no current-day close field) |
 | Volume | Verified (`OHLC.vol`, `vtt`) | Verified (`vol_traded_today` in `sf` only; not in `if`/lite) |
-| Last traded qty / time | Verified (`ltq`, `ltt`) | Verified (`last_traded_qty`, `last_traded_time`; seconds inferred) |
+| Last traded qty / time | Verified (`ltq`, `ltt`, ms) | Verified (`last_traded_qty`, `last_traded_time`; unit unverified — §17) |
 | Best bid/ask | Verified (`Quote`, `firstDepth`) | Verified (single-level in `sf`; not in `if`/lite) |
 | Five-level depth | Verified (full mode) | Verified (`dp`, separate subscription) |
 | Thirty-level depth | Plan-dependent (`full_d30`, Plus-only) | Not available (5-level Data Socket; 50-level is TBT) |
@@ -151,6 +152,32 @@ Statuses: **Verified** / **Plan-dependent** / **Not documented** / **Not availab
 | Historical data | Verified (V3 candles, OHLCV+OI, no static IP) | Not available in Data Socket (REST, plan-dependent depth) |
 
 **Rules for using this matrix:** this matrix describes **streaming** capabilities only; REST-only fields (FYERS OI/IV/Greeks, historical data) are noted as such and belong to §6.2 / M5, not to live components. A "Not available" live field must be reported as unavailable, never calculated from other fields and never filled from a REST call on a tick. Plan-dependent capabilities (Upstox D30) must not be assumed for an account. Capability status is source-attributed and may change; do not hardcode a plan entitlement as a permanent architectural assumption (AD-023).
+
+### 7.1 Canonical quote field capability by provider and mode
+
+A boolean `quote: true/false` capability would conceal material differences. The capability description must be **field-level and depth-level**: it records which canonical fields a provider/mode actually supplies, so a consumer can see that Upstox LTPC is a narrow price feed while FYERS `sf` is a full quote. The following is derived from the official docs in §16 (accessed 2026-11-17), not inferred from field names.
+
+| Canonical quote field | Upstox LTPC | Upstox Full / Full D30 | Upstox option_greeks | FYERS `sf` (equity/option) | FYERS `if` (index) |
+|---|---|---|---|---|---|
+| LTP (`ltp`) | Verified (`ltpc.ltp`) | Verified | Verified | Verified | Verified |
+| Last traded time | Verified (`ltpc.ltt`, ms) | Verified | Verified | Verified (`last_traded_time`, unit **unverified**) | Not sent |
+| Last traded quantity | Verified (`ltpc.ltq`) | Verified | Verified | Verified (`last_traded_qty`) | Not sent |
+| Previous session close | Verified (`ltpc.cp`) | Verified | Verified | Verified (`prev_close_price`) | Verified (`prev_close_price`) |
+| Open / high / low (current day) | Not sent | Verified (`marketOHLC`) | Not sent | Verified (`open_price`/`high_price`/`low_price`) | Verified |
+| Traded volume (current day) | Not sent | Verified (`vtt`, `ohlc.vol`) | Verified (`vtt`) | Verified (`vol_traded_today`) | **Not sent** (explicit) |
+| Average trade price | Not sent | Verified (`atp`) | Not sent | Verified (`avg_trade_price`) | Not sent |
+| Change / change % | Not sent as fields | Not sent as fields | Not sent as fields | Verified (`ch`/`chp`) | Verified (`ch`/`chp`) |
+| Best bid/ask (L1) | Not sent | Verified (level 1 of `marketLevel`) | Verified (`firstDepth`) | Verified (`bid_price`/`ask_price`/`bid_size`/`ask_size`) | **Not sent** (explicit) |
+| Depth levels | None | 5 (Full) / 30 (Full D30, Plus) | L1 only | L1 only in `sf` (5-level is the separate `dp` stream) | None |
+
+Notes on the table:
+- "Not sent" means the field is absent from that mode's documented message; it must be reported as unavailable, never as zero. An actual zero from the provider is a distinct, valid value (§9.3.1).
+- Upstox LTPC is explicitly documented as containing "only the latest trading price (LTP) and close price (CP) changes" — it is **not** a full quote and carries no OHLC, volume, depth or Greeks.
+- Upstox Full/Full D30 carry LTPC + 5/30 market levels + extended metadata + option Greeks; `atp` (average traded price), `vtt` (volume traded today), `oi`, `iv` and CAS fields are present in the documented Full sample. Full D30 is Plus-only.
+- FYERS `if` is explicitly documented as having "only symbol, ltp, prev_close_price, high_price, low_price, open_price, ch, chp and type. Volume and bid or ask fields are not sent."
+- Change/change % are provider-supplied fields in FYERS; Upstox does not send them as fields in these feed modes. They must not be synthesized from LTP and previous close and presented as provider-supplied (a derived value would need separate labelling per AD-005).
+
+**Previous-close semantics and the `close` field (safe migration decision).** Upstox `ltpc.cp` is documented as "Close price"/"Closed price" and FYERS `prev_close_price` as "Previous day's close"; in both cases this is the **previous session's close**, the reference price for the day's change — not an unspecified "current-session closing value" (there is no current-session close field in a live feed; `ltp` is the latest price). The current contract field `CanonicalLiveValue.close` is populated from Upstox `cp` (`packages/broker-upstox/src/stream.ts`), so its de facto meaning is already "previous session close". **Decision:** do **not** silently rename or repurpose `close` in current code. Document its canonical meaning as *previous session close*; in the additive contract migration (§14), introduce an unambiguous `previousClose` field and retain `close` as a deprecated alias carrying the same value for one migration window, then retire it. Adapters must map both Upstox `cp` and FYERS `prev_close_price` to `previousClose` (and, during migration, to `close`). No current consumer workflow breaks, and no field is silently reinterpreted.
 
 ## 8. Decision A — shared subscription ownership + independent provider runtimes
 
@@ -195,9 +222,11 @@ Replace "one whole observation per provider" with **independently updated canoni
 
 | Component | Contents | Upstox source | FYERS source |
 |---|---|---|---|
-| `quote` | LTP, day OHLC, close, volume, last traded qty/time, best bid/ask | LTPC + full feed | `sf` |
-| `depth` | Five-level (or D30) bid/ask price, size, order count | full / full_d30 `marketLevel` | `dp` |
+| `quote` | Trade and session statistics only: LTP, last traded qty/time, previous session close, day OHLC, traded volume, average trade price, change/change % where supplied | LTPC + full feed | `sf` / `if` |
+| `depth` | All bid/ask prices, quantities and order-book levels (L1 through 5/30) | full / full_d30 `marketLevel`, option_greeks `firstDepth` | `sf` best bid/ask (L1), `dp` five-level |
 | `derivatives` | OI, IV, Greeks | full / option_greeks feed | **not in Data Socket** (REST-only; §6.2) |
+
+**Canonical ownership — no competing bid/ask sources.** `quote` owns trade and session statistics; `depth` owns **all** bid/ask prices, quantities and order-book levels; `derivatives` owns OI/IV/Greeks. Best bid/ask is **depth data**, not quote data: it is never stored or selected as a quote field. This removes the contradiction where FYERS `sf` carries both quote fields and L1 bid/ask — the adapter splits that single message into a `quote` update and an L1 `depth` update, each with the message's own provenance. The same bid/ask values are never represented independently in both components.
 
 **Index is an instrument type, not a component.** An index instrument (canonical `INDEX` category, §4.2) carries a `quote` component; its live data is a reduced quote (LTP/OHLC/change, no volume or bid/ask). Upstox `IndexFullFeed` and FYERS `if` are quote messages for index instruments, not a separate data kind. Treating index as an instrument type avoids a redundant component and keeps identity/catalog semantics in one place.
 
@@ -205,15 +234,45 @@ Replace "one whole observation per provider" with **independently updated canoni
 
 Each component instance carries: provider, canonical ID, value, source timestamp (+ unit + meaning), receipt timestamp, freshness, availability, provenance, and a component-level revision/sequence where available. Components are updated **only** by messages that actually contain them; a `dp` message updates `depth` and leaves `quote` untouched.
 
+### 9.1.1 Depth levels and L1-only providers
+
+Depth is represented as an ordered set of levels with an explicit **level count** and a per-level availability state, so providers and modes with different depth are honest about what they supply:
+
+- **L1-only source** (FYERS `sf` best bid/ask, Upstox option_greeks `firstDepth`): produces a `depth` component with `levelCount = 1` — best bid price/size and best ask price/size only. Levels 2..N are **absent**, not zero.
+- **Five-level source** (FYERS `dp`, Upstox Full): produces `levelCount = 5` with levels 1..5.
+- **Thirty-level source** (Upstox Full D30, Plus-only): produces `levelCount = 30`.
+
+A later, richer update for the same provider/instrument **replaces** the depth component with the new level set (e.g. an L1 `sf` depth followed by a five-level `dp` update yields `levelCount = 5`). A later, *narrower* update does not silently erase the richer levels unless the provider contract establishes that the message is a complete replacement (§9.3.1 rule 5); absent levels remain absent rather than becoming zero. No provider or mode is claimed to offer depth it does not supply, and a requested depth level beyond a provider's capability is reported as unsupported (§10.2), never silently downgraded.
+
 ### 9.2 Where aggregation belongs
 
 - **Provider adapter:** translates one provider message into one or more **component updates** (it alone knows `sf` vs `dp` vs `fullFeed` semantics). It does **not** aggregate across messages or providers.
-- **Canonical market-data service:** owns component storage, freshness evaluation, and per-component source selection. This is the single source of truth for all consumers.
+- **Canonical market-data service:** the `MarketDataService` façade exposes component storage, freshness evaluation and per-component source selection to consumers; the underlying `LiveStateStore` is the actual holder that performs the storage, invokes freshness evaluation and runs selection. Together they are the single source of truth for all consumers.
 - This split keeps provider logic in adapters (invariant 3) and avoids duplicate interpretation in consumers (invariant 2).
 
 ### 9.3 Source selection — per component, with explicit attribution
 
 Selection is performed **independently per component**: the best fresh `quote` may come from Upstox while the best fresh `depth` comes from FYERS. The result exposes, for each component, its own provider, timestamp, freshness and provenance. It must **never** present a single atomic "selected observation" that mixes fields from two providers as if they arrived together. Missing components are reported as unavailable/unsupported, not filled from another component or fabricated. Timestamp compatibility (§3.1 `timestampsCompatible`) is evaluated per component, not across components.
+
+### 9.3.1 Partial-update and merge semantics (target)
+
+The current `LiveStateStore.applyObservation()` replaces a provider's whole observation; that is insufficient for independently arriving quote/depth/derivatives messages. The target model retains state per **(provider, canonical ID, component)** and applies the following rules. These are the authoritative semantics for implementation:
+
+1. **Component isolation.** A `depth` update never erases `quote`; a `quote` update never erases `depth`; a `derivatives` update touches only `derivatives`.
+2. **Field-level merge within a component.** A partial update changes only the fields it actually carries; fields absent from the update are preserved from the retained state for that same provider/component.
+3. **Explicit zero vs omitted.** A provider-supplied `0` is a real value and is stored as `0`. An omitted field is "not present in this update" and is preserved (partial) or marked absent (complete snapshot) — it is never coerced to `0`. Missing/unavailable/unsupported and actual zero remain distinguishable (availability state + field presence).
+4. **Clearing requires explicit semantics.** A field is cleared only when the provider's message semantics explicitly establish that it is cleared or unavailable. Absence in a partial update is not a clear.
+5. **Complete snapshots.** A component is replaced wholesale only when the provider contract establishes the message is a complete snapshot for that component (e.g. a documented full snapshot). Otherwise the update is treated as partial and merged per rule 2.
+6. **Merge before selection.** Partial updates are merged into the retained state for the **same provider and component first**; canonical provider selection (§9.3) runs only on the merged result.
+7. **No cross-provider blending.** Missing fields are never borrowed from another provider into a selected provider's component. Selection picks one provider's component (with its own provenance); it does not assemble a field-level composite. A mixed-provider result would be unattributable and is forbidden.
+8. **Field-level timestamps.** Not introduced now. Each component carries one source timestamp (+ meaning/unit) and one receipt time; within a component, fields from one provider message share that message's timestamp. Field-level timestamps would be justified only if a single component's fields had materially different update cadences from the same provider — no such case is documented for the three components (FYERS price/depth separation is handled by component isolation, not field timestamps). Revisit only with evidence.
+
+**Worked examples:**
+
+- *Partial quote update:* retained FYERS `quote` = `{ltp: 100, prevClose: 99, open: 99.5, high: 101, volume: 5000}`. A new `sf` message carries only `{ltp: 100.5, lastTradedTime: T2, lastTradedQty: 12}`. Result: `ltp`/last-traded fields updated; `prevClose`/`open`/`high`/`volume` preserved from the retained quote; provenance/source timestamp reflect the new message for the fields it supplied.
+- *Independent depth update:* a `dp` message arrives with five levels. It replaces only the `depth` component (`levelCount = 5`); the `quote` component above is untouched, including its LTP.
+- *Explicit zero:* a depth level reports `bid_size = 0` (no orders at that level) — stored as `0` with that level present. A level not present in the message is absent, not zero.
+- *L1 then five-level:* an `sf` L1 best bid/ask sets `depth.levelCount = 1`; a subsequent `dp` five-level update replaces it with `levelCount = 5`. Quote is unaffected by either.
 
 ### 9.4 Alternatives considered and rejected
 
@@ -225,11 +284,11 @@ Selection is performed **independently per component**: the best fresh `quote` m
 
 ### 10.1 Requirement
 
-Consumers must never see broker SDK mode names (`ltpc`, `full`, `option_greeks`, `full_d30`, `SymbolUpdate`, `DepthUpdate`). Define a provider-neutral capability vocabulary in shared contracts, e.g. `quote`, `depth5`, `depth30`, `derivatives` (OI/IV/Greeks), with mandatory / optional / provider-dependent classification. Index is an instrument type, not a capability: an index instrument requests `quote` (a reduced quote with no volume or bid/ask). A consumer requests capabilities per canonical instrument (or a defined selection layer); each adapter translates the request into its own subscription/mode calls. Capability requests describe **streaming** data only; REST-only fields are not streaming capabilities (§6.2).
+Consumers must never see broker SDK mode names (`ltpc`, `full`, `option_greeks`, `full_d30`, `SymbolUpdate`, `DepthUpdate`). Define a provider-neutral capability vocabulary in shared contracts with **field-level and depth-level precision** (§7.1), not a boolean `quote: true/false` that would hide material differences. A request names the canonical components and the fields/levels required, e.g. `quote` with a field set (LTP, previous close, OHLC, volume, average trade price, change), `depth` with a required level count (`L1`/`5`/`30`), and `derivatives` with the required metrics (OI/IV/Greeks). Each capability is classified mandatory / optional / provider-dependent, and the response reports **which fields and levels are actually available** from the selected provider. Index is an instrument type, not a capability: an index instrument requests `quote` and the response shows that volume and bid/ask are unavailable for `if` (§7.1). Each adapter translates the neutral request into its own subscription/mode calls. Capability requests describe **streaming** data only; REST-only fields are not streaming capabilities (§6.2).
 
 ### 10.2 Rules
 
-- **No silent downgrade.** If a requested capability is unsupported or over a provider's limit, report it explicitly (availability `UNSUPPORTED`/`LIMITED` with a reason) rather than quietly dropping it.
+- **No silent downgrade.** If a requested capability, field or depth level is unsupported or over a provider's limit, report it explicitly (availability `UNSUPPORTED`/`LIMITED` with a reason) rather than quietly dropping it. A request for five-level depth must not be silently served as L1; a request for Greeks must not be silently served without them.
 - **No silent instrument removal** to fit a plan. Provider limits are enforced per runtime and reported; the shared desired state is unchanged.
 - **WebUI** communicates unavailable capabilities clearly; the user never needs broker terminology.
 - Capability availability is source-attributed and plan-aware (AD-023); do not hardcode a plan entitlement as permanent architecture.
@@ -247,7 +306,16 @@ The design must account for: both connected; only Upstox; only FYERS; both disco
 
 Mechanisms: Stage F generation re-check after async resolution; epoch + instance callback gating; terminal instances with at-most-once stop; bounded retry with explicit exhaustion; bounded queues and memory (existing `LiveEventHub` bounds); coordinator fan-out that isolates a failing runtime; shutdown that stops runtimes before the hub and DB close.
 
-**Timestamp and ordering handling.** Per-component update guards must **never reject an update solely because its source timestamp equals the previous one**. Coarse source-timestamp precision (e.g. FYERS `last_traded_time`/`exch_feed_time` in whole seconds, §6) means several distinct successive updates can legitimately carry the same source timestamp. Ordering and duplicate decisions must consider, in combination: (a) the documented **meaning and unit** of the source timestamp; (b) any **provider sequence identifier** where available; and (c) **receipt ordering** (local arrival) as the tie-breaker when source timestamps are equal or untrusted. An update is dropped only when it is demonstrably stale or duplicate by these combined signals — not on timestamp equality alone. Each component retains its own source timestamp, sequence (if any) and receipt order so a legitimate successive update with a coarse or repeated timestamp is preserved.
+**Timestamp and ordering handling.** Per-component update guards must **never reject an update solely because its source timestamp equals the previous one**. Provider timestamp precision differs: FYERS documents `last_traded_time` as an integer but does **not** state its unit or precision, and the unit must not be guessed from the integer type (§6, §17). Whole-second precision means several distinct successive updates can legitimately carry the same source timestamp. The safe ordering policy is:
+
+- Use a **reliable provider sequence** or a **trusted source timestamp** when one is available and its meaning/unit is documented.
+- **Equal source timestamps never automatically mean duplicate or stale.** They are expected with coarse precision.
+- Use **receipt ordering** (local arrival, `receivedAtMs`) as a controlled fallback when source timestamps are equal, coarse, missing or untrusted.
+- Reject an update as stale **only when it is demonstrably older** using comparable ordering information (same meaning/unit, trusted conversion) — never on timestamp equality alone.
+- Preserve the **source timestamp and local receipt time distinctly** (`rawProviderTimestamp` + unit/meaning and `receivedAtMs` in the retained component); do not overwrite one with the other.
+- **Do not invent timestamp units or silently convert unverified values.** A timestamp whose unit is unverified is not trusted for cross-provider ranking; the canonical service falls back to receipt ordering and records the value verbatim with its unit marked `UNKNOWN`/unverified.
+
+Each component retains its own source timestamp, sequence (if any) and receipt order so a legitimate successive update with a coarse or repeated timestamp is preserved. **Bounded validation item:** confirm FYERS `last_traded_time`/`exch_feed_time` unit and precision from live samples before marking those timestamps trusted (§17); until then they are stored verbatim and never used as a trusted ordering key.
 
 ## 13. API / WebUI / MCP implications
 
@@ -276,13 +344,13 @@ Acceptance criteria (measurable):
 3. Each provider reports its own applied generation.
 4. One provider failure does not interrupt the other.
 5. Shared tracking is owned solely by the coordinator from the owner's desired enabled selections; no provider runtime can add or remove a tracked instrument.
-6. Quote and depth updates cannot overwrite each other.
-7. Every component preserves independent provenance and freshness.
-8. Source selection does not fabricate fields or hide missing data.
+6. Quote and depth updates cannot overwrite each other; partial updates preserve fields absent from the message; an explicit provider zero is distinct from an omitted field.
+7. Every component preserves independent provenance and freshness; best bid/ask is owned only by `depth`, never duplicated in `quote`.
+8. Source selection does not fabricate fields, hide missing data, or blend fields from two providers into one selected component.
 9. Provider mapping failures remain provider-specific.
-10. Subscription limits are enforced without silent downgrades.
+10. Subscription limits and capability/depth-level requests are enforced without silent downgrade or silent instrument removal.
 11. Existing Stage F lifecycle and cancellation guarantees remain intact.
-12. API and WebUI expose both provider states accurately.
+12. API and WebUI expose both provider states accurately, including field/depth-level capability differences.
 13. MCP and REST/SSE consume the same canonical data.
 14. Tests use deterministic fake providers and fixtures.
 
@@ -291,10 +359,15 @@ Required regression tests (to be written with implementation, not by this docume
 - Single-writer generation: concurrent PUTs produce one committed generation; two runtimes never both write the repository.
 - Two-runtime reconciliation: same desired state applied independently; distinct applied generations; one runtime failing does not change the other's state.
 - Shared tracking: the coordinator tracks/untracks exactly the owner's desired enabled selections; provider runtimes never call `track`/`untrack`, so no runtime can remove an instrument another runtime still needs (no reference counting required).
-- Partial messages: a `dp`-only update leaves `quote` intact; an `sf`-only update leaves `depth` intact; both preserve independent timestamps/provenance.
-- Equal/coarse timestamps: successive updates with the same whole-second source timestamp are preserved (receipt order / sequence breaks the tie); only demonstrably stale or duplicate updates are dropped; an update is never rejected solely for timestamp equality.
-- Per-component selection: fresh Upstox quote + fresh FYERS depth coexist with correct per-component attribution; no mixed atomic snapshot.
-- No fabrication: absent OI/IV/Greeks/depth reported unavailable; no cross-field calculation.
+- Independent quote/depth updates: a `dp`-only update leaves `quote` intact; an `sf`-only update leaves `depth` intact; both preserve independent timestamps/provenance.
+- Partial field preservation: a quote update carrying only LTP and last-traded fields preserves previously supplied OHLC/volume/prev-close for the same provider/component.
+- Explicit zero vs omitted: a provider-supplied `0` (e.g. a depth size or volume) is stored as `0`; an omitted field is preserved (partial) or marked absent (snapshot), never coerced to `0`; missing/unavailable/unsupported and zero are distinguishable.
+- Depth levels: an L1-only depth update yields `levelCount = 1` with levels 2..N absent (not zero); a later five-level update replaces it with `levelCount = 5`; no bid/ask value appears in `quote`.
+- Index fields missing from FYERS: an `if` quote reports volume and bid/ask as unavailable (not zero, not borrowed from another provider); a five-level depth request on FYERS Data Socket is reported unsupported.
+- Different provider capabilities: Upstox LTPC is represented as LTP+previous-close only; Upstox Full/option_greeks expose OHLC/volume/Greeks/OI/IV; FYERS `sf` exposes full quote fields; the capability response reflects these differences field by field.
+- Equal/coarse timestamps: successive updates with the same whole-second source timestamp are preserved (receipt order / sequence breaks the tie); only demonstrably stale or duplicate updates are dropped; an update is never rejected solely for timestamp equality; an unverified timestamp unit is not used as a trusted ordering key.
+- Per-component selection without blending: fresh Upstox quote + fresh FYERS depth coexist with correct per-component attribution; no mixed atomic snapshot and no field borrowed across providers.
+- No fabrication: absent OI/IV/Greeks/depth reported unavailable; no cross-field calculation; no REST poll on a tick to imitate a live derivatives stream.
 - Mapping failure: missing FYERS mapping does not disable an instrument served by Upstox, and vice versa.
 - Limits: over-limit request reported as `LIMITED` with reason; desired state unchanged; no silent downgrade.
 - Stage F regression: terminal-instance retirement, at-most-once stop, stale-callback gating, generation re-check, retry exhaustion, shutdown release — all existing Stage F tests remain green.
@@ -342,7 +415,9 @@ All accessed **2026-11-17** unless noted.
 ## 17. Known risks and unverified questions
 
 - **FYERS SDK on Bun:** not documented; requires a live, credentialed smoke test before committing to Bun-native execution. Node compatibility is not proof of Bun compatibility.
-- **FYERS discrepancies:** `autoReconnect` vs `autoreconnect` casing; `getInstance` vs `new FyersSocket`; logging-flag polarity; timestamp units (seconds inferred); `cn`/`sub` confirmation schemas; `exch_feed_time` not in attribute tables. All require live verification.
+- **FYERS discrepancies:** `autoReconnect` vs `autoreconnect` casing; `getInstance` vs `new FyersSocket`; logging-flag polarity; `cn`/`sub` confirmation schemas; `exch_feed_time` not in attribute tables. All require live verification.
+- **FYERS timestamp unit/precision (bounded validation item):** `last_traded_time` is documented only as an integer; its unit and precision are **not** stated and must not be inferred from the type. Confirm from live samples whether it is epoch seconds, milliseconds or another unit, and whether successive updates can share a value. Until confirmed, store the value verbatim with unit `UNKNOWN`/unverified, do not use it as a trusted ordering key, and fall back to receipt ordering (§12). This is the only timestamp fact that genuinely requires live samples; it does not block the rest of the design.
+- **Field-presence semantics (bounded validation item):** confirm from live samples whether a provider omits a field when unavailable versus sending an explicit zero, for the fields used in partial-merge rules (§9.3.1), so the adapter maps presence correctly. The merge model itself does not depend on the answer.
 - **Upstox entitlements:** account Plus/D30 access, exact wire mapping of `firstLevelWithGreeks`/`full_d30`, feed-specific error payloads/close codes, `full_d5` vs `full` naming — require live verification.
 - **Contract data:** current F&O eligibility, listed contracts, expiries, strikes, lot/tick/freeze and provider-native identifiers must come from current official sources before integration; introduction/observation dates are not current eligibility. NSE product pages are behind anti-bot protection; their content was obtained from NSE static mirrors and circulars. The SEBI circular 2025/76 PDF body was not directly parseable — its provisions rest on official-adjacent reproductions and NSE's implementing circular (FAOP68589); re-verify the primary PDF before implementation.
 - **Breaking contract change:** the component model changes `LiveSnapshot`/`LiveItem`/`LiveChangeEvent` shapes; all consumers (WebUI, REST/SSE, future MCP) must migrate together.
