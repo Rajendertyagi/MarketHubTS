@@ -162,12 +162,16 @@ export class LiveEventHub {
     private readonly opts: LiveEventHubOptions
   ) {}
 
+  private get timerScheduler() {
+    return this.opts.timerScheduler ?? { setInterval, clearInterval };
+  }
+
   start(): void {
     if (this.started) return;
     this.started = true;
     this.unsubscribe = this.source.subscribe((event) => this.onChange(event));
     if (this.opts.refreshIntervalMs > 0) {
-      this.timer = setInterval(() => this.emitRefresh(), this.opts.refreshIntervalMs);
+      this.timer = this.timerScheduler.setInterval(() => this.emitRefresh(), this.opts.refreshIntervalMs);
       this.timer.unref?.();
     }
   }
@@ -178,7 +182,7 @@ export class LiveEventHub {
     this.unsubscribe?.();
     this.unsubscribe = null;
     if (this.timer) {
-      clearInterval(this.timer);
+      this.timerScheduler.clearInterval(this.timer);
       this.timer = null;
     }
     for (const client of this.clients.values()) client.close();

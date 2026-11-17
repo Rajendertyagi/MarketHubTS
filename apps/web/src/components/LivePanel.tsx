@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { parseSnapshot, projectDisplayModel, type DisplayItem } from "../lib/live";
 import { LiveStreamController } from "../lib/live-stream";
+import { createRetrySleep } from "../lib/retry-sleep";
 import { useLiveStore } from "../store/live-store";
 import { StatusBadge, toneForState } from "./StatusBadge";
 
@@ -65,6 +66,7 @@ export function LivePanel() {
   const stream = useLiveStore((s) => s.stream);
   const model = useMemo(() => (snapshot ? projectDisplayModel(snapshot) : null), [snapshot]);
   const controllerRef = useRef<LiveStreamController | null>(null);
+  const retrySleep = useMemo(() => createRetrySleep(), []);
 
   // A fresh terminal-per-instance controller per effect lifecycle. StrictMode
   // remounts create a new controller; the Zustand store persists across them.
@@ -102,11 +104,7 @@ export function LivePanel() {
         if (!response.ok) throw new Error(`Snapshot request failed (${response.status})`);
         return parseSnapshot(await response.json());
       },
-      sleep: (ms, signal) => new Promise<void>((resolve) => {
-        if (signal?.aborted) { resolve(); return; }
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
-      }),
+      sleep: retrySleep,
       onSnapshot: (next) => useLiveStore.getState().setSnapshot(next),
       onState: (next) => useLiveStore.getState().setStream(next)
     });
