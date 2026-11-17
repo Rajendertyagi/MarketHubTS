@@ -470,6 +470,71 @@ describe("Stage F — shutdown and locked boundary", () => {
     h.cleanup();
   });
 
+  test("timeout/shutdown race: shutdown releases the quiescing op with shutdown outcome", async () => {
+    const driver = new DeferredDriver();
+    driver.settleOnAbort = false;
+    const h = harness({ createDriver: () => driver, operationTimeoutMs: 10, quiescenceMs: 1000 });
+    const { p } = await startPending(h);
+    const timeout = h.timer.last!;
+    h.timer.fire(timeout.handle as unknown as ReturnType<typeof setTimeout>);
+    // Op is now aborting and awaiting quiescence; shutdown must release it now.
+    h.supervisor.stop();
+    expect(h.supervisor.getLastOperationOutcome()).toMatchObject({ kind: "shutdown" });
+    expect(h.supervisor.getView().runtime.generation).toBe(0);
+    expect(driver.stopCount).toBe(1);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    await p; // queue released without waiting for the quiescence timer
+    // Firing the stale quiescence timer must not duplicate retirement or outcome.
+    const quiescence = h.timer.tasks.filter((t) => t.handle !== timeout.handle).at(-1)!;
+    h.timer.fire(quiescence.handle as unknown as ReturnType<typeof setTimeout>);
+    await flush();
+    expect(driver.stopCount).toBe(1);
+    expect(h.supervisor.getLastOperationOutcome()).toMatchObject({ kind: "shutdown" });
+    h.cleanup();
+  });
+
+  test("shutdown of a pending update resolves shutdown without advancing applied generation", async () => {
+    const driver = new DeferredDriver();
+    driver.autoResolveStart = true;
+    driver.settleOnAbort = false;
+    const h = harness({ createDriver: () => driver });
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+    const replace = h.supervisor.replaceSubscriptions([{ canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }]);
+    await driver.waitForUpdate();
+    h.supervisor.stop();
+    expect(h.supervisor.getLastOperationOutcome()).toMatchObject({ kind: "shutdown" });
+    expect(driver.stopCount).toBe(1);
+    await replace;
+    expect(h.supervisor.getView().runtime.generation).toBe(1); // unchanged
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    h.cleanup();
+  });
+
+  test("repeated successful starts without STREAMING still exhaust the retry budget", async () => {
+    const h = harness({
+      createDriver: () => { const d = new DeferredDriver(); d.autoResolveStart = true; return d; },
+      maxAttempts: 2, baseDelayMs: 1
+    });
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+    for (let i = 0; i < 3; i++) {
+      h.instances[i]!.emitState("DISCONNECTED");
+      const t = h.reconnectTimer.active.at(-1);
+      if (t) h.reconnectTimer.fire(t.handle as unknown as ReturnType<typeof setTimeout>);
+      await flush();
+    }
+    expect(h.instances.length).toBe(3);
+    const view = h.supervisor.getView();
+    expect(view.runtime.connectionState).toBe("ERROR");
+    expect(view.runtime.lastError).toContain("exhausted");
+    h.cleanup();
+  });
+
   test("locked driver fails safely with no retries and no real connection", async () => {
     const locked = new LockedUpstoxDriver();
     expect(locked.getConnectionState()).toBe("NOT_STARTED");

@@ -114,11 +114,11 @@ class DeferredDriver implements StreamingDriver {
 class AllocatingFailDriver implements StreamingDriver {
   starts = 0;
   stopCount = 0;
-  async start(_subs?: DriverSubscription[], _callbacks?: DriverCallbacks, _signal?: AbortSignal): Promise<void> {
+  async start(_subs: DriverSubscription[], _callbacks: DriverCallbacks, _signal: AbortSignal): Promise<void> {
     this.starts++;
     throw new Error("start failed after allocation");
   }
-  async updateSubscriptions(_subs?: DriverSubscription[], _signal?: AbortSignal): Promise<void> {}
+  async updateSubscriptions(_subs: DriverSubscription[], _signal: AbortSignal): Promise<void> {}
   stop(): void { this.stopCount++; }
   getConnectionState() { return "NOT_STARTED"; }
 }

@@ -54,12 +54,12 @@ export class LockedUpstoxDriver implements StreamingDriver {
   }
 
   async start(
-    _subscriptions?: DriverSubscription[], _callbacks?: DriverCallbacks, _signal?: AbortSignal
+    _subscriptions: DriverSubscription[], _callbacks: DriverCallbacks, _signal: AbortSignal
   ): Promise<void> {
     throw new DriverLockedError();
   }
 
-  async updateSubscriptions(_subscriptions?: DriverSubscription[], _signal?: AbortSignal): Promise<void> {
+  async updateSubscriptions(_subscriptions: DriverSubscription[], _signal: AbortSignal): Promise<void> {
     throw new DriverLockedError();
   }
 
@@ -124,7 +124,6 @@ interface DriverInstance {
 }
 
 interface Operation {
-  readonly epoch: number;
   readonly kind: "start" | "update";
   readonly controller: AbortController;
   readonly instance: DriverInstance;
@@ -182,7 +181,7 @@ export class StreamSupervisor {
   private currentInstance: DriverInstance | null = null;
   private lockedDriver = false;
   private readonly operations = new Set<Operation>();
-  private readonly quiescenceWaiters = new Set<() => void>();
+  private readonly quiescenceWaiters = new Set<(force: boolean) => void>();
   /** Epoch of the active driver instance; incremented on every retirement. */
   private epoch = 0;
   private stopped = false;
@@ -359,7 +358,6 @@ export class StreamSupervisor {
     let resolveLogical!: (outcome: OperationOutcome) => void;
     const logicalCompletion = new Promise<OperationOutcome>((resolve) => { resolveLogical = resolve; });
     const op: Operation = {
-      epoch: instance.epoch,
       kind,
       controller,
       instance,
@@ -444,14 +442,20 @@ export class StreamSupervisor {
         this.quiescenceWaiters.delete(onSettled);
         resolve();
       };
-      const onSettled = () => { if (op.instance.underlyingSettled) finish(); };
+      const onSettled = (force: boolean) => { if (force || op.instance.underlyingSettled) finish(); };
       this.quiescenceWaiters.add(onSettled);
-      handle = this.timer.set(finish, ms);
+      handle = this.timer.set(() => finish(), ms);
     });
   }
 
+  /** Wake quiescence waiters on underlying settlement. */
   private wakeQuiescence(): void {
-    for (const wake of [...this.quiescenceWaiters]) wake();
+    for (const wake of [...this.quiescenceWaiters]) wake(false);
+  }
+
+  /** Force-wake all quiescence waiters on shutdown, regardless of settlement. */
+  private forceWakeQuiescence(): void {
+    for (const wake of [...this.quiescenceWaiters]) wake(true);
   }
 
   /**
@@ -483,6 +487,8 @@ export class StreamSupervisor {
     this.setConnectionState("ERROR", error);
     try { op.controller.abort(); } catch { /* abort must not throw */ }
     await this.awaitQuiescence(op);
+    // Shutdown may have resolved this op with `shutdown` while quiescing.
+    if (op.state !== "aborting" || this.stopped) return;
     this.retireInstance(op.instance, "timeout");
     this.resolveOperation(op, { kind: "timed-out", error });
     this.scheduleReconnect(this.epoch, error);
@@ -497,6 +503,8 @@ export class StreamSupervisor {
     try { op.controller.abort(); } catch { /* abort must not throw */ }
     this.clearOperationTimeout(op);
     await this.awaitQuiescence(op);
+    // Shutdown may have resolved this op with `shutdown` while quiescing.
+    if (op.state !== "aborting" || this.stopped) return;
     this.retireInstance(instance, `callback:${reason.toLowerCase()}`);
     this.resolveOperation(op, { kind: "callback-retired", reason });
     this.scheduleReconnect(this.epoch, cause);
@@ -527,6 +535,9 @@ export class StreamSupervisor {
               ? (error ?? "provider error")
               : (error ?? "provider disconnected");
             if (state === "ERROR") this.lastError = cause;
+            // Transition the canonical connection state before retiring; the
+            // WebUI renders this from the shared service, not from the driver.
+            this.setConnectionState(state, state === "ERROR" ? cause : (error ?? null));
             const op = instance.currentOperation;
             if (op && op.state === "active") {
               void this.retireFromCallback(instance, op, cause, state);
@@ -654,13 +665,17 @@ export class StreamSupervisor {
     if (this.stopped) return;
     this.stopped = true;
     for (const op of [...this.operations]) {
-      if (op.state !== "active") continue;
-      op.state = "aborting";
+      if (op.state !== "active" && op.state !== "aborting") continue;
       op.instance.callbacksEnabled = false; // synchronous, before abort
-      try { op.controller.abort(); } catch { /* abort must not throw */ }
+      if (op.state === "active") {
+        op.state = "aborting";
+        try { op.controller.abort(); } catch { /* abort must not throw */ }
+      }
+      // Resolve every outstanding logical completion (including ops already
+      // quiescing from a timeout/callback) so the serialized queue is released.
       this.resolveOperation(op, { kind: "shutdown" });
     }
-    this.wakeQuiescence();
+    this.forceWakeQuiescence();
     this.cancelReconnectTimer();
     if (this.currentInstance) this.retireInstance(this.currentInstance, "shutdown");
     this.setConnectionState("NOT_STARTED", null);
