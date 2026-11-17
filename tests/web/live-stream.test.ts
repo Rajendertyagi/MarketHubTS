@@ -208,6 +208,21 @@ describe("initial connection state", () => {
     expect(h.lastState().streamStatus).toBe("live");
     h.controller.stop();
   });
+
+  test("refresh before the initial snapshot completes initial sync and enters live", async () => {
+    const h = harness();
+    h.controller.start();
+    h.sources[0]!.open(); // connecting, no snapshot event yet
+    expect(h.lastState().streamStatus).toBe("connecting");
+    // A refresh control arrives before the one-time snapshot event.
+    h.sources[0]!.emitControl("refresh");
+    h.fetcher.resolveNext(snapshot(5));
+    await flush();
+    expect(h.lastState().streamStatus).toBe("live");
+    expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(5);
+    expect(h.lastState().refreshStatus).toBe("idle");
+    h.controller.stop();
+  });
 });
 
 describe("LiveStreamController — data events", () => {
@@ -270,6 +285,30 @@ describe("LiveStreamController — data events", () => {
     h.sources[1]!.emitNamed("provider-connection-changed", { ...event, revision: 2 }, 2);
     await flush();
     expect(h.fetcher.calls).toBe(callsAfterRecovery);
+    expect(h.lastState().streamStatus).toBe("live");
+    h.controller.stop();
+  });
+
+  test("stale recovery snapshot does not regress appliedRevision", async () => {
+    const h = harness({ maxRecoveryAttempts: 2 });
+    await startLive(h, 10); // appliedRevision = 10
+    h.sources[0]!.emitControl("snapshot-required");
+    // REST returns a stale snapshot (revision 3) — must be rejected, not applied.
+    h.fetcher.rejectNext(new Error("stale")); // first attempt fails for other reason
+    await flush();
+    h.fetcher.resolveNext(snapshot(3)); // second attempt returns stale snapshot
+    await flush();
+    // Stale snapshot is treated as a failed attempt; retries exhausted -> error.
+    expect(h.lastState().streamStatus).toBe("error");
+    expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(10);
+    h.controller.stop();
+  });
+
+  test("stale snapshot event is ignored without regressing appliedRevision", async () => {
+    const h = harness();
+    await startLive(h, 10);
+    h.sources[0]!.emitNamed("snapshot", snapshot(3), 3); // stale event
+    expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(10);
     expect(h.lastState().streamStatus).toBe("live");
     h.controller.stop();
   });

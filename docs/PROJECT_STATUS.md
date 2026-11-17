@@ -1,12 +1,12 @@
 # Project Status
 
-> **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stage D are published on `develop` and accepted**. Stage D delivers the provider-ready backend, not a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stage E (WebUI live-data experience) and subsequent stages remain outstanding.
+> **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stages D and E are published on `develop` and accepted**. Stage D delivers the provider-ready backend and Stage E delivers the WebUI live-data experience, but neither constitutes a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stages F, C and G remain outstanding.
 > **Last updated:** 2026-11-17
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Summary
 
-MarketHubTS has a **working application foundation** (M1), an **initial canonical market-domain foundation** (M2), a **provider adapter framework with resilient connectivity** (M3), and the first pieces of the **live-data pipeline** (M4 Stages A/B/D). M1 provides centralized validated runtime configuration, reliable SQLite initialization with versioned Drizzle migrations, an API with health/readiness/lifecycle and deliberate network boundaries, a WebUI application shell showing real backend/runtime status, LAN-capable local operation, and Windows-compatible development/production workflows. M2 adds provider-independent canonical market contracts, stable identity rules, catalog persistence, repository/transaction primitives, and a source-independent transactional catalog synchronization service. M3 adds a portable encrypted credential store, independent Upstox/FYERS auth adapters, and a provider registry. M4 Stage A adds canonical live contracts and bounded in-memory live state; Stage B adds the Upstox V3 SDK streaming adapter; Stage D adds the provider-ready backend vertical slice (service notifications, bounded realtime hub, subscription persistence with durable generation, supervisor, REST/SSE, and a locked production driver boundary).
+MarketHubTS has a **working application foundation** (M1), an **initial canonical market-domain foundation** (M2), a **provider adapter framework with resilient connectivity** (M3), and the **live-data pipeline** (M4 Stages A/B/D/E). M1 provides centralized validated runtime configuration, reliable SQLite initialization with versioned Drizzle migrations, an API with health/readiness/lifecycle and deliberate network boundaries, a WebUI application shell showing real backend/runtime status, LAN-capable local operation, and Windows-compatible development/production workflows. M2 adds provider-independent canonical market contracts, stable identity rules, catalog persistence, repository/transaction primitives, and a source-independent transactional catalog synchronization service. M3 adds a portable encrypted credential store, independent Upstox/FYERS auth adapters, and a provider registry. M4 Stage A adds canonical live contracts and bounded in-memory live state; Stage B adds the Upstox V3 SDK streaming adapter; Stage D adds the provider-ready backend vertical slice (service notifications, bounded realtime hub, subscription persistence with durable generation, supervisor, REST/SSE, and a locked production driver boundary); Stage E adds the WebUI live-data experience (streaming selections, canonical-field-only live views, and a deterministic SSE client with recovery and refresh).
 
 This is **not** a functioning market-data platform: no live provider connection is attempted in Stage D (the production Upstox driver is locked/disabled and real SDK construction is unreachable), no real socket is opened, no live/historical/option-chain feeds, no bulk exchange catalog download/seeding, no instrument search UI, no MCP market tools/Streamable HTTP transport, no watchlists/alerts/scanners/charts, no operational market-data configuration UI, no backup/restore, and no News/X/Twitter/market-wide integrations are implemented. Live-provider verification remains Stage G and requires separate authorization.
 
@@ -20,8 +20,8 @@ This is **not** a functioning market-data platform: no live provider connection 
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
 | `main` / `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (unchanged) |
-| `develop` / `origin/develop` | `f51e7dbe4dbba52f368814dd6d7feca70c47defb` — final Stage D correction (stale reconnect-timer cancellation), synced with remote. Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
-| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (`4dcce71` implementation, `650c8ff` first fix-forward, `d2f72fc` final review corrections + V3 references, `a0aa0ae` reconnect/pending-update lifecycle, `f51e7db` stale reconnect-timer cancellation). `main` untouched throughout. |
+| `develop` / `origin/develop` | Current HEAD is the Stage E documentation closeout commit (synced with remote). Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
+| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (`4dcce71` implementation, `650c8ff` first fix-forward, `d2f72fc` final review corrections + V3 references, `a0aa0ae` reconnect/pending-update lifecycle, `f51e7db` stale reconnect-timer cancellation); M4 Stage E (`ea0cae0` initial implementation, `00e6830` named SSE / manual retry / review fixes, `a8f4eef` initial-sync and retry-cancellation corrections, plus this documentation closeout which also includes the final refresh-before-snapshot and stale-snapshot fixes). `main` untouched throughout. |
 
 ### 2.2 Historical context (preserved)
 
@@ -77,22 +77,31 @@ This is **not** a functioning market-data platform: no live provider connection 
 - **Locked production boundary:** `LockedUpstoxDriver` fails safely on any start/update attempt; no SDK construction, sockets or retry scheduling. Real driver construction is unreachable through startup/API/config and requires a separately authorized, independently reviewed Stage G change.
 - **REST/SSE:** `GET /api/market/snapshot`, `GET /api/market/stream`, `GET/PUT /api/market/subscriptions` (PUT local-owner-only); `/api/providers/status` composes auth status with runtime streaming state.
 - **Config:** small validated live policy with defensible defaults; no user-controlled live-connection authorization setting.
-- **Tests:** 69 focused Stage D server-side tests across 6 files (notifications, hub, persistence/migration, supervisor + locked boundary, routes/SSE, provider-status composition), including deterministic regression tests for every independent-review correction. No Stage E client tests, no real network.
+- **Tests:** 69 focused Stage D server-side tests across 6 files (notifications, hub, persistence/migration, supervisor + locked boundary, routes/SSE, provider-status composition), including deterministic regression tests for every independent-review correction. Stage E client tests are recorded separately in §3.7; no real network.
 
-### 3.7 Verification snapshot (final, 2026-11-17)
+### 3.7 M4 Stage E — WebUI live-data experience (published, accepted)
+
+- **Streaming selections (`apps/web/src/lib/subscriptions.ts`, `components/SubscriptionPanel.tsx`):** typed GET/PUT client for `/api/market/subscriptions` with serialized full-replacement writes and a generation guard; explicit 403 local-owner, 400 validation, 500 persistence, 500 internal and 200-with-runtime-error classification; manual canonical-ID entry (instrument search is a documented limitation).
+- **SSE client (`apps/web/src/lib/live-stream.ts`):** named-event listeners for all six backend events (`snapshot`, `item-updated`, `item-removed`, `provider-connection-changed`, `snapshot-required`, `refresh`) with removal on close/supersede; initial no-cursor stream stays `connecting` until a validated snapshot, recovery/`?since=` streams enter `live` on `open`; single-flight recovery with capped backoff, shutdown cancellation via `AbortSignal`, visible error and manual retry; fetch-only refresh with generation guards, stale rejection, bounded retry and periodic-control suppression after exhaustion; monotonic snapshot application prevents revision regression; fresh terminal-per-instance controller per React effect lifecycle with `?since=` resume from the stored snapshot.
+- **Display (`apps/web/src/lib/live.ts`, `components/LivePanel.tsx`):** pure reducer with duplicate/gap detection and full invalidation for `provider-connection-changed`; canonical display-model projection renders only agreed `CanonicalLiveValue`, observation and provenance fields — `value.native`, provider-native fields and market depth are never read or displayed. `streamStatus = live` denotes SSE transport only, never a streaming provider feed.
+- **State (`apps/web/src/store/live-store.ts`):** Zustand store persisting across StrictMode controller remounts.
+- **Tests:** 45 focused web tests across 3 files with deterministic fake EventSource/fetch; no real network, no fake production endpoint, no driver unlock.
+
+### 3.8 Verification snapshot (final, 2026-11-17)
 
 | Check | Result |
 |---|---|
 | `bun run typecheck` | Pass (exit 0) — all 12 workspaces |
-| `bun test` | Pass — **256 tests, 0 failures, 1003 expect() calls, 23 files** (local verification; not CI evidence) |
-| Focused Stage D tests | Pass — **69 tests, 0 failures, 270 expect() calls, 6 files** |
+| `bun test` | Pass — **301 tests, 0 failures, 1162 expect() calls, 26 files** (local verification; not GitHub CI evidence) |
+| Focused web tests | Pass — **45 tests, 0 failures, 159 expect() calls, 3 files** (local verification; not CI evidence) |
+| Focused Stage D tests | Pass — 69 tests, 0 failures, 270 expect() calls, 6 files |
 | Focused supervisor tests | Pass — 24 tests, 0 failures, 121 expect() calls |
 | `bun run build` | Pass (exit 0) — packages/apps checks; web Vite build succeeded |
 | `git diff --check` | Pass (exit 0) |
 | Migration safety | Clean-install and M3→M4 upgrade tests pass on isolated temporary databases |
 | Locked boundary | No SDK construction, socket or provider contact in API/realtime/contracts source; production composes only `LockedUpstoxDriver` |
 
-### 3.8 Manual/official verification notes
+### 3.9 Manual/official verification notes
 
 - **LAN:** configurable bind/LAN mode implemented and documented; external second-device LAN testing was not performed in this environment.
 - **Official provider/exchange research:** Upstox instrument-key/field concepts and SDK version reviewed from official docs; NSE equity-derivatives contract specifications and products pages verified as current NSE publications. BSE/FYERS detailed identifier/master specifics and actual listed contracts/specs/expiries remain to be verified from authoritative sources before integration. No live provider connection or real exchange/provider data was used in Stage D.
@@ -104,26 +113,26 @@ This is **not** a functioning market-data platform: no live provider connection 
 - Historical candle retrieval/sync/caching and option-chain snapshot capture/storage.
 - Watchlists, alerts, scanners, condition evaluation, delivery channels.
 - MCP market tools/resources/events beyond health/status foundation; Streamable HTTP MCP transport.
-- Instrument search UI, market-data WebUI screens (Stage E), operational configuration UI, charts.
+- Instrument search UI (manual canonical-ID entry is the Stage E limitation), operational configuration UI, charts.
 - Backup/restore, integrity maintenance, diagnostics UI.
 - News and X/Twitter integrations (later phase).
 
 ## 5. Documentation status
 
-- Roadmap updated to reflect M1–M3 and M4 Stages A/B published and Stage D implemented.
+- Roadmap updated to reflect M1–M3 and M4 Stages A/B/D/E published and accepted.
 - Architecture/catalog/semantics/lifecycle/decisions/references updated to record the live-data pipeline, persistence ownership, locked production boundary, and remaining unverified/provider-integration gaps.
 - `AGENTS.md` and `README.md` remain aligned with the two-branch workflow and current foundation state; task reports must record exact Git state.
 
 ## 6. Known notes and limitations
 
-- M1–M3, M4 Stages A/B and Stage D are published on `develop`; `main` remains unchanged. Stage D is accepted; its final commit is `f51e7db`.
-- The canonical catalog and live pipeline are not yet wired to WebUI live views or MCP market surfaces; no real provider data is loaded.
+- M1–M3, M4 Stages A/B/D and Stage E are published on `develop`; `main` remains unchanged. Stage D and Stage E are both accepted.
+- The canonical catalog and live pipeline are now consumed by WebUI live views; MCP market surfaces remain unwired and no real provider data is loaded.
 - Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before live integration.
 - Production start requires a prior build (`bun run build` then `bun run start`).
 - `project-status.json` remains out-of-scope if it reappears.
 
 ## 7. Readiness for next phase
 
-**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D backend live-data pipeline are implemented, verified and published. **Stage D is accepted.** It delivers a provider-ready backend vertical slice with a locked production driver boundary; no live provider connection is attempted and no real feed has been tested.
+**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D/E live-data pipeline and WebUI experience are implemented, verified and published. **Stage D and Stage E are accepted.** The production driver remains locked; no live provider connection is attempted and no real feed has been tested.
 
-**Next:** **Stage E** (WebUI streaming selections and live-data experience, including EventSource close/fetch/reconnect and `refresh` client behavior) proceeds under a **separately scoped assignment**. Then **Stage F** (deep reconnect/recovery/concurrency hardening), **Stage C** (FYERS Data Socket adapter), and **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.
+**Next:** **Stage F** (deep reconnect/recovery/concurrency/resource hardening), then **Stage C** (FYERS Data Socket adapter), then **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.

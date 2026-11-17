@@ -4,7 +4,8 @@
 > **Last updated:** 2026-11-17
 
 ## Current checks (verified 2026-11-17)
-- `bun test`: **PASS** — 256 tests, 0 fail, 1003 expect() calls, 23 files (local verification; not CI evidence).
+- `bun test`: **PASS** — 301 tests, 0 fail, 1162 expect() calls, 26 files (local verification; not GitHub CI evidence).
+- Focused web tests: **PASS** — 45 tests, 0 fail, 159 expect() calls, 3 files (local verification; not CI evidence).
 - Focused Stage D tests: **PASS** — 69 tests, 0 fail, 270 expect() calls, 6 files.
 - `bun run typecheck`: **PASS** — all 12 workspace packages/apps.
 - `bun run build`: **PASS** — package/app checks and web Vite production build.

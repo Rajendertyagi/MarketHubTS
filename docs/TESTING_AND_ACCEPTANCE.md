@@ -1,6 +1,6 @@
 # Testing and Acceptance
 
-> **Status:** Validation strategy and acceptance criteria; automated coverage now spans foundation, catalog, provider auth, live contracts, Upstox stream, and the M4 Stage D backend vertical slice.
+> **Status:** Validation strategy and acceptance criteria; automated coverage spans foundation, catalog, provider auth, live contracts, Upstox stream, the M4 Stage D backend vertical slice, and the Stage E WebUI live-data experience.
 > **Last updated:** 2026-11-17
 > **Related:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
@@ -17,7 +17,8 @@
 
 | Check | Command | Result |
 |---|---|---|
-| Full test suite | `bun test` | PASS — **256 tests, 0 fail, 1003 expect() calls, 23 files** (local verification; not CI evidence) |
+| Full test suite | `bun test` | PASS — **301 tests, 0 fail, 1162 expect() calls, 26 files** (local verification; not GitHub CI evidence) |
+| Focused web tests | `bun test ./tests/web/` | PASS — **45 tests, 0 fail, 159 expect() calls, 3 files** (local verification; not CI evidence) |
 | Focused Stage D tests | `bun test tests/market/notifications.test.ts tests/market/realtime-hub.test.ts tests/market/subscriptions.test.ts tests/market/supervisor.test.ts tests/market/stream-routes.test.ts tests/providers/status-composition.test.ts` | PASS — **69 tests, 0 fail, 270 expect() calls, 6 files** |
 | Focused supervisor tests | `bun test tests/market/supervisor.test.ts` | PASS — 24 tests, 0 fail, 121 expect() calls |
 | Typecheck | `bun run typecheck` | PASS — all 12 workspace packages/apps |
@@ -33,7 +34,16 @@
 - **Persistence/routes:** clean-install migration; M3→M4 upgrade preserving data; repository round-trip; empty replacement advances generation; invalid canonical IDs rejected atomically; missing/inactive mappings reported unavailable with no fabricated identifiers; serialized reconciliation with durable generation guard; snapshot route validated; subscription routes local-owner-only; SSE cursor/replay via `app.request()`; multi-client isolation/cleanup.
 - **Supervisor:** fake driver; loads persisted state and latest generation; ACTIVE Upstox mappings only; empty/no-eligible handling; reconciles changes via driver; propagates runtime state to the service; bounded retry deterministic with a fake driver; stop prevents late callbacks; one driver failure cannot corrupt shared state; locked production driver fails safely on any start attempt and never instantiates an SDK, opens a socket or schedules retries. Final corrections covered by deterministic tests: DISCONNECTED/ERROR retire the driver and retry with a fresh `start()` (never an in-place update of a dead driver); old-driver callbacks are invalidated; pending start/update operations settle with final cleanup after shutdown/retirement without advancing applied generation or overwriting `NOT_STARTED`; desired and applied generations are tracked separately; a stale reconnect timer is cancelled on retirement so a newer epoch can schedule its retry (manual timer scheduler seam).
 
-Stage E client behavior (EventSource close/fetch/reconnect after `provider-connection-changed` and `snapshot-required`, and `refresh` handling) is specified as a contract but is explicitly out of Stage D scope and not tested here. No real network call occurs in any Stage D test.
+### 2.2 Stage E WebUI client coverage (implemented, accepted)
+
+- **Named SSE events:** listeners for all six backend event names with removal on close/supersede; fake EventSource records actual listener invocations, not just a dispatch log.
+- **Initial vs recovery connection:** initial no-cursor stream stays `connecting` until a validated snapshot; recovery/`?since=` streams enter `live` on `open`; a refresh that supplies the first snapshot also completes initial sync.
+- **Recovery:** `snapshot-required` and `provider-connection-changed` trigger close → REST snapshot → atomic replacement → reconnect with `?since=`; single-flight dedup; capped backoff; shutdown cancellation via `AbortSignal`; visible error and manual retry; stale recovery snapshots are rejected so `appliedRevision` cannot regress.
+- **Refresh:** fetch-only with EventSource kept open; superseded generations ignored; stale revisions rejected; bounded retry with periodic-control suppression after exhaustion and manual retry; invalidated by recovery.
+- **Subscriptions:** serialized PUT writes with generation guard; 403/400/500-persistence/500-other/200-with-runtime-error classification; manual canonical-ID entry.
+- **Display:** canonical-field-only projection excludes `native`/depth; `item-removed` removes items; `streamStatus = live` is not presented as a streaming provider feed; StrictMode remount resumes with `?since=` from the stored snapshot.
+
+No real network call occurs in any Stage D or Stage E test; all SSE/fetch behavior uses deterministic fakes.
 
 ## 3. Provider-state matrix (required)
 
@@ -99,7 +109,8 @@ Specific numeric targets must be established and evidenced during implementation
 - **M2:** provider-state matrix (connectivity) and secret-handling checks pass.
 - **M3:** provider auth states, secret handling and provider independence verified with mocks.
 - **M4 Stage A/B:** canonical live contracts, bounded state, freshness/source selection and Upstox stream adapter tests pass.
-- **M4 Stage D (accepted):** server-side live pipeline, bounded buffers/overflow rule, subscription persistence/generation, SSE cursor/replay, multi-client isolation, locked production boundary and all independent-review lifecycle corrections verified (see §2.1). Final commit `f51e7db`; 69 focused tests pass. WebUI client behavior is Stage E; deep reconnect/soak hardening is Stage F; live provider verification is Stage G.
+- **M4 Stage D (accepted):** server-side live pipeline, bounded buffers/overflow rule, subscription persistence/generation, SSE cursor/replay, multi-client isolation, locked production boundary and all independent-review lifecycle corrections verified (see §2.1). Final commit `f51e7db`; 69 focused tests pass.
+- **M4 Stage E (accepted):** WebUI streaming selections, canonical-field-only live views, named SSE client with recovery/refresh, manual retry and StrictMode resume verified with deterministic fakes (see §2.2). Implementation commits `ea0cae0`, `00e6830`, `a8f4eef` plus the final closeout fixes; 45 focused web tests pass. Deep reconnect/soak hardening is Stage F; live provider verification is Stage G.
 - **M5:** historical cache/snapshot persistence, retention, and config-independence verified.
 - **M5:** MCP transport/capability/permission/parity tests pass, including alert-event resource/subscription/read-after-notify, cursor/reconnect recovery, multi-client isolation, and polling/tool fallback behavior (per verified spec/SDK).
 - **M6:** alert waiting-state, scanner limitation reporting, delivery and shared-history tests pass.

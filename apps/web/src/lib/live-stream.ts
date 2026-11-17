@@ -156,6 +156,20 @@ export class LiveStreamController {
     this.emitState();
   }
 
+  /**
+   * Apply a snapshot only when it does not regress the applied revision.
+   * Returns false for unsafe or stale snapshots; the caller decides whether
+   * to ignore it or treat it as a failed operation.
+   */
+  private applySnapshotIfCurrent(snapshot: LiveSnapshot): boolean {
+    if (!isSafeRevision(snapshot.revision)) return false;
+    if (snapshot.revision < this.appliedRevision) return false;
+    this.snapshot = snapshot;
+    this.appliedRevision = snapshot.revision;
+    this.opts.onSnapshot(snapshot);
+    return true;
+  }
+
   private closeEventSource(): void {
     const current = this.eventSource;
     this.eventSource = null;
@@ -221,9 +235,11 @@ export class LiveStreamController {
         this.triggerRecovery("unsafe snapshot revision");
         return;
       }
-      this.snapshot = parsed.snapshot;
-      this.appliedRevision = parsed.snapshot.revision;
-      this.opts.onSnapshot(parsed.snapshot);
+      if (!this.applySnapshotIfCurrent(parsed.snapshot)) {
+        // Stale snapshot event: current state is already newer. Ignore it
+        // rather than regressing appliedRevision and reprocessing old events.
+        return;
+      }
       if (this.awaitingInitialSnapshot) {
         this.awaitingInitialSnapshot = false;
         this.setStatus("live");
@@ -282,10 +298,9 @@ export class LiveStreamController {
       try {
         const snapshot = await this.opts.fetchSnapshot();
         if (this.stopped || generation !== this.recoveryGeneration) return;
-        if (!isSafeRevision(snapshot.revision)) throw new Error("invalid snapshot revision");
-        this.snapshot = snapshot;
-        this.appliedRevision = snapshot.revision;
-        this.opts.onSnapshot(snapshot);
+        // A stale or invalid recovery snapshot must not regress appliedRevision;
+        // treat it as a failed attempt so bounded retry can fetch a fresh one.
+        if (!this.applySnapshotIfCurrent(snapshot)) throw new Error("stale or invalid recovery snapshot");
         this.recovering = false;
         this.lastError = null;
         this.emitState();
@@ -334,12 +349,17 @@ export class LiveStreamController {
           this.emitState();
           return;
         }
-        this.snapshot = snapshot;
-        this.appliedRevision = snapshot.revision;
-        this.opts.onSnapshot(snapshot);
+        if (!this.applySnapshotIfCurrent(snapshot)) return; // defensive; guard above covers it
         this.refreshStatus = "idle";
         this.refreshError = null;
-        this.emitState();
+        if (this.awaitingInitialSnapshot) {
+          // A refresh that arrives before the initial snapshot event still
+          // supplies a validated snapshot — complete initial synchronization.
+          this.awaitingInitialSnapshot = false;
+          this.setStatus("live");
+        } else {
+          this.emitState();
+        }
         return;
       } catch (error) {
         if (this.stopped || generation !== this.refreshGeneration || this.recovering) return;
