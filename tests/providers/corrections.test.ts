@@ -232,7 +232,7 @@ describe("final M3 corrections", () => {
     const c2 = loadConfig({ env: { MARKETHUB_DB_PATH: dbPath } });
     const pc2 = providerConfigFromAppConfig(c2);
     const u2 = new UpstoxAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => { throw new Error("offline"); } });
-    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => { throw new Error("offline"); } });
+    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, now: () => new Date("2026-11-16T10:00:00.000Z"), fetchImpl: async () => { throw new Error("offline"); } });
     await Promise.all([u2.initialize(), f2.initialize()]);
     const r2 = new ProviderRegistry();
     r2.register(u2); r2.register(f2);
@@ -313,7 +313,7 @@ describe("final startup-state corrections", () => {
     handles.push(h2);
     const pc2 = providerConfigFromAppConfig(loadConfig({ env: { MARKETHUB_DB_PATH: dbPath } }));
     const u2 = new UpstoxAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => validUpstox() });
-    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, fetchImpl: async () => validFyersProfile() });
+    const f2 = new FyersAdapter({ credentials: new SqliteCredentialStore(h2), settings: new SqliteProviderSettings(h2), config: pc2, now: () => new Date("2026-11-16T10:00:00.000Z"), fetchImpl: async () => validFyersProfile() });
     await Promise.all([u2.initialize(), f2.initialize()]);
     expect(u2.getStatus().restrictions).toContain(VALIDATION_REQUIRED_ADVISORY);
     expect(f2.getStatus().restrictions).toContain(VALIDATION_REQUIRED_ADVISORY);
