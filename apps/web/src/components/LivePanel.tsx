@@ -102,7 +102,11 @@ export function LivePanel() {
         if (!response.ok) throw new Error(`Snapshot request failed (${response.status})`);
         return parseSnapshot(await response.json());
       },
-      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      sleep: (ms, signal) => new Promise<void>((resolve) => {
+        if (signal?.aborted) { resolve(); return; }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+      }),
       onSnapshot: (next) => useLiveStore.getState().setSnapshot(next),
       onState: (next) => useLiveStore.getState().setStream(next)
     });

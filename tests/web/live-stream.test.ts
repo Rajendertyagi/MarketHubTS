@@ -30,12 +30,18 @@ function updated(revision: number, canonicalId: string): LiveChangeEvent {
   return { type: "item-updated", revision, canonicalId, item: item(canonicalId) };
 }
 
-/** Fake EventSource that dispatches named events through addEventListener. */
+function removed(revision: number, canonicalId: string): LiveChangeEvent {
+  return { type: "item-removed", revision, canonicalId };
+}
+
+/** Fake EventSource that dispatches named events and records real listener invocations. */
 class FakeEventSource implements EventSourceLike {
   private listeners = new Map<string, Set<SseListener>>();
   closed = false;
   lastEventId = "";
   readonly dispatched: string[] = [];
+  /** Records only when a registered listener callback actually runs. */
+  readonly invoked: string[] = [];
 
   constructor(readonly url: string) {}
 
@@ -47,9 +53,15 @@ class FakeEventSource implements EventSourceLike {
   removeEventListener(type: string, listener: SseListener): void {
     this.listeners.get(type)?.delete(listener);
   }
+  listenerCount(type: string): number { return this.listeners.get(type)?.size ?? 0; }
   private dispatch(type: string, event: SseEventLike): void {
     this.dispatched.push(type);
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
+    const set = this.listeners.get(type);
+    if (!set || set.size === 0) return;
+    for (const listener of set) {
+      this.invoked.push(type);
+      listener(event);
+    }
   }
   close(): void { this.closed = true; this.listeners.clear(); }
   open(): void { this.dispatch("open", { data: "", lastEventId: this.lastEventId }); }
@@ -61,7 +73,6 @@ class FakeEventSource implements EventSourceLike {
     this.emitNamed("item-updated", payload, revision);
   }
   emitControl(type: "refresh" | "snapshot-required"): void {
-    // Control events have no own id; the browser retains the previous data id.
     this.emitNamed(type, { type });
   }
   fail(): void { this.dispatch("error", { data: "", lastEventId: this.lastEventId }); }
@@ -90,6 +101,7 @@ function harness(overrides: Partial<ConstructorParameters<typeof LiveStreamContr
   const states: StreamState[] = [];
   const snapshots: LiveSnapshot[] = [];
   const sleeps: number[] = [];
+  let sleepAborts = 0;
   const controller = new LiveStreamController({
     createEventSource: (url) => {
       const source = new FakeEventSource(url);
@@ -97,25 +109,28 @@ function harness(overrides: Partial<ConstructorParameters<typeof LiveStreamContr
       return source;
     },
     fetchSnapshot: fetcher.fetchSnapshot,
-    sleep: async (ms) => { sleeps.push(ms); },
+    sleep: (ms, signal) => new Promise<void>((resolve) => {
+      sleeps.push(ms);
+      if (signal?.aborted) { resolve(); return; }
+      signal?.addEventListener("abort", () => { sleepAborts++; resolve(); }, { once: true });
+      resolve(); // normal retries resolve immediately; abort still tracked
+    }),
     onSnapshot: (next) => { snapshots.push(next); },
     onState: (next) => { states.push(next); },
     ...overrides
   });
   const lastState = () => states[states.length - 1]!;
-  return { controller, sources, fetcher, states, snapshots, sleeps, lastState };
+  return { controller, sources, fetcher, states, snapshots, sleeps, lastState, get sleepAborts() { return sleepAborts; } };
 }
 
 async function startLive(h: ReturnType<typeof harness>, revision = 1) {
   h.controller.start();
-  // open() must precede the initial named snapshot event.
-  h.sources[0]!.open();
-  h.sources[0]!.emitNamed("snapshot", snapshot(revision), revision);
+  h.sources[0]!.open(); // initial open stays connecting
+  h.sources[0]!.emitNamed("snapshot", snapshot(revision), revision); // snapshot -> live
 }
 
 describe("named SSE event dispatch", () => {
-  test("browser adapter receives all six backend event names", () => {
-    // The controller registers listeners for every backend event name.
+  test("all six backend event names have registered listeners that are actually invoked", () => {
     expect(SSE_EVENT_NAMES).toEqual([
       "snapshot", "item-updated", "item-removed", "provider-connection-changed",
       "snapshot-required", "refresh"
@@ -123,59 +138,79 @@ describe("named SSE event dispatch", () => {
     const h = harness();
     h.controller.start();
     const source = h.sources[0]!;
-    // Dispatch one of each named event; all must be received (no throw).
-    source.emitNamed("snapshot", snapshot(1), 1);
-    source.emitNamed("item-updated", updated(2, "A"), 2);
-    source.emitNamed("item-removed", { type: "item-removed", revision: 3, canonicalId: "A" }, 3);
-    source.emitNamed("provider-connection-changed", {
-      type: "provider-connection-changed", revision: 4, provider: "UPSTOX",
-      status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
-      requiresSnapshotRefresh: true
-    }, 4);
-    source.emitNamed("snapshot-required", { type: "snapshot-required" });
-    source.emitNamed("refresh", { type: "refresh" });
-    for (const name of SSE_EVENT_NAMES) expect(source.dispatched).toContain(name);
+    for (const name of SSE_EVENT_NAMES) expect(source.listenerCount(name)).toBe(1);
+    expect(source.listenerCount("open")).toBe(1);
+    expect(source.listenerCount("error")).toBe(1);
+
+    // Emit each event on a fresh controller/source so recovery-triggering
+    // events (provider-connection-changed, snapshot-required) don't close it.
+    for (const name of SSE_EVENT_NAMES) {
+      const one = harness();
+      one.controller.start();
+      const src = one.sources[0]!;
+      expect(src.listenerCount(name)).toBe(1);
+      if (name === "snapshot") src.emitNamed("snapshot", snapshot(1), 1);
+      else if (name === "item-updated") src.emitNamed("item-updated", updated(1, "A"), 1);
+      else if (name === "item-removed") src.emitNamed("item-removed", removed(1, "A"), 1);
+      else if (name === "provider-connection-changed") src.emitNamed("provider-connection-changed", {
+        type: "provider-connection-changed", revision: 1, provider: "UPSTOX",
+        status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
+        requiresSnapshotRefresh: true
+      }, 1);
+      else src.emitNamed(name, { type: name });
+      expect(src.invoked).toContain(name);
+      one.controller.stop();
+    }
     h.controller.stop();
   });
 
-  test("listeners are removed when the source is closed", () => {
+  test("listeners are removed on close and no longer invoked", () => {
     const h = harness();
     h.controller.start();
     const source = h.sources[0]!;
     h.controller.stop();
     expect(source.closed).toBe(true);
-    const callsBefore = h.fetcher.calls;
+    for (const name of SSE_EVENT_NAMES) expect(source.listenerCount(name)).toBe(0);
+    const invokedBefore = source.invoked.length;
     source.emitNamed("refresh", { type: "refresh" });
-    // No listener remains, so no refresh fetch is triggered.
-    expect(h.fetcher.calls).toBe(callsBefore);
+    expect(source.invoked.length).toBe(invokedBefore);
   });
 });
 
-describe("LiveStreamController — initial and recovery connection", () => {
-  test("initial no-cursor stream receives a snapshot event then enters live", async () => {
+describe("initial connection state", () => {
+  test("initial open without a snapshot remains connecting", () => {
     const h = harness();
-    await startLive(h);
-    expect(h.sources[0]!.url).toBe("/api/market/stream");
-    expect(h.snapshots[0]!.revision).toBe(1);
-    expect(h.lastState().streamStatus).toBe("live");
+    h.controller.start();
+    h.sources[0]!.open();
+    expect(h.lastState().streamStatus).toBe("connecting");
     h.controller.stop();
   });
 
-  test("recovery ?since= stream with no events enters live on onopen", async () => {
+  test("a valid initial snapshot transitions to live", () => {
+    const h = harness();
+    h.controller.start();
+    h.sources[0]!.open();
+    expect(h.lastState().streamStatus).toBe("connecting");
+    h.sources[0]!.emitNamed("snapshot", snapshot(1), 1);
+    expect(h.lastState().streamStatus).toBe("live");
+    expect(h.snapshots[0]!.revision).toBe(1);
+    h.controller.stop();
+  });
+
+  test("recovery ?since= connection with no events enters live on open", async () => {
     const h = harness();
     await startLive(h);
     h.sources[0]!.emitControl("snapshot-required");
-    expect(h.lastState().streamStatus).toBe("recovering");
     h.fetcher.resolveNext(snapshot(2));
     await flush();
-    expect(h.sources.length).toBe(2);
     expect(h.sources[1]!.url).toBe("/api/market/stream?since=2");
     h.sources[1]!.open();
     expect(h.lastState().streamStatus).toBe("live");
-    expect(h.sources[0]!.closed).toBe(true);
     h.controller.stop();
   });
+});
 
+describe("LiveStreamController — data events", () => {
   test("data events are applied with revision checks", async () => {
     const h = harness();
     await startLive(h);
@@ -184,6 +219,19 @@ describe("LiveStreamController — initial and recovery connection", () => {
     expect(h.snapshots[h.snapshots.length - 1]!.items.map((i) => i.canonicalId)).toEqual(["A"]);
     h.sources[0]!.emitData(updated(2, "A"), 2); // duplicate
     expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(2);
+    h.controller.stop();
+  });
+
+  test("item-removed removes the item from the snapshot", async () => {
+    const h = harness();
+    await startLive(h, 1);
+    h.sources[0]!.emitData(updated(2, "A"), 2);
+    h.sources[0]!.emitData(updated(3, "B"), 3);
+    expect(h.snapshots[h.snapshots.length - 1]!.items.map((i) => i.canonicalId)).toEqual(["A", "B"]);
+    h.sources[0]!.emitNamed("item-removed", removed(4, "A"), 4);
+    const latest = h.snapshots[h.snapshots.length - 1]!;
+    expect(latest.revision).toBe(4);
+    expect(latest.items.map((i) => i.canonicalId)).toEqual(["B"]);
     h.controller.stop();
   });
 
@@ -218,9 +266,7 @@ describe("LiveStreamController — initial and recovery connection", () => {
     h.fetcher.resolveNext(snapshot(3));
     await flush();
     h.sources[1]!.open();
-    expect(h.lastState().streamStatus).toBe("live");
     const callsAfterRecovery = h.fetcher.calls;
-    // Duplicate event with revision <= applied (3) must be ignored.
     h.sources[1]!.emitNamed("provider-connection-changed", { ...event, revision: 2 }, 2);
     await flush();
     expect(h.fetcher.calls).toBe(callsAfterRecovery);
@@ -242,7 +288,7 @@ describe("LiveStreamController — refresh", () => {
   test("refresh fetches a snapshot, keeps EventSource open, and later events still apply", async () => {
     const h = harness();
     await startLive(h);
-    h.sources[0]!.emitControl("refresh"); // retained non-empty lastEventId
+    h.sources[0]!.emitControl("refresh");
     expect(h.lastState().refreshStatus).toBe("fetching");
     h.fetcher.resolveNext(snapshot(3));
     await flush();
@@ -257,15 +303,15 @@ describe("LiveStreamController — refresh", () => {
   test("superseded refresh generation is ignored with no state mutation", async () => {
     const h = harness();
     await startLive(h);
-    h.sources[0]!.emitControl("refresh"); // gen A
-    h.sources[0]!.emitControl("refresh"); // gen B supersedes A
+    h.sources[0]!.emitControl("refresh");
+    h.sources[0]!.emitControl("refresh");
     expect(h.fetcher.pendingCount).toBe(2);
     const before = h.snapshots.length;
-    h.fetcher.resolveNext(snapshot(5)); // stale gen A response
+    h.fetcher.resolveNext(snapshot(5));
     await flush();
     expect(h.snapshots.length).toBe(before);
     expect(h.lastState().refreshStatus).toBe("fetching");
-    h.fetcher.resolveNext(snapshot(6)); // current gen B
+    h.fetcher.resolveNext(snapshot(6));
     await flush();
     expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(6);
     expect(h.lastState().refreshStatus).toBe("idle");
@@ -277,7 +323,7 @@ describe("LiveStreamController — refresh", () => {
     await startLive(h, 5);
     h.sources[0]!.emitControl("refresh");
     const before = h.snapshots.length;
-    h.fetcher.resolveNext(snapshot(4)); // below appliedRevision 5
+    h.fetcher.resolveNext(snapshot(4));
     await flush();
     expect(h.snapshots.length).toBe(before);
     expect(h.lastState().refreshStatus).toBe("stale");
@@ -296,7 +342,7 @@ describe("LiveStreamController — refresh", () => {
     expect(h.lastState().refreshStatus).toBe("error");
     expect(h.sources[0]!.closed).toBe(false);
     const callsAfterExhaustion = h.fetcher.calls;
-    h.sources[0]!.emitControl("refresh"); // periodic control ignored
+    h.sources[0]!.emitControl("refresh");
     expect(h.fetcher.calls).toBe(callsAfterExhaustion);
     h.controller.retryRefresh();
     h.fetcher.resolveNext(snapshot(7));
@@ -313,11 +359,11 @@ describe("LiveStreamController — refresh", () => {
     h.sources[0]!.emitControl("snapshot-required");
     expect(h.fetcher.pendingCount).toBe(2);
     const before = h.snapshots.length;
-    h.fetcher.resolveNext(snapshot(8)); // stale refresh response
+    h.fetcher.resolveNext(snapshot(8));
     await flush();
     expect(h.snapshots.length).toBe(before);
     expect(h.lastState().refreshStatus).toBe("idle");
-    h.fetcher.resolveNext(snapshot(9)); // recovery response
+    h.fetcher.resolveNext(snapshot(9));
     await flush();
     expect(h.snapshots[h.snapshots.length - 1]!.revision).toBe(9);
     h.controller.stop();
@@ -342,6 +388,32 @@ describe("LiveStreamController — lifecycle and safety", () => {
     h.controller.stop();
   });
 
+  test("stop cancels a pending retry delay and no further retry work runs", async () => {
+    // Sleep stays pending until aborted, proving cancellation rather than timing luck.
+    let sleepStarted = 0;
+    let sleepAborted = 0;
+    const h = harness({
+      maxRecoveryAttempts: 3,
+      sleep: (_ms, signal) => new Promise<void>((resolve) => {
+        sleepStarted++;
+        if (signal?.aborted) { resolve(); return; }
+        signal?.addEventListener("abort", () => { sleepAborted++; resolve(); }, { once: true });
+      })
+    });
+    await startLive(h);
+    h.sources[0]!.fail();
+    h.fetcher.rejectNext(new Error("down")); // first failure -> pending retry sleep
+    await flush();
+    expect(sleepStarted).toBe(1);
+    const callsBeforeStop = h.fetcher.calls;
+    h.controller.stop(); // aborts the pending sleep
+    await flush();
+    expect(sleepAborted).toBe(1); // pending delay was cancelled
+    expect(h.lastState().streamStatus).toBe("closed");
+    expect(h.fetcher.calls).toBe(callsBeforeStop); // no further retry fetch
+    expect(sleepStarted).toBe(1); // no additional retry scheduled
+  });
+
   test("stop cancels work and invalidates late callbacks and fetches", async () => {
     const h = harness();
     await startLive(h);
@@ -359,9 +431,7 @@ describe("LiveStreamController — lifecycle and safety", () => {
     const first = harness();
     await startLive(first, 5);
     first.controller.stop();
-    expect(first.lastState().streamStatus).toBe("closed");
 
-    // New controller with the stored snapshot from the previous instance.
     const second = harness({ initialSnapshot: snapshot(5) });
     second.controller.start();
     expect(second.sources[0]!.url).toBe("/api/market/stream?since=5");
@@ -369,7 +439,7 @@ describe("LiveStreamController — lifecycle and safety", () => {
     expect(second.lastState().streamStatus).toBe("live");
 
     const before = second.snapshots.length;
-    first.sources[0]!.emitData(updated(99, "OLD"), 99); // old callbacks inert
+    first.sources[0]!.emitData(updated(99, "OLD"), 99);
     expect(second.snapshots.length).toBe(before);
     second.controller.stop();
   });

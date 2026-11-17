@@ -45,7 +45,8 @@ export interface LiveStreamControllerOptions {
   /** Stored snapshot from a previous instance (StrictMode remount) — resume via ?since=. */
   initialSnapshot?: LiveSnapshot;
   fetchSnapshot: () => Promise<LiveSnapshot>;
-  sleep: (ms: number) => Promise<void>;
+  /** Retry delay; receives an abort signal so pending delays can be cancelled on stop(). */
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   onSnapshot: (snapshot: LiveSnapshot) => void;
   onState: (state: StreamState) => void;
   maxRecoveryAttempts?: number;
@@ -71,6 +72,7 @@ export class LiveStreamController {
   private readonly recoveryMaxDelayMs: number;
   private readonly maxRefreshAttempts: number;
   private readonly refreshBaseDelayMs: number;
+  private readonly abortController = new AbortController();
 
   private stopped = false;
   private streamGeneration = 0;
@@ -80,6 +82,8 @@ export class LiveStreamController {
   private sourceListeners: Array<[string, SseListener]> = [];
   private recovering = false;
   private refreshExhausted = false;
+  /** True only for an initial no-cursor stream awaiting its first snapshot. */
+  private awaitingInitialSnapshot = false;
 
   private snapshot: LiveSnapshot | null = null;
   private appliedRevision = 0;
@@ -101,20 +105,21 @@ export class LiveStreamController {
     if (this.stopped || this.streamStatus !== "idle") return;
     const stored = this.opts.initialSnapshot;
     if (stored && isSafeRevision(stored.revision)) {
-      // Resume from the stored applied revision; a ?since= stream may send no
-      // snapshot event, and onopen is sufficient to enter live.
+      // Resume from an already validated stored snapshot: onopen is sufficient.
       this.snapshot = stored;
       this.appliedRevision = stored.revision;
       this.openStream(stored.revision);
     } else {
+      // Initial synchronization: stay connecting until a valid snapshot arrives.
       this.openStream(null);
     }
   }
 
-  /** Terminal for this instance: invalidate all callbacks and cancel work. */
+  /** Terminal for this instance: invalidate callbacks, cancel timers and stop work. */
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.abortController.abort();
     this.streamGeneration++;
     this.recoveryGeneration++;
     this.refreshGeneration++;
@@ -167,6 +172,7 @@ export class LiveStreamController {
     if (this.stopped) return;
     const generation = ++this.streamGeneration;
     this.closeEventSource();
+    this.awaitingInitialSnapshot = cursor === null;
     this.setStatus("connecting");
 
     const url = cursor === null
@@ -182,8 +188,9 @@ export class LiveStreamController {
 
     add("open", () => {
       if (generation !== this.streamGeneration || this.stopped) return;
-      // After a validated REST recovery snapshot, onopen alone is sufficient
-      // to enter live — a ?since= stream may send no snapshot event at all.
+      // Initial sync stays connecting until a validated snapshot arrives.
+      // Recovery / stored-snapshot resume may enter live on open.
+      if (this.awaitingInitialSnapshot) return;
       this.setStatus("live");
     });
     add("error", () => {
@@ -217,6 +224,10 @@ export class LiveStreamController {
       this.snapshot = parsed.snapshot;
       this.appliedRevision = parsed.snapshot.revision;
       this.opts.onSnapshot(parsed.snapshot);
+      if (this.awaitingInitialSnapshot) {
+        this.awaitingInitialSnapshot = false;
+        this.setStatus("live");
+      }
       return;
     }
 
@@ -255,6 +266,16 @@ export class LiveStreamController {
     void this.runRecovery(generation, reason);
   }
 
+  /** Wait for a retry delay; returns false if the controller was stopped. */
+  private async waitForRetry(ms: number): Promise<boolean> {
+    try {
+      await this.opts.sleep(ms, this.abortController.signal);
+    } catch {
+      // A cancellable sleep may reject on abort; treat it as cancellation.
+    }
+    return !this.stopped;
+  }
+
   private async runRecovery(generation: number, reason: string): Promise<void> {
     let attempt = 0;
     while (!this.stopped && generation === this.recoveryGeneration) {
@@ -284,7 +305,7 @@ export class LiveStreamController {
           this.recoveryBaseDelayMs * 2 ** (attempt - 1),
           this.recoveryMaxDelayMs
         );
-        await this.opts.sleep(delay);
+        if (!(await this.waitForRetry(delay))) return;
       }
     }
   }
@@ -330,7 +351,7 @@ export class LiveStreamController {
           this.emitState();
           return;
         }
-        await this.opts.sleep(this.refreshBaseDelayMs);
+        if (!(await this.waitForRetry(this.refreshBaseDelayMs))) return;
       }
     }
   }
