@@ -91,7 +91,9 @@ Official sources and the exact `upstox-js-sdk@2.31.0` source were reviewed on 20
 
 - **Lifecycle:** `WSS /feed/market-data-feed` with `Authorization: Bearer <token>` and `followRedirects: true`. Successful auth returns **302** and redirects to the authorized endpoint; the manual path is `GET /feed/market-data-feed/authorize` → `data.authorized_redirect_uri` with a **single-use** `code`. First message is `market_info` (segment status, CAS/pre-open status); second is a snapshot (`initial_feed` on the wire); then `live_feed` updates. Server sends ping frames; clients pong. Requests are **binary** frames.
 - **Encoding:** Protobuf via the public `MarketDataFeed.proto`. `Feed` is a oneof of `ltpc`, `fullFeed`, `firstLevelWithGreeks`. Modes: `ltpc`, `option_greeks`, `full` (5-level), `full_d30` (30-level, **Plus-only**). `Type` enum: `initial_feed=0`, `live_feed=1`, `market_info=2`.
-- **Fields:** LTPC = `ltp`, `ltt`, `ltq`, `cp`, conditional `iep`. Full = LTPC + 5 `Quote{bidQ,bidP,askQ,askP}` + `optionGreeks{delta,theta,gamma,vega,rho}` + `marketOHLC` + `oi`, `iv`, `atp`, `vtt`, `tbq`, `tsq`, CAS fields. **IV is a separate field, not inside `OptionGreeks`.** Index feed = LTPC + OHLC only (no depth/greeks).
+- **Fields:** LTPC = `ltp`, `ltt`, `ltq`, `cp`, conditional `iep`. Full = LTPC + 5 `Quote{bidQ,bidP,askQ,askP}` + `optionGreeks{delta,theta,gamma,vega,rho}` + `marketOHLC` + `oi`, `iv`, `atp`, `vtt`, `tbq`, `tsq`, CAS fields. **IV is a separate field, not inside `OptionGreeks`.**
+- **Mode-table vs example/schema discrepancy (`option_greeks`):** the official V3 mode table describes `option_greeks` as containing **only option Greeks**, but the detailed `firstLevelWithGreeks` example and schema in the same page also show LTPC, first-level depth (`firstDepth`), `vtt` (volume), `oi` and `iv`. These are **documented example/schema fields**, not a guarantee of unconditional live delivery for that mode. The capability model must record this ambiguity: treat the mode table as the stated contract, treat the example/schema as documented-but-unconfirmed content, and require live verification before relying on any field beyond Greeks in `option_greeks` mode (§7.1, §17). Do not claim unconditional delivery where the official documentation is ambiguous.
+- **Instrument-type distinction (`IndexFullFeed` vs `MarketFullFeed`):** the protobuf defines `IndexFullFeed` as **LTPC + OHLC only**; it does **not** contain the `marketLevel` depth or `optionGreeks` structures used by `MarketFullFeed`. Full/Full D30 depth and Greeks therefore apply to **market instruments** (equity/F&O), not index instruments. The capability matrix is instrument-type-aware accordingly (§7.1).
 - **Limits (verified):** 2 connections/user normal (5 Plus); LTPC 5000 individual / 2000 combined; Option Greeks 3000/2000; Full 2000/1500; Full D30 50/1500 (Plus). Over-limit behavior is not feed-specific.
 - **SDK workarounds (verified from SDK source):** `autoReconnect` defaults **ON** — call `autoReconnect(false)` before connect; `changeMode()` sends `sub` instead of `change_mode` — never use it, do unsubscribe+subscribe; protobuf readiness is async — gate on `protobufRoot != null` with a bounded timeout; payloads may be `null`/string/Buffer — decode defensively. The existing `UpstoxMarketDataStream` already implements all four and should be **reused, not replaced**.
 - **Historical:** V3 historical candle API is available under Analytics Token with no static IP; candle = `[timestamp, open, high, low, close, volume, open_interest]`. Expired-instruments APIs are reported as Plus-only (project finding; not confirmed on the official pages fetched).
@@ -141,39 +143,43 @@ Statuses: **Verified** / **Plan-dependent** / **Not documented** / **Not availab
 | Volume | Verified (`OHLC.vol`, `vtt`) | Verified (`vol_traded_today` in `sf` only; not in `if`/lite) |
 | Last traded qty / time | Verified (`ltq`, `ltt`, ms) | Verified (`last_traded_qty`, `last_traded_time`; unit unverified — §17) |
 | Best bid/ask | Verified (`Quote`, `firstDepth`) | Verified (single-level in `sf`; not in `if`/lite) |
-| Five-level depth | Verified (full mode) | Verified (`dp`, separate subscription) |
-| Thirty-level depth | Plan-dependent (`full_d30`, Plus-only) | Not available (5-level Data Socket; 50-level is TBT) |
+| Five-level depth | Verified (Full, **market instruments only**; `IndexFullFeed` has none) | Verified (`dp`, separate subscription) |
+| Thirty-level depth | Plan-dependent (`full_d30`, Plus-only; **market instruments only**) | Not available (5-level Data Socket; 50-level is TBT) |
 | Open interest | Verified (`oi` in full/greeks feed) | Not available in Data Socket (REST `include_oi`) |
 | Implied volatility | Verified (`iv` field, not in `OptionGreeks`) | Not available in Data Socket |
-| Option Greeks | Verified (`delta/theta/gamma/vega/rho`) | Not available in Data Socket (REST `include_greeks`) |
-| Index updates | Verified (`IndexFullFeed`: LTPC + OHLC) | Verified (`if`: LTP/OHLC/change, no volume/bid-ask) |
+| Option Greeks | Verified (`delta/theta/gamma/vega/rho`); `option_greeks` mode table says "only Greeks" but example/schema also shows LTPC/L1 depth/volume/OI/IV — live delivery unverified (§7.1) | Not available in Data Socket (REST `include_greeks`) |
+| Index updates | Verified (`IndexFullFeed`: LTPC + OHLC, **no depth/Greeks**) | Verified (`if`: LTP/OHLC/change, no volume/bid-ask) |
 | Subscription limits | Verified (LTPC 5000/2000, Greeks 3000/2000, Full 2000/1500, D30 50/1500) | Verified (100 Standard / 5,000 Prime, per user across connections) |
 | Connection limits | Verified (2/user normal, 5 Plus) | Not documented (only "one instance at a time"; TBT 3×5 on Prime) |
 | Historical data | Verified (V3 candles, OHLCV+OI, no static IP) | Not available in Data Socket (REST, plan-dependent depth) |
 
-**Rules for using this matrix:** this matrix describes **streaming** capabilities only; REST-only fields (FYERS OI/IV/Greeks, historical data) are noted as such and belong to §6.2 / M5, not to live components. A "Not available" live field must be reported as unavailable, never calculated from other fields and never filled from a REST call on a tick. Plan-dependent capabilities (Upstox D30) must not be assumed for an account. Capability status is source-attributed and may change; do not hardcode a plan entitlement as a permanent architectural assumption (AD-023).
+**Rules for using this matrix:** this matrix describes **streaming** capabilities only; REST-only fields (FYERS OI/IV/Greeks, historical data) are noted as such and belong to §6.2 / M5, not to live components. A "Not available" live field must be reported as unavailable, never calculated from other fields and never filled from a REST call on a tick. Plan-dependent capabilities (Upstox D30) must not be assumed for an account. Upstox depth/Greeks rows apply to **market instruments** (`MarketFullFeed`); index instruments use `IndexFullFeed` (LTPC + OHLC only) and must not be implied to have Full/D30 depth or Greeks. The `option_greeks` mode table/example discrepancy is recorded in §7.1 and requires live verification. Capability status is source-attributed and may change; do not hardcode a plan entitlement as a permanent architectural assumption (AD-023).
 
 ### 7.1 Canonical quote field capability by provider and mode
 
 A boolean `quote: true/false` capability would conceal material differences. The capability description must be **field-level and depth-level**: it records which canonical fields a provider/mode actually supplies, so a consumer can see that Upstox LTPC is a narrow price feed while FYERS `sf` is a full quote. The following is derived from the official docs in §16 (accessed 2026-11-17), not inferred from field names.
 
-| Canonical quote field | Upstox LTPC | Upstox Full / Full D30 | Upstox option_greeks | FYERS `sf` (equity/option) | FYERS `if` (index) |
+Upstox columns below are **instrument-type-aware**: "Full / Full D30" means `MarketFullFeed` for **market instruments** (equity/F&O). For **index instruments** Upstox uses `IndexFullFeed` = LTPC + OHLC only, with **no depth and no Greeks** — see the "Index instruments" note below.
+
+| Canonical quote field | Upstox LTPC | Upstox Full / Full D30 (market instruments) | Upstox option_greeks | FYERS `sf` (equity/option) | FYERS `if` (index) |
 |---|---|---|---|---|---|
-| LTP (`ltp`) | Verified (`ltpc.ltp`) | Verified | Verified | Verified | Verified |
-| Last traded time | Verified (`ltpc.ltt`, ms) | Verified | Verified | Verified (`last_traded_time`, unit **unverified**) | Not sent |
-| Last traded quantity | Verified (`ltpc.ltq`) | Verified | Verified | Verified (`last_traded_qty`) | Not sent |
-| Previous session close | Verified (`ltpc.cp`) | Verified | Verified | Verified (`prev_close_price`) | Verified (`prev_close_price`) |
-| Open / high / low (current day) | Not sent | Verified (`marketOHLC`) | Not sent | Verified (`open_price`/`high_price`/`low_price`) | Verified |
-| Traded volume (current day) | Not sent | Verified (`vtt`, `ohlc.vol`) | Verified (`vtt`) | Verified (`vol_traded_today`) | **Not sent** (explicit) |
-| Average trade price | Not sent | Verified (`atp`) | Not sent | Verified (`avg_trade_price`) | Not sent |
+| LTP (`ltp`) | Verified (`ltpc.ltp`) | Verified | Verified (example/schema) | Verified | Verified |
+| Last traded time | Verified (`ltpc.ltt`, ms) | Verified | Verified (example/schema) | Verified (`last_traded_time`, unit **unverified**) | Not sent |
+| Last traded quantity | Verified (`ltpc.ltq`) | Verified | Verified (example/schema) | Verified (`last_traded_qty`) | Not sent |
+| Previous session close | Verified (`ltpc.cp`) | Verified | Verified (example/schema) | Verified (`prev_close_price`) | Verified (`prev_close_price`) |
+| Open / high / low (current day) | Not sent | Verified (`marketOHLC`) | Not sent in example/schema | Verified (`open_price`/`high_price`/`low_price`) | Verified |
+| Traded volume (current day) | Not sent | Verified (`vtt`, `ohlc.vol`) | Verified (`vtt`) in example/schema | Verified (`vol_traded_today`) | **Not sent** (explicit) |
+| Average trade price | Not sent | Verified (`atp`) | Not sent in example/schema | Verified (`avg_trade_price`) | Not sent |
 | Change / change % | Not sent as fields | Not sent as fields | Not sent as fields | Verified (`ch`/`chp`) | Verified (`ch`/`chp`) |
-| Best bid/ask (L1) | Not sent | Verified (level 1 of `marketLevel`) | Verified (`firstDepth`) | Verified (`bid_price`/`ask_price`/`bid_size`/`ask_size`) | **Not sent** (explicit) |
-| Depth levels | None | 5 (Full) / 30 (Full D30, Plus) | L1 only | L1 only in `sf` (5-level is the separate `dp` stream) | None |
+| Best bid/ask (L1) | Not sent | Verified (level 1 of `marketLevel`) | Verified (`firstDepth`) in example/schema | Verified (`bid_price`/`ask_price`/`bid_size`/`ask_size`) | **Not sent** (explicit) |
+| Depth levels | None | 5 (Full) / 30 (Full D30, Plus) — **market instruments only** | L1 (`firstDepth`) in example/schema | L1 only in `sf` (5-level is the separate `dp` stream) | None |
 
 Notes on the table:
 - "Not sent" means the field is absent from that mode's documented message; it must be reported as unavailable, never as zero. An actual zero from the provider is a distinct, valid value (§9.3.1).
 - Upstox LTPC is explicitly documented as containing "only the latest trading price (LTP) and close price (CP) changes" — it is **not** a full quote and carries no OHLC, volume, depth or Greeks.
 - Upstox Full/Full D30 carry LTPC + 5/30 market levels + extended metadata + option Greeks; `atp` (average traded price), `vtt` (volume traded today), `oi`, `iv` and CAS fields are present in the documented Full sample. Full D30 is Plus-only.
+- **Upstox `option_greeks` ambiguity:** the mode table says "only option Greeks", while the `firstLevelWithGreeks` example/schema also shows LTPC, `firstDepth`, `vtt`, `oi` and `iv`. Fields marked "example/schema" above are **documented but not guaranteed** for that mode; live delivery requires verification (§5, §17). Do not treat them as unconditional mode delivery.
+- **Upstox index instruments:** `IndexFullFeed` is LTPC + OHLC only (no `marketLevel` depth, no `optionGreeks`). Full/D30 depth and Greeks must **not** be implied for index instruments; an index instrument requests `quote` and reports depth/Greeks as unsupported. This is distinct from FYERS `if` (also no volume/bid-ask) and from market instruments where Full/D30 depth applies.
 - FYERS `if` is explicitly documented as having "only symbol, ltp, prev_close_price, high_price, low_price, open_price, ch, chp and type. Volume and bid or ask fields are not sent."
 - Change/change % are provider-supplied fields in FYERS; Upstox does not send them as fields in these feed modes. They must not be synthesized from LTP and previous close and presented as provider-supplied (a derived value would need separate labelling per AD-005).
 
@@ -239,10 +245,15 @@ Each component instance carries: provider, canonical ID, value, source timestamp
 Depth is represented as an ordered set of levels with an explicit **level count** and a per-level availability state, so providers and modes with different depth are honest about what they supply:
 
 - **L1-only source** (FYERS `sf` best bid/ask, Upstox option_greeks `firstDepth`): produces a `depth` component with `levelCount = 1` — best bid price/size and best ask price/size only. Levels 2..N are **absent**, not zero.
-- **Five-level source** (FYERS `dp`, Upstox Full): produces `levelCount = 5` with levels 1..5.
-- **Thirty-level source** (Upstox Full D30, Plus-only): produces `levelCount = 30`.
+- **Five-level source** (FYERS `dp`, Upstox Full for market instruments): produces `levelCount = 5` with levels 1..5.
+- **Thirty-level source** (Upstox Full D30, Plus-only, market instruments): produces `levelCount = 30`.
 
-A later, richer update for the same provider/instrument **replaces** the depth component with the new level set (e.g. an L1 `sf` depth followed by a five-level `dp` update yields `levelCount = 5`). A later, *narrower* update does not silently erase the richer levels unless the provider contract establishes that the message is a complete replacement (§9.3.1 rule 5); absent levels remain absent rather than becoming zero. No provider or mode is claimed to offer depth it does not supply, and a requested depth level beyond a provider's capability is reported as unsupported (§10.2), never silently downgraded.
+Ordering is determined by the **requested depth level**, not by whichever message arrived last:
+
+- **L1 depth request:** `sf` best bid/ask may supply depth (`levelCount = 1`).
+- **Five-level depth request:** the `dp` stream is **authoritative** for depth. `sf` remains a **quote** update; its duplicate L1 bid/ask fields must **not** downgrade or overwrite the five-level depth. This holds in either arrival order: an `sf` L1 update before or after a five-level `dp` update leaves the depth component at `levelCount = 5`.
+
+A richer `dp` update replaces the depth component's level set (an L1 `sf` depth followed by a five-level `dp` update yields `levelCount = 5`). A narrower `sf` L1 update never erases richer `dp` levels when five-level depth was requested; absent levels remain absent rather than becoming zero (§9.3.1 rule 5). No provider or mode is claimed to offer depth it does not supply, and a requested depth level beyond a provider's capability is reported as unsupported (§10.2), never silently downgraded.
 
 ### 9.2 Where aggregation belongs
 
@@ -265,11 +276,11 @@ The current `LiveStateStore.applyObservation()` replaces a provider's whole obse
 5. **Complete snapshots.** A component is replaced wholesale only when the provider contract establishes the message is a complete snapshot for that component (e.g. a documented full snapshot). Otherwise the update is treated as partial and merged per rule 2.
 6. **Merge before selection.** Partial updates are merged into the retained state for the **same provider and component first**; canonical provider selection (§9.3) runs only on the merged result.
 7. **No cross-provider blending.** Missing fields are never borrowed from another provider into a selected provider's component. Selection picks one provider's component (with its own provenance); it does not assemble a field-level composite. A mixed-provider result would be unattributable and is forbidden.
-8. **Field-level timestamps.** Not introduced now. Each component carries one source timestamp (+ meaning/unit) and one receipt time; within a component, fields from one provider message share that message's timestamp. Field-level timestamps would be justified only if a single component's fields had materially different update cadences from the same provider — no such case is documented for the three components (FYERS price/depth separation is handled by component isolation, not field timestamps). Revisit only with evidence.
+8. **Per-field update/receipt timestamps (minimal, not a framework).** Provider attribution and source selection remain at **component level**: one provider per component, and selection ranks whole components (§9.3). Within a retained component, each field that has been set carries its own **update source timestamp and receipt time** in a small field→timestamp map. A partial update refreshes the timestamps **only of the fields it actually carries**; fields preserved from an earlier message keep their original timestamps. This is the smallest change that makes the model truthful: a new LTP update must not make previously retained volume, OHLC or previous-close appear newly updated. Component-level freshness/selection still uses the component's own timestamp and receipt time (the component did receive a fresh update); the per-field map is for honest per-field age/provenance and is **not** a second selection input or a generic timestamp system. FYERS price/depth separation is handled by component isolation (rule 1), not by this map.
 
 **Worked examples:**
 
-- *Partial quote update:* retained FYERS `quote` = `{ltp: 100, prevClose: 99, open: 99.5, high: 101, volume: 5000}`. A new `sf` message carries only `{ltp: 100.5, lastTradedTime: T2, lastTradedQty: 12}`. Result: `ltp`/last-traded fields updated; `prevClose`/`open`/`high`/`volume` preserved from the retained quote; provenance/source timestamp reflect the new message for the fields it supplied.
+- *Partial quote update:* retained FYERS `quote` = `{ltp: 100, prevClose: 99, open: 99.5, high: 101, volume: 5000}`, with per-field timestamps all at receipt T1. A new `sf` message at receipt T2 carries only `{ltp: 100.5, lastTradedTime: T2, lastTradedQty: 12}`. Result: `ltp`/last-traded fields updated **and their per-field timestamps set to T2**; `prevClose`/`open`/`high`/`volume` values **and their per-field timestamps remain at T1**. The component-level timestamp advances to T2 (the component received a fresh update), but the retained volume/OHLC are not presented as newly updated.
 - *Independent depth update:* a `dp` message arrives with five levels. It replaces only the `depth` component (`levelCount = 5`); the `quote` component above is untouched, including its LTP.
 - *Explicit zero:* a depth level reports `bid_size = 0` (no orders at that level) — stored as `0` with that level present. A level not present in the message is absent, not zero.
 - *L1 then five-level:* an `sf` L1 best bid/ask sets `depth.levelCount = 1`; a subsequent `dp` five-level update replaces it with `levelCount = 5`. Quote is unaffected by either.
@@ -345,7 +356,7 @@ Acceptance criteria (measurable):
 4. One provider failure does not interrupt the other.
 5. Shared tracking is owned solely by the coordinator from the owner's desired enabled selections; no provider runtime can add or remove a tracked instrument.
 6. Quote and depth updates cannot overwrite each other; partial updates preserve fields absent from the message; an explicit provider zero is distinct from an omitted field.
-7. Every component preserves independent provenance and freshness; best bid/ask is owned only by `depth`, never duplicated in `quote`.
+7. Every component preserves independent provenance and freshness; fields preserved across a partial update keep their own update/receipt timestamps so a new LTP update does not make retained volume/OHLC appear newly updated; best bid/ask is owned only by `depth`, never duplicated in `quote`.
 8. Source selection does not fabricate fields, hide missing data, or blend fields from two providers into one selected component.
 9. Provider mapping failures remain provider-specific.
 10. Subscription limits and capability/depth-level requests are enforced without silent downgrade or silent instrument removal.
@@ -361,10 +372,12 @@ Required regression tests (to be written with implementation, not by this docume
 - Shared tracking: the coordinator tracks/untracks exactly the owner's desired enabled selections; provider runtimes never call `track`/`untrack`, so no runtime can remove an instrument another runtime still needs (no reference counting required).
 - Independent quote/depth updates: a `dp`-only update leaves `quote` intact; an `sf`-only update leaves `depth` intact; both preserve independent timestamps/provenance.
 - Partial field preservation: a quote update carrying only LTP and last-traded fields preserves previously supplied OHLC/volume/prev-close for the same provider/component.
+- Per-field freshness: after an LTP-only update at T2, the retained volume/OHLC/prev-close values **and their per-field timestamps** remain at T1; only the carried fields show T2; component-level selection still uses the component's own timestamp.
 - Explicit zero vs omitted: a provider-supplied `0` (e.g. a depth size or volume) is stored as `0`; an omitted field is preserved (partial) or marked absent (snapshot), never coerced to `0`; missing/unavailable/unsupported and zero are distinguishable.
-- Depth levels: an L1-only depth update yields `levelCount = 1` with levels 2..N absent (not zero); a later five-level update replaces it with `levelCount = 5`; no bid/ask value appears in `quote`.
+- Depth levels: an L1-only depth update yields `levelCount = 1` with levels 2..N absent (not zero); a later five-level `dp` update replaces it with `levelCount = 5`; no bid/ask value appears in `quote`.
+- FYERS depth ordering (both orders): with a five-level depth request, `dp` then `sf` retains `levelCount = 5` (the `sf` L1 fields are quote-only and do not downgrade depth); `sf` then `dp` also yields `levelCount = 5`. With an L1 depth request, `sf` bid/ask may supply `levelCount = 1`.
 - Index fields missing from FYERS: an `if` quote reports volume and bid/ask as unavailable (not zero, not borrowed from another provider); a five-level depth request on FYERS Data Socket is reported unsupported.
-- Different provider capabilities: Upstox LTPC is represented as LTP+previous-close only; Upstox Full/option_greeks expose OHLC/volume/Greeks/OI/IV; FYERS `sf` exposes full quote fields; the capability response reflects these differences field by field.
+- Different provider capabilities: Upstox LTPC is represented as LTP+previous-close only; Upstox Full exposes OHLC/volume/Greeks/OI/IV for **market instruments** (index instruments use `IndexFullFeed` = LTPC+OHLC, no depth/Greeks); `option_greeks` fields beyond Greeks are treated as documented-but-unverified per the mode-table/example discrepancy; FYERS `sf` exposes full quote fields; the capability response reflects these differences field by field.
 - Equal/coarse timestamps: successive updates with the same whole-second source timestamp are preserved (receipt order / sequence breaks the tie); only demonstrably stale or duplicate updates are dropped; an update is never rejected solely for timestamp equality; an unverified timestamp unit is not used as a trusted ordering key.
 - Per-component selection without blending: fresh Upstox quote + fresh FYERS depth coexist with correct per-component attribution; no mixed atomic snapshot and no field borrowed across providers.
 - No fabrication: absent OI/IV/Greeks/depth reported unavailable; no cross-field calculation; no REST poll on a tick to imitate a live derivatives stream.
@@ -419,6 +432,7 @@ All accessed **2026-11-17** unless noted.
 - **FYERS timestamp unit/precision (bounded validation item):** `last_traded_time` is documented only as an integer; its unit and precision are **not** stated and must not be inferred from the type. Confirm from live samples whether it is epoch seconds, milliseconds or another unit, and whether successive updates can share a value. Until confirmed, store the value verbatim with unit `UNKNOWN`/unverified, do not use it as a trusted ordering key, and fall back to receipt ordering (§12). This is the only timestamp fact that genuinely requires live samples; it does not block the rest of the design.
 - **Field-presence semantics (bounded validation item):** confirm from live samples whether a provider omits a field when unavailable versus sending an explicit zero, for the fields used in partial-merge rules (§9.3.1), so the adapter maps presence correctly. The merge model itself does not depend on the answer.
 - **Upstox entitlements:** account Plus/D30 access, exact wire mapping of `firstLevelWithGreeks`/`full_d30`, feed-specific error payloads/close codes, `full_d5` vs `full` naming — require live verification.
+- **Upstox `option_greeks` mode content (bounded validation item):** the mode table says "only option Greeks" while the `firstLevelWithGreeks` example/schema also shows LTPC, `firstDepth`, `vtt`, `oi` and `iv`. Confirm from live samples which fields that mode actually delivers before relying on any field beyond Greeks (§5, §7.1). The capability model records the ambiguity without claiming unconditional delivery.
 - **Contract data:** current F&O eligibility, listed contracts, expiries, strikes, lot/tick/freeze and provider-native identifiers must come from current official sources before integration; introduction/observation dates are not current eligibility. NSE product pages are behind anti-bot protection; their content was obtained from NSE static mirrors and circulars. The SEBI circular 2025/76 PDF body was not directly parseable — its provisions rest on official-adjacent reproductions and NSE's implementing circular (FAOP68589); re-verify the primary PDF before implementation.
 - **Breaking contract change:** the component model changes `LiveSnapshot`/`LiveItem`/`LiveChangeEvent` shapes; all consumers (WebUI, REST/SSE, future MCP) must migrate together.
 - **Stage G gate:** no live connection is authorized; the locked production boundary must remain until a separately authorized, independently reviewed change.
