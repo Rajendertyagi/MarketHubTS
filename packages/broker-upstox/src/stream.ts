@@ -356,6 +356,7 @@ export class UpstoxMarketDataStream {
           .catch((error) => {
             // Avoid unhandled promise rejections from async event handlers.
             if (generation !== this.startGeneration) return;
+            if (this.streamer !== streamer) return; // stale/closed streamer must not publish ERROR
             this.setState("ERROR", sanitizeError(error));
             this.cleanupStreamer(streamer!);
           });
@@ -367,10 +368,11 @@ export class UpstoxMarketDataStream {
       });
       streamer.on("close", () => {
         if (generation !== this.startGeneration) return;
-        if (this.streamer === streamer) {
-          this.streamer = null;
-          this.ready = false;
-        }
+        // Only the active streamer owns close. A close caused by cleanup of an
+        // invalidated streamer must not overwrite ERROR or publish DISCONNECTED.
+        if (this.streamer !== streamer) return;
+        this.streamer = null;
+        this.ready = false;
         this.setState("DISCONNECTED");
       });
       streamer.on("error", (err) => {

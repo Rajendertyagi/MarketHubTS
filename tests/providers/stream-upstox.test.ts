@@ -74,7 +74,11 @@ class FakeStreamer implements SdkStreamer {
   }
   resolveConnect(): void { this.connectResolvers.shift()?.(); }
   rejectConnect(e: Error): void { this.connectRejecters.shift()?.(e); }
-  disconnect(): void { this.disconnectCalls++; }
+  disconnect(): void {
+    this.disconnectCalls++;
+    // SDK-faithful: disconnect triggers an asynchronous close event.
+    queueMicrotask(() => this.emit("close"));
+  }
   subscribe(keys: string[], mode: string): void {
     if (this.subscribeThrows) throw new Error("SDK subscribe failed");
     this.subscribeCalls.push({ keys, mode });
@@ -225,15 +229,18 @@ describe("protobuf readiness gate", () => {
     expect(h.observations[0]!.value.ltp).toBe(100);
   });
 
-  test("readiness timeout enters ERROR and cleans up", async () => {
+  test("readiness timeout enters ERROR and retains it after the SDK-faithful delayed close", async () => {
     const h = setup({ ready: false });
     await configure(h.stream, h.credentials);
     await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
     const s = h.streamers[0]!;
     await s.open();
-    await Bun.sleep(150);
+    await Bun.sleep(150); // includes the async close emitted by disconnect()
     expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
     expect(s.disconnectCalls).toBe(1);
+    // The delayed close from cleanup must not overwrite ERROR with DISCONNECTED.
+    expect(h.stream.getConnectionState()).toBe("ERROR");
+    expect(h.states[h.states.length - 1]!.state).toBe("ERROR");
   });
 });
 
@@ -475,62 +482,77 @@ describe("field mapping via real SDK serialization", () => {
 });
 
 describe("Finding 2 — failed SDK connect cleanup", () => {
-  test("connect rejection cleans up failed instance and allows a fresh start", async () => {
+  test("connect rejection cleans up failed instance and allows a fresh start on the SAME stream", async () => {
     const creds = new DeferredCredentials();
-    const h = makeStream({ credentials: creds });
-    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    const made: FakeStreamer[] = [];
+    const stream = new UpstoxMarketDataStream({
+      credentials: creds as any,
+      now: () => new Date(NOW),
+      protobufReadyTimeoutMs: 100,
+      streamerFactory: () => {
+        const s = new FakeStreamer();
+        if (made.length === 0) s.connectMode = "reject"; // first attempt fails
+        made.push(s);
+        return s;
+      }
+    });
+    const states: Array<{ state: string; error?: string | null }> = [];
+    const callbacks = {
+      onObservation: () => {},
+      onConnectionState: (s: any, e?: string | null) => states.push({ state: s, error: e })
+    };
+
+    const first = stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], callbacks);
     creds.resolve("token");
-    await first;
-    const failed = h.streamers[0]!;
-    failed.connectMode = "reject";
-    // Force a fresh start after stop; the next streamer will reject connect.
-    h.stream.stop();
-    const creds2 = new DeferredCredentials();
-    const h2 = makeStream({ credentials: creds2, streamerFactory: () => {
-      const s = new FakeStreamer();
-      s.connectMode = "reject";
-      h2streamers.push(s);
-      return s;
-    } });
-    const h2streamers: FakeStreamer[] = [];
-    const second = h2.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h2.callbacks);
-    creds2.resolve("token");
-    await expect(second).rejects.toThrow("SDK connect failed");
-    expect(h2streamers[0]!.disconnectCalls).toBe(1); // failed instance cleaned up
-    expect(h2.states.some((s) => s.state === "ERROR")).toBe(true);
-    // A subsequent start creates a fresh instance and can succeed.
-    const creds3 = new DeferredCredentials();
-    const h3 = makeStream({ credentials: creds3 });
-    const third = h3.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h3.callbacks);
-    creds3.resolve("token");
-    await third;
-    expect(h3.streamers.length).toBe(1);
-    expect(h3.streamers[0]!.connectCalls).toBe(1);
+    await expect(first).rejects.toThrow("SDK connect failed");
+    expect(made[0]!.disconnectCalls).toBe(1); // failed instance cleaned up
+    expect(states.some((s) => s.state === "ERROR")).toBe(true);
+
+    // Fresh start on the SAME instance succeeds with a new SDK streamer.
+    const second = stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], callbacks);
+    creds.resolve("token");
+    await second;
+    expect(made.length).toBe(2);
+    expect(made[1]).not.toBe(made[0]);
+    expect(made[1]!.connectCalls).toBe(1);
   });
 
-  test("old connect rejection after stop does not disturb a newer start", async () => {
+  test("old connect rejection after stop/new start uses the SAME stream and leaves newer generation unaffected", async () => {
     const creds = new DeferredCredentials();
-    const h = makeStream({ credentials: creds, streamerFactory: () => {
-      const s = new FakeStreamer();
-      s.connectMode = "deferred";
-      h.streamers.push(s);
-      return s;
-    } });
-    const first = h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], h.callbacks);
+    const made: FakeStreamer[] = [];
+    const stream = new UpstoxMarketDataStream({
+      credentials: creds as any,
+      now: () => new Date(NOW),
+      protobufReadyTimeoutMs: 100,
+      streamerFactory: () => {
+        const s = new FakeStreamer();
+        s.connectMode = "deferred";
+        made.push(s);
+        return s;
+      }
+    });
+    const states: Array<{ state: string; error?: string | null }> = [];
+    const callbacks = {
+      onObservation: () => {},
+      onConnectionState: (s: any, e?: string | null) => states.push({ state: s, error: e })
+    };
+
+    const first = stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], callbacks);
     creds.resolve("token");
-    await Bun.sleep(5); // let first reach deferred connect
-    const old = h.streamers[0]!;
-    h.stream.stop(); // invalidate old generation
-    const creds2 = new DeferredCredentials();
-    const h2 = makeStream({ credentials: creds2 });
-    const second = h2.stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], h2.callbacks);
-    creds2.resolve("token");
+    await Bun.sleep(5); // first reaches deferred connect
+    const old = made[0]!;
+    stream.stop(); // invalidate old generation on the SAME instance
+    const second = stream.start([{ instrumentKey: BANK_KEY, canonicalId: BANK_CANONICAL }], callbacks);
+    creds.resolve("token");
+    await Bun.sleep(5); // second reaches deferred connect
+    const newer = made[1]!;
+    newer.resolveConnect();
     await second;
     old.rejectConnect(new Error("old connect failed"));
     await first.catch(() => {});
-    expect(h2.streamers.length).toBe(1);
-    expect(h2.streamers[0]!.connectCalls).toBe(1);
-    expect(h2.states.some((s) => s.state === "ERROR")).toBe(false); // old failure did not touch newer state
+    expect(made.length).toBe(2);
+    expect(newer.connectCalls).toBe(1);
+    expect(states.some((s) => s.state === "ERROR")).toBe(false); // old failure did not touch newer state
   });
 });
 
@@ -642,6 +664,22 @@ describe("Finding 4 — close during readiness and async handler safety", () => 
     expect(h.observations.length).toBe(0);
   });
 
+  test("stop() does not produce stale state callbacks from the SDK-faithful delayed close", async () => {
+    const h = setup();
+    await configure(h.stream, h.credentials);
+    await h.stream.start([{ instrumentKey: NIFTY_KEY, canonicalId: NIFTY_CANONICAL }], cbs(h));
+    const s = h.streamers[0]!;
+    await s.open();
+    await Bun.sleep(20);
+    const before = h.states.length;
+    h.stream.stop(); // disconnect() emits close asynchronously
+    await Bun.sleep(20);
+    // stop() nulls callbacks before publishing DISCONNECTED, and the delayed close
+    // is generation-guarded — no stale callbacks after the stop.
+    expect(h.states.length).toBe(before);
+    expect(h.stream.getConnectionState()).toBe("DISCONNECTED");
+  });
+
   test("subscribe throwing during initial subscription yields controlled ERROR and cleanup", async () => {
     const h = setup();
     await configure(h.stream, h.credentials);
@@ -649,10 +687,11 @@ describe("Finding 4 — close during readiness and async handler safety", () => 
     const s = h.streamers[0]!;
     s.subscribeThrows = true;
     await s.open();
-    await Bun.sleep(30);
+    await Bun.sleep(30); // includes async close from cleanup
     expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
     expect(s.disconnectCalls).toBe(1);
     expect(h.stream.getConnectionState()).toBe("ERROR");
+    expect(h.states[h.states.length - 1]!.state).toBe("ERROR"); // delayed close did not overwrite
   });
 });
 
@@ -670,6 +709,9 @@ describe("Additional A/B/C — partial failure, mode normalization, feed types",
     expect(h.stream.getSubscriptions().map((x) => x.instrumentKey)).toEqual([NIFTY_KEY]); // last committed
     expect(s.disconnectCalls).toBe(1); // inconsistent connection invalidated
     expect(h.states.some((x) => x.state === "ERROR")).toBe(true);
+    await Bun.sleep(10); // let the async close from cleanup fire
+    expect(h.stream.getConnectionState()).toBe("ERROR"); // retained after delayed close
+    expect(h.states[h.states.length - 1]!.state).toBe("ERROR");
   });
 
   test("omitted mode and explicit ltpc are equivalent — no unnecessary operations", async () => {
