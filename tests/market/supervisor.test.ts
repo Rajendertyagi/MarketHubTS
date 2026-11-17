@@ -10,7 +10,7 @@ import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCatalogRepo
 import { MarketDataService, type CatalogRepository } from "../../packages/market-core/src/index";
 import {
   DriverLockedError, LockedUpstoxDriver, StreamSupervisor,
-  type DriverCallbacks, type DriverSubscription, type StreamingDriver
+  type DriverCallbacks, type DriverSubscription, type ReconnectTimerScheduler, type StreamingDriver
 } from "../../apps/api/src/stream-supervisor";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 
@@ -207,7 +207,34 @@ async function harnessWithCatalog(
   return { subscriptions, service, supervisor, driver, seed, cleanup };
 }
 
-async function harness(driver: StreamingDriver = new FakeDriver(), reconnect?: { maxAttempts: number; baseDelayMs: number }) {
+/** Manual reconnect timer scheduler for deterministic timer-race tests. */
+class ManualTimerScheduler implements ReconnectTimerScheduler {
+  tasks: Array<{ handle: number; fn: () => void; ms: number; cancelled: boolean }> = [];
+  private nextHandle = 1;
+
+  set(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+    const handle = this.nextHandle++;
+    this.tasks.push({ handle, fn, ms, cancelled: false });
+    return handle as unknown as ReturnType<typeof setTimeout>;
+  }
+  clear(handle: ReturnType<typeof setTimeout>): void {
+    const task = this.tasks.find((t) => t.handle === (handle as unknown as number));
+    if (task) task.cancelled = true;
+  }
+  fire(handle: ReturnType<typeof setTimeout>): void {
+    const task = this.tasks.find((t) => t.handle === (handle as unknown as number));
+    if (task && !task.cancelled) task.fn();
+  }
+  get active() {
+    return this.tasks.filter((t) => !t.cancelled);
+  }
+}
+
+async function harness(
+  driver: StreamingDriver = new FakeDriver(),
+  reconnect?: { maxAttempts: number; baseDelayMs: number },
+  reconnectTimerScheduler?: ReconnectTimerScheduler
+) {
   const dir = mkdtemp(join(tmpdir(), "markethub-sup-"));
   const handle = openDatabase({ dbPath: join(dir, "sup.sqlite") });
   runMigrations(handle.db, defaultMigrationsFolder);
@@ -216,7 +243,7 @@ async function harness(driver: StreamingDriver = new FakeDriver(), reconnect?: {
   const service = new MarketDataService({
     now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
   });
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, driver, reconnect });
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, driver, reconnect, reconnectTimerScheduler });
 
   const seed = async (canonicalId: string, nativeIdentifier: string, mappingStatus: "ACTIVE" | "INACTIVE" = "ACTIVE", provider: "UPSTOX" | "FYERS" = "UPSTOX") => {
     await catalog.transaction(async (tx) => {
@@ -759,6 +786,56 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("ERROR", "late error");
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    h.cleanup();
+  });
+
+  test("stale reconnect timer is cancelled so a newer driver epoch can retry", async () => {
+    const scheduler = new ManualTimerScheduler();
+    const driver = new FakeDriver();
+    const h = await harness(driver, { maxAttempts: 3, baseDelayMs: 1000 }, scheduler);
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+
+    // 1. Driver A started successfully.
+    expect(driver.starts.length).toBe(1);
+    const callbacksA = driver.callbackHistory[0]!;
+
+    // 2. A disconnects -> reconnect timer T1 is scheduled.
+    driver.emitState("DISCONNECTED");
+    expect(scheduler.active.length).toBe(1);
+    const t1 = scheduler.active[0]!.handle;
+
+    // 3. Before T1 fires, a subscription replacement starts fresh driver B.
+    await h.supervisor.replaceSubscriptions([{ canonicalId: A, enabled: true }]);
+    expect(driver.starts.length).toBe(2);
+    const callbacksB = driver.callbackHistory[1]!;
+    // T1 is still pending at this point (a fresh start does not retire a timer).
+    expect(scheduler.active.some((t) => t.handle === t1)).toBe(true);
+
+    // 4. B disconnects before T1 fires.
+    driver.emitState("DISCONNECTED");
+    // 5. T1 is cancelled and a new timer T2 is scheduled for B.
+    expect(scheduler.tasks.find((t) => t.handle === t1)!.cancelled).toBe(true);
+    expect(scheduler.active.length).toBe(1);
+    const t2 = scheduler.active[0]!.handle;
+    expect(t2).not.toBe(t1);
+
+    // 6. Fire T2 -> a third fresh start occurs; no update of a dead driver.
+    scheduler.fire(t2);
+    await Bun.sleep(20);
+    expect(driver.starts.length).toBe(3);
+    expect(driver.updates.length).toBe(0);
+
+    // 8. Callbacks from A and B cannot mutate canonical state or connection state.
+    const revision = h.service.revision;
+    const stateBefore = h.supervisor.getView().runtime.connectionState;
+    callbacksA.onObservation(observation(A, 999));
+    callbacksA.onConnectionState("ERROR", "late A error");
+    callbacksB.onObservation(observation(A, 888));
+    callbacksB.onConnectionState("DISCONNECTED");
+    expect(h.service.revision).toBe(revision);
+    expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
     h.cleanup();
   });
 });

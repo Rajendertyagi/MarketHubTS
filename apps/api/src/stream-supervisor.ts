@@ -85,6 +85,17 @@ export class SubscriptionPersistenceError extends Error {
   }
 }
 
+/** Narrow seam for deterministic reconnect-timer control in tests. */
+export interface ReconnectTimerScheduler {
+  set(fn: () => void, ms: number): ReturnType<typeof setTimeout>;
+  clear(handle: ReturnType<typeof setTimeout>): void;
+}
+
+const defaultReconnectTimerScheduler: ReconnectTimerScheduler = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle)
+};
+
 export interface StreamSupervisorOptions {
   service: MarketDataService;
   subscriptions: SubscriptionRepository;
@@ -93,6 +104,7 @@ export interface StreamSupervisorOptions {
   provider?: ProviderId;
   reconnect?: { maxAttempts: number; baseDelayMs: number };
   sleep?: (ms: number) => Promise<void>;
+  reconnectTimerScheduler?: ReconnectTimerScheduler;
 }
 
 export interface ReplaceSubscriptionsResult {
@@ -302,14 +314,24 @@ export class StreamSupervisor {
   }
 
   /**
-   * Retire the current driver instance: invalidate its callback epoch and stop
-   * it. Pending start/update flags are retained so their settle paths perform
+   * Retire the current driver instance: invalidate its callback epoch, cancel
+   * any reconnect timer scheduled for the old instance, and stop the driver.
+   * Pending start/update flags are retained so their settle paths perform
    * final cleanup. Returns the new epoch for reconnect scheduling.
    */
   private retireDriver(): number {
     this.epoch++;
+    this.cancelReconnectTimer();
     this.stopDriverResource();
     return this.epoch;
+  }
+
+  /** Cancel a pending reconnect timer so it cannot suppress a newer retry. */
+  private cancelReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      (this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler).clear(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   /**
@@ -383,8 +405,10 @@ export class StreamSupervisor {
       this.driverStarted = false;
       // A failed start may have partially allocated resources: stop before retry.
       this.opts.driver.stop();
-      // Invalidate callbacks from the failed attempt, then retry with a fresh epoch.
+      // Invalidate callbacks from the failed attempt and cancel any stale timer
+      // from a previous instance, then retry with a fresh epoch.
       this.epoch++;
+      this.cancelReconnectTimer();
       if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
       return false;
     }
@@ -398,7 +422,8 @@ export class StreamSupervisor {
     const delay = baseDelayMs * 2 ** this.reconnectAttempts;
     this.reconnectAttempts++;
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    this.reconnectTimer = setTimeout(() => {
+    const scheduler = this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler;
+    this.reconnectTimer = scheduler.set(() => {
       this.reconnectTimer = null;
       if (epoch !== this.epoch || this.stopped) return;
       void sleep(0).then(() => this.enqueueReconcile(this.generation));
@@ -429,12 +454,9 @@ export class StreamSupervisor {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    // Invalidate callbacks and stop immediately; pending operations retain
-    // their flags so their settle paths perform final cleanup.
+    // retireDriver invalidates callbacks, cancels any pending reconnect timer
+    // and stops the driver; pending operations retain their flags so their
+    // settle paths perform final cleanup.
     this.retireDriver();
     this.setConnectionState("NOT_STARTED", null);
   }
