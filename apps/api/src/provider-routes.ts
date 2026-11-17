@@ -1,6 +1,14 @@
 import type { Hono } from "hono";
-import { apiErrorSchema, type CredentialStore, type ProviderConfig, type ProviderId, type ProviderSettings } from "@markethub/contracts";
-import type { ProviderRegistry } from "@markethub/market-core";
+import {
+  apiErrorSchema,
+  providerStatusMapSchema,
+  type CredentialStore,
+  type ProviderConfig,
+  type ProviderId,
+  type ProviderSettings,
+  type ProviderStatus
+} from "@markethub/contracts";
+import type { MarketDataService, ProviderRegistry } from "@markethub/market-core";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import { isLocalPeer } from "./lib/net";
@@ -12,13 +20,28 @@ export interface ProviderRouteDependencies {
   providerConfig?: ProviderConfig;
   upstox?: UpstoxAdapter;
   fyers?: FyersAdapter;
+  service?: MarketDataService;
+}
+
+/** Compose auth status (registry-owned) with runtime streaming state (service-owned). */
+function composeProviderStatuses(deps: ProviderRouteDependencies) {
+  const auth = deps.providerRegistry?.getStatuses() ?? null;
+  if (!auth) return null;
+  const withRuntime = (status: ProviderStatus): ProviderStatus => ({
+    ...status,
+    streamingState: deps.service?.getConnectionStatus(status.id)?.state ?? "NOT_STARTED"
+  });
+  return providerStatusMapSchema.parse({
+    UPSTOX: withRuntime(auth.UPSTOX),
+    FYERS: withRuntime(auth.FYERS)
+  });
 }
 
 /** Registers provider routes on the existing app. No separate listener or security framework. */
 export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencies): void {  // Read-only provider diagnostics. Safe for LAN clients; never includes credentials.
   app.get("/api/providers/status", (c) => {
     return c.json({
-      providers: deps.providerRegistry?.getStatuses() ?? null,
+      providers: composeProviderStatuses(deps),
       localManagement: true,
       note: "Credential management and authentication must be performed locally on the application host."
     });
@@ -124,7 +147,7 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
         return c.json(apiErrorSchema.parse({ error: "confirmation_required", message: "Set confirm=true" }), 400);
       }
       await deps.providerRegistry!.remove(id);
-      return c.json(deps.providerRegistry!.getStatuses());
+      return c.json(composeProviderStatuses(deps));
     });
   }
 

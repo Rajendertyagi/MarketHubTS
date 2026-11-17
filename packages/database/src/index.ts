@@ -100,3 +100,4 @@ export { schema };
 export { SqliteCatalogRepository } from "./repositories/catalog";
 export { SqliteCredentialStore, resolveCredentialKeyPath } from "./credentials";
 export { SqliteProviderSettings, PROVIDER_SETTING_KEYS } from "./provider-settings";
+export { SqliteSubscriptionRepository, STREAMING_GENERATION_KEY } from "./subscriptions";

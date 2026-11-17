@@ -1,7 +1,7 @@
 # Architecture
 
-> **Status:** Target architecture and current scaffold mapping (authoritative design baseline). Items marked **(planned)** or **(verify)** are not implemented/confirmed.
-> **Last updated:** 2026-11-16
+> **Status:** Target architecture and current implementation mapping (authoritative design baseline). Items marked **(planned)** or **(verify)** are not implemented/confirmed.
+> **Last updated:** 2026-11-17
 > **Related:** [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (canonical), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. System overview
@@ -10,7 +10,7 @@ MarketHubTS is the **only intended future MarketHub application** (clean, indepe
 
 It collects, normalizes, organizes, maintains, and exposes market data through a **single canonical data and application-services foundation** consumed by **MCP** (AI agents/applications) and **REST/SSE + WebUI** (humans, devices, and LAN clients). **LAN access is required** so other applications, devices, and multiple MCP clients can connect to the same running application. Local browser-based WebUI is acceptable; a native desktop wrapper is optional (do not prematurely force either). No cloud hosting, no public internet exposure, no application-level login/authentication. LAN reachability and the single-owner model do not by themselves establish that every LAN client is trusted or authorized for every operation; safe exposure boundaries for sensitive data and operations must be defined and reviewed (without introducing an application-level login system or changing confirmed product scope).
 
-**Current state:** M1 runtime foundation and M2 canonical catalog/persistence/sync are **published on `develop`** (`fa40420`, `484c0a6`). M3 (provider adapter framework and resilient connectivity) is **implemented in the working tree** (uncommitted): encrypted credential store, Upstox/FYERS auth adapters, independent registry, loopback-only management API and read-only diagnostics. No live/historical/option-chain pipelines, realtime streams, alerts/scanners, or operational configuration are implemented yet.
+**Current state:** M1 runtime foundation, M2 canonical catalog/persistence/sync, M3 provider adapter framework, and M4 Stages A/B are **published on `develop`**. M4 Stage D (provider-ready live-data backend vertical slice) is implemented in this commit: canonical live service notifications, bounded realtime hub, subscription persistence with durable generation, supervisor, REST/SSE market endpoints, and a locked production driver boundary. No live provider connection is attempted in Stage D; no historical/option-chain pipelines, WebUI live views (Stage E), alerts/scanners, or operational configuration are implemented yet.
 
 **Engineering approach:** modular monolith with clear module boundaries, defined interfaces/contracts, fault containment, and bounded resources per [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (not microservices; no claim of absolute isolation in a shared process).
 
@@ -88,26 +88,28 @@ flowchart TB
 
 | Subsystem | Responsibility (planned unless noted) | Current state |
 |---|---|---|
-| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | **Implemented (M3):** Upstox Analytics Token REST validation; FYERS V3 non-trading OAuth with loopback callback; no WS/subscriptions yet (M4) |
+| Provider adapters (`packages/broker-upstox`, `broker-fyers`) | Auth/token lifecycle, REST/WS connections, subscriptions, reconnect, rate/subscription limits, health/error reporting, normalization input | **Implemented (M3 auth; M4-B Upstox stream):** Upstox Analytics Token REST validation and V3 SDK streaming adapter; FYERS V3 non-trading OAuth with loopback callback. Stage D production uses a locked driver; no real socket is opened. |
 | Canonical catalog & identity (`packages/market-core`, `packages/contracts`) | Canonical instrument/contract identity, mappings, aliases, lifecycle, transactional sync, validation | **Implemented (M2):** contracts, normalized identity keys, sync service, repository ports; not yet fed by real providers |
-| Normalization/provenance | Stable canonical fields + preserved provider-specific fields, attribution, timestamps, freshness/availability | **Partially implemented (M2):** domain structures/rules and preservation fields; no live/provider normalization pipeline |
-| Source selection | Automatic choice by capability/availability/freshness/reliability/limits; optional manual preferences (WebUI) | Not implemented |
-| Live state | In-memory ticks/quotes/depth for display/consumption; repopulated from streams on restart | Not implemented |
+| Normalization/provenance | Stable canonical fields + preserved provider-specific fields, attribution, timestamps, freshness/availability | **Implemented (M4-A/B):** canonical observation normalization, provenance, session-aware freshness; Upstox feed translation in adapter |
+| Source selection | Automatic choice by capability/availability/freshness/reliability/limits; optional manual preferences (WebUI) | **Implemented (M4-A):** deterministic selection over per-provider observations and connection state |
+| Live state | In-memory ticks/quotes/depth for display/consumption; repopulated from streams on restart | **Implemented (M4-A/D):** bounded `LiveStateStore` with monotonic revision, consistent snapshots, synchronous change notifications |
 | Historical service | On-demand retrieval, user-configured sync, local candle cache, gap fill from suitable provider, clear unavailability | Not implemented |
 | Option-chain snapshots | Persistent snapshots per WebUI capture config (underlying/expiry/strikes/capture/streaming independent) | Not implemented |
-| Shared services | Market data, watchlists, alerts, scanners, config, diagnostics — single implementation for all consumers | Health/status foundation only |
+| Shared services | Market data, watchlists, alerts, scanners, config, diagnostics — single implementation for all consumers | **Market data + health/status foundation**; watchlists/alerts/scanners pending |
 | MCP (`apps/mcp-server`) | AI-facing tools/resources/events over shared services; no separate market logic | STDIO `markethub_health` only |
-| REST/SSE (`apps/api`) | Human/UI and programmatic access over shared services; SSE for realtime/events (planned) | `/health`, `/ready`, `/api/status` foundation; no market endpoints/SSE |
-| WebUI (`apps/web`) | Human interface and operational control centre | System-status shell (real backend/runtime status) |
-| Database (`packages/database`) | SQLite persistence, migrations, WAL, controlled writes, backup/restore support | **Implemented foundation + M2 catalog:** `app_meta` and catalog tables/migration/repository/transactions |
-| Realtime/analytics (`packages/realtime`, `analytics`) | Bounded event delivery, derived indicators/analytics (separately labelled) | Placeholders |
+| REST/SSE (`apps/api`) | Human/UI and programmatic access over shared services; SSE for realtime/events | **Implemented (M4-D):** `/api/market/snapshot`, `/api/market/stream` (SSE), `/api/market/subscriptions` (GET/PUT, local-owner-only), plus health/status foundation |
+| WebUI (`apps/web`) | Human interface and operational control centre | System-status shell (real backend/runtime status); live views pending (Stage E) |
+| Database (`packages/database`) | SQLite persistence, migrations, WAL, controlled writes, backup/restore support | **Implemented foundation + M2 catalog + M4-D subscriptions:** `app_meta`, catalog tables, `streaming_subscriptions` with durable generation, migrations `0000`–`0004` |
+| Realtime/analytics (`packages/realtime`, `analytics`) | Bounded event delivery, derived indicators/analytics (separately labelled) | **Realtime hub implemented (M4-D):** bounded replay/per-client queues, drop counters, coalesced `snapshot-required`, `refresh`; analytics placeholder |
 ## 4. Provider-adapter boundary
 
 - All provider-specific protocols, auth, identifiers, field names, limits, and quirks remain inside adapters.
 - Adapters emit normalized records + provider-native details/attribution into canonical foundation.
 - No adapter logic in MCP, WebUI, or shared service consumers.
 - Adapters are independently connectable/disconnectable/removable; failure of one must not break others.
-- **M3 implementation:** Upstox uses the read-only Analytics Token (validated via `GET /v2/market/status/NSE`); FYERS uses V3 individual-app OAuth with a non-trading (data-only) app and a loopback callback. REST via Bun native `fetch`; no broker SDKs. Provider state distinguishes disabled / not configured / auth required / authenticated (REST validated) / expired or revoked / degraded / error; streaming remains explicitly unstarted until M4. Credential-changing routes are on the main app behind a single local-peer check; no separate management server or CSRF framework. No app-level login is introduced. See [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md) and AD-021/AD-022.
+- **M3 implementation:** Upstox uses the read-only Analytics Token (validated via `GET /v2/market/status/NSE`); FYERS uses V3 individual-app OAuth with a non-trading (data-only) app and a loopback callback. REST via Bun native `fetch`. Provider state distinguishes disabled / not configured / auth required / authenticated (REST validated) / expired or revoked / degraded / error. Credential-changing routes are on the main app behind a single local-peer check; no separate management server or CSRF framework. No app-level login is introduced. See [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md) and AD-021/AD-022.
+- **M4-B streaming adapter:** the Upstox V3 SDK (`upstox-js-sdk@2.31.0`, pinned) is used for market-data streaming only; SDK types and protocol stay behind the adapter seam and emit canonical `NormalizeObservationInput` values.
+- **M4-D locked production boundary:** the supervisor is provider-agnostic and consumes a small streaming-driver interface. Production composition uses `LockedUpstoxDriver`, which fails safely on any `start`/`updateSubscriptions` attempt and never constructs the SDK, opens a socket, or schedules retries. Real driver construction is unreachable through startup, API and config paths; only a separately authorized, independently reviewed Stage G change may unlock it. Runtime connection state is owned by the supervisor and written through `MarketDataService`; `ProviderRegistry` retains auth/status ownership, and the API composes both for `/api/providers/status`.
 
 ## 5. Canonical catalog and identity architecture
 
@@ -136,7 +138,7 @@ flowchart TB
 - **Do not** permanently store every incoming tick or every market-depth change.
 - Repopulated from connected provider streams after restart.
 - Every live item carries source, timestamp, and freshness/availability state.
-- Bounded structures/backpressure required (planned) to prevent unbounded memory/queue growth.
+- Bounded structures/backpressure prevent unbounded memory/queue growth. **Implemented (M4-D):** `LiveEventHub` bounds replay history and per-client queues by event count and approximate bytes; overflow drops data events, increments drop counters and emits one coalesced `snapshot-required` control event while retaining the subscriber. Control events (`snapshot-required`, `refresh`) carry no data revision and never advance it.
 
 ## 9. Historical persistence and cache architecture
 
@@ -171,8 +173,8 @@ flowchart TB
 
 ## 13. REST/SSE delivery architecture
 
-- REST endpoints and SSE streams (planned) expose shared services/data to WebUI and LAN clients.
-- SSE primary for frontend realtime delivery (planned) with bounded per-client buffers, cleanup, observable drop counters, graceful shutdown.
+- REST endpoints and SSE streams expose shared services/data to WebUI and LAN clients. **Implemented (M4-D):** `GET /api/market/snapshot` (Zod-validated canonical snapshot), `GET /api/market/stream` (SSE), `GET/PUT /api/market/subscriptions` (PUT local-owner-only via the existing local-peer check).
+- SSE is the frontend realtime transport with bounded per-client buffers, cleanup, observable drop counters and graceful shutdown. **Implemented (M4-D):** compact revisioned events (`item-updated`, `item-removed`, `provider-connection-changed`), initial `snapshot` for synchronization, and control events (`snapshot-required`, `refresh`). Cursor precedence: `Last-Event-ID` is authoritative when present (empty-but-present is invalid); `?since=` is used only when the header is absent; invalid/future/expired cursors emit one `snapshot-required` and terminate the stream. Recovery is a documented client close → REST snapshot fetch → reconnect sequence (implemented in Stage E).
 - **Reliability rule:** when a subscriber queue overflows, **drop overflowing events, not the subscriber**.
 - WebSocket only if a real requirement justifies it (planned/verify).
 
@@ -199,15 +201,15 @@ flowchart TB
 ## 16. Database responsibilities
 
 - SQLite (`bun:sqlite`) + Drizzle; local single-user, WAL, controlled writes/transactions, prepared statements (planned), batched persistence where appropriate.
-- **Implemented (M1/M2):** `app_meta` and catalog persistence (`canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `catalog_sync_runs`) with versioned migrations, PK/FK/unique/index constraints, JSON fields for extensible/provider-specific metadata, and transactional repository/sync support.
+- **Implemented (M1/M2/M4-D):** `app_meta` and catalog persistence (`canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `instrument_identifier_history`, `catalog_sync_runs`) plus `streaming_subscriptions` with a durable desired-state generation stored in `app_meta` under `streaming_subscriptions_generation`. Versioned migrations `0000`–`0004`, PK/FK/unique/index constraints, JSON fields for extensible/provider-specific metadata, and transactional repository/sync support. Subscription row replacement and generation increment commit in one serialized transaction; no provider SDK/network work occurs inside it.
 - **Planned:** cached historical candles, option-chain snapshots, watchlists, alert/scanner definitions and history/results, operational configuration/state, diagnostics metadata as needed.
 - **Not stored per-event:** every raw tick or every market-depth change.
 - Safe shutdown/recovery, backup/restore, integrity verification (planned). Credentials/tokens never stored in plaintext. **Approved M3 storage (AD-021):** encrypted in SQLite with one local key file in the app folder; no Windows/OS credential store. Full restore must include that key file — a database-only copy is not a complete backup (AD-014 preserved).
 
 ## 17. Startup/shutdown lifecycle
 
-- **Startup:** load config, open DB/migrations (planned), initialize services, start API/MCP interfaces, connect enabled providers independently (planned); app must start and operate with locally available/non-broker data even if no providers connected.
-- **Shutdown:** stop accepting new work, flush/complete critical writes, close streams/clients cleanly, checkpoint/close DB safely, release resources.
+- **Startup:** load config, open DB and run migrations, initialize the canonical `MarketDataService`, start the realtime hub, load persisted desired subscriptions and reconcile through the supervisor (locked driver in Stage D), start the API/MCP interfaces; app must start and operate with locally available/non-broker data even if no providers connected.
+- **Shutdown:** stop accepting new work, stop/cancel the supervisor (and driver resources if any), stop hub timers/clients, close the HTTP server, then checkpoint/close the DB. Hub and supervisor stop before the DB closes.
 - **Recovery:** graceful handling of crashes/restarts; live state repopulated from streams; persisted data/catalog integrity preserved.
 
 ## 18. Failure recovery and provider independence

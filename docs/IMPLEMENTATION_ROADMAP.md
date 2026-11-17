@@ -84,7 +84,7 @@
 **Non-goals (preserved):** live broker connectivity, bulk catalog downloads/seeding, UI market views/search, MCP market tools/HTTP transport.
 ---
 
-### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS) — **Implemented in working tree (uncommitted)**
+### M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS) — **Published on `develop`**
 **Objective:** connect/configure providers independently with health, auth lifecycle handling, and normalized capability reporting.
 
 **Prerequisites (met):** M2 published; official Upstox/FYERS auth, rate-limit and app-type research complete and recorded in [REFERENCES.md](REFERENCES.md) and [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md); credential-storage decision approved by owner.
@@ -93,7 +93,7 @@
 - **Portable, self-contained folder:** no Windows Credential Manager, no `Bun.secrets`, no DPAPI, no OS keychain, no native modules. Secrets encrypted inside SQLite with one random key file in the same app folder, using built-in Bun crypto. Copying the folder preserves credentials; losing the key requires re-authentication. Accepted tradeoff (documented): a folder copy includes the key. Never plaintext.
 - **Upstox:** Analytics Token (free, read-only, 1-year, no OAuth, no static IP for market-data categories), entered in local WebUI; validate with `GET /v2/market/status/NSE` (Market Information category, non-sensitive GET). No daily OAuth, no trading/account APIs. One token per account; explain regeneration/revocation in UI.
 - **FYERS:** V3 individual-app authorization-code flow using a **non-trading (data-only) app** (no static IP, no order placement). Random state verified on callback; `appIdHash = SHA-256(app_id:app_secret)` computed backend; single-use code exchange; daily 6:30 AM expiry; no assumed refresh; profile used only to validate; logout on removal. Loopback callback on a configurable port matching the registered redirect URI; no public callback collector.
-- **HTTP:** Bun native `fetch`; no broker SDKs; no new runtime dependencies.
+- **HTTP:** Bun native `fetch` for REST/auth. M4 Stage B scoped exception: pinned `upstox-js-sdk@2.31.0` for Upstox market-data streaming only.
 - **Limits:** no hardcoded plan caps; design for FYERS Standard limits and report actual capability/restrictions; unknown entitlements stay unknown.
 
 **Key work:** adapter interfaces, portable encrypted credential store, connection/auth/token lifecycle, health/error/limit reporting, provider capability discovery, independent connect/disconnect/remove behavior, loopback-only privileged boundary, minimal WebUI diagnostics.
@@ -126,6 +126,22 @@
 **Risks:** high-rate feeds, provider limits, parsing/protobuf complexity, memory growth.
 
 **Non-goals:** complete historical/snapshot persistence, full alert/scanner automation, full universe coverage in the first slice.
+
+#### M4 staged execution (agreed order D → E → F → C → G)
+
+| Stage | Responsibility | Status |
+|---|---|---|
+| A | Canonical live contracts, per-provider observations, bounded in-memory state, monotonic revision, defensive copies, session-aware freshness, source selection | **Published** (`2dfe969`, `0cdb6dc`) |
+| B | Upstox V3 streaming adapter on pinned `upstox-js-sdk@2.31.0`; SDK used for market-data streaming only; lifecycle/decoder corrections | **Published** (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`) |
+| D | Provider-ready live-data backend vertical slice: service notifications, subscription persistence + durable generation, bounded realtime hub, REST/SSE, minimal supervisor, locked production driver boundary | **Implemented (this commit, pushed to `develop`)** |
+| E | WebUI streaming selections and live-data experience, incl. EventSource close/fetch/reconnect and `refresh` client behavior | Pending |
+| F | Deep reconnect/recovery/concurrency/resource hardening; race/fault injection, sustained-load/soak tests | Pending |
+| C | FYERS Data Socket adapter, after D/E/F prove the first provider path | On hold / pending |
+| G | First live provider verification, separately authorized after the single-pass gate | Pending |
+
+**Stage D boundary:** production composition uses a locked/disabled driver — no real Upstox SDK driver is instantiated, no socket is opened, and no real provider connection is attempted. The supervisor is exercised with deterministic fake drivers in tests only. Basic retry/backoff is a fake-driver test concern; the locked boundary fails safely on any start attempt and never schedules retries. Real driver construction and connection behavior may only be unlocked by a separately authorized, independently reviewed Stage G change.
+
+**Stage G single-pass gate:** all implementation stages complete; independent code review complete; scenarios and explicit pass/fail criteria written; sanitized fixture capture/handling ready; separate explicit user authorization and a separately reviewed change to the locked boundary before any real connection.
 
 ---
 

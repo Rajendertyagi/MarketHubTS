@@ -1,14 +1,14 @@
 # Project Status
 
-> **Status:** Milestones 1 and 2 are **published on `develop`**. Milestone 3 (provider adapter framework and resilient connectivity) is **implemented in the working tree** (uncommitted). Not a functioning market-data platform yet — no live streaming, historical or option-chain data.
-> **Last updated:** 2026-11-16
+> **Status:** Milestones 1–3 and M4 Stages A/B are **published on `develop`**. M4 Stage D (provider-ready live-data backend vertical slice) is implemented in this commit and pushed to `develop`. Not a functioning market-data platform yet — no live provider connection (production driver is locked/disabled), no historical or option-chain data.
+> **Last updated:** 2026-11-17
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Summary
 
-MarketHubTS now has a **working application foundation** (M1) and an **initial canonical market-domain foundation** (M2). M1 provides centralized validated runtime configuration, reliable SQLite initialization with versioned Drizzle migrations, an API with health/readiness/lifecycle and deliberate network boundaries, a WebUI application shell showing real backend/runtime status, LAN-capable local operation, and Windows-compatible development/production workflows. M2 adds provider-independent canonical market contracts, stable identity rules, catalog persistence, repository/transaction primitives, and a source-independent transactional catalog synchronization service with conflict/failure handling, verified with synthetic fixtures in isolated temporary databases.
+MarketHubTS has a **working application foundation** (M1), an **initial canonical market-domain foundation** (M2), a **provider adapter framework with resilient connectivity** (M3), and the first pieces of the **live-data pipeline** (M4 Stages A/B/D). M1 provides centralized validated runtime configuration, reliable SQLite initialization with versioned Drizzle migrations, an API with health/readiness/lifecycle and deliberate network boundaries, a WebUI application shell showing real backend/runtime status, LAN-capable local operation, and Windows-compatible development/production workflows. M2 adds provider-independent canonical market contracts, stable identity rules, catalog persistence, repository/transaction primitives, and a source-independent transactional catalog synchronization service. M3 adds a portable encrypted credential store, independent Upstox/FYERS auth adapters, and a provider registry. M4 Stage A adds canonical live contracts and bounded in-memory live state; Stage B adds the Upstox V3 SDK streaming adapter; Stage D adds the provider-ready backend vertical slice (service notifications, bounded realtime hub, subscription persistence with durable generation, supervisor, REST/SSE, and a locked production driver boundary).
 
-This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK integration, no live/historical/option-chain feeds, no bulk exchange catalog download/seeding, no instrument search UI, no market-data REST/SSE endpoints, no MCP market tools/Streamable HTTP transport, no watchlists/alerts/scanners/charts, no operational market-data configuration UI, no backup/restore, and no News/X/Twitter/market-wide integrations are implemented.
+This is **not** a functioning market-data platform: no live provider connection is attempted in Stage D (the production Upstox driver is locked/disabled and real SDK construction is unreachable), no real socket is opened, no live/historical/option-chain feeds, no bulk exchange catalog download/seeding, no instrument search UI, no MCP market tools/Streamable HTTP transport, no watchlists/alerts/scanners/charts, no operational market-data configuration UI, no backup/restore, and no News/X/Twitter/market-wide integrations are implemented. Live-provider verification remains Stage G and requires separate authorization.
 
 ## 2. Verified repository state
 
@@ -20,9 +20,8 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
 | `main` / `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (unchanged) |
-| `develop` / `origin/develop` (published baseline) | `484c0a6add7bfde04b294c523a453f3bff4b5b1f` — "fix(m2): resolve catalog sync identity collisions and identifier normalization" |
-| M2 publication | `fa40420` "feat(m2): implement canonical instrument catalog", followed by corrective commit `484c0a6`. Both published on `develop`; `main` untouched. |
-| Working tree at verification | Clean (`## develop...origin/develop`). Branch/HEAD/remote sync and working-tree state are task-specific; re-check with `git status --short --branch`. |
+| `develop` / `origin/develop` | Current HEAD is the Stage D commit (pushed in this task). Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
+| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (this commit). `main` untouched throughout. |
 
 ### 2.2 Historical context (preserved)
 
@@ -36,7 +35,7 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 
 ## 3. Implemented and verified
 
-### 3.1 Milestone 1 — application foundation (implemented, pushed baseline)
+### 3.1 Milestone 1 — application foundation (published)
 | Component | Implemented behavior |
 |---|---|
 | `packages/config` | Centralized, validated runtime configuration (Zod): env/host/port/LAN/db/log/web settings, defaults, clear invalid-config errors, compatibility with `PORT` and `MARKETHUB_DB_PATH`, public/redacted config views. `.env.example` provided. |
@@ -48,66 +47,81 @@ This is **not** a functioning market-data platform: no Upstox/FYERS API/SDK inte
 | Scripts/tooling | Windows-compatible `bun run dev`, `bun run build`, `bun run start`, plus individual dev/db/check commands. |
 
 ### 3.2 Milestone 2 — canonical catalog foundation (published)
-| Component | Implemented behavior (verified by code/tests/build in this task) |
+| Component | Implemented behavior |
 |---|---|
-| `packages/contracts` | `market.ts` adds Zod-validated canonical market-domain schemas/types: exchange/segment/classification, canonical instruments, derivative specs (future/option), index-eligibility metadata, provider mappings, aliases, provenance/freshness/availability concepts, sync scope/batch/result/conflicts. Validation rejects invalid derivative combinations (e.g. future with option type/strike, option without strike/type, cash/index modeled as derivative). |
-| `packages/market-core` | Real domain foundation: normalized identity-key computation independent of provider-native IDs (`identity.ts`), repository/transaction/sync interfaces (`types.ts`), and `CatalogSyncService` (`sync.ts`) applying validated normalized batches transactionally with stable identity preservation, duplicate/ambiguous identity & mapping conflict reporting, metadata merge without canonical ID change, no cross-source mapping removal, no removal of absent instruments in partial batches, rollback on error conflicts (no partial catalog writes), and best-effort failed-run recording. |
-| `packages/database` | Corrected unshipped additive migration `0001_lively_mauler.sql` (additive; `0000_tan_la_nuit.sql` unchanged) for `canonical_instruments`, `derivative_contracts` (one-to-one structured core derivative fields), `provider_instrument_mappings`, `instrument_aliases`, `instrument_identifier_history`, and `catalog_sync_runs` with PK/FK/unique/index constraints and JSON fields for extensible/provider-specific/supplemental metadata. `SqliteCatalogRepository` implements persistence, lookups, identifier/derivative-contract queries, and transaction boundaries. |
-| Tests | `tests/market/catalog.test.ts` exercises actual service/persistence with isolated temp DBs: clean-install migration, M1→M2 upgrade preserving `app_meta`, cash/index/underlying/future/option creation, independent Upstox/FYERS mappings to same canonical instrument, aliases/safe resolution, duplicate identity/mapping detection, ambiguous mapping handling, metadata updates without canonical ID change, provider-specific attribute preservation, sync run metadata, valid transactional apply, invalid batch rejection without partial writes, failed/conflicting sync preserving previous valid catalog, partial batch not removing absent instruments or other-source mappings, explicit lifecycle changes. Existing M1 tests remain passing. |
+| `packages/contracts` | Zod-validated canonical market-domain schemas/types: exchange/segment/classification, canonical instruments, derivative specs, index-eligibility metadata, provider mappings, aliases, provenance/freshness/availability concepts, sync scope/batch/result/conflicts. |
+| `packages/market-core` | Normalized identity-key computation independent of provider-native IDs, repository/transaction/sync interfaces, and `CatalogSyncService` applying validated normalized batches transactionally with stable identity preservation, conflict/failure handling, and rollback on error. |
+| `packages/database` | Additive migrations for `canonical_instruments`, `derivative_contracts`, `provider_instrument_mappings`, `instrument_aliases`, `instrument_identifier_history`, `catalog_sync_runs`; `SqliteCatalogRepository` with lookups and transaction boundaries. |
+| Tests | `tests/market/catalog.test.ts`: clean-install migration, M1→M2 upgrade preserving `app_meta`, cash/index/underlying/future/option creation, independent Upstox/FYERS mappings, aliases, duplicate/ambiguous identity handling, transactional apply/rollback, partial batch safety. |
 
-### 3.3 Canonical identity, mapping, and sync decisions (M2)
+### 3.3 Milestone 3 — provider adapter framework (published)
+- Portable encrypted SQLite credential store with one local key file; no OS credential store, no plaintext secrets.
+- Upstox Analytics Token adapter (REST validation via `GET /v2/market/status/NSE`); FYERS V3 non-trading-app OAuth with loopback callback; independent `ProviderRegistry`.
+- Credential/provider routes on the main app behind a single local-peer check; LAN-safe read-only diagnostics; minimal WebUI provider status.
+- Reliability: bounded timeouts/retries, atomic credential updates, fail-closed key handling, provider independence. No live broker authentication; all provider tests use mocks.
 
-- **Canonical identity:** internal `canonicalId` is independent of provider-native IDs. A normalized `identityKey` enforces uniqueness and stability: cash/index/other instruments keyed by exchange+segment+category+normalized symbol; futures/options keyed by exchange+segment+category+underlying reference+expiry (+strike+option type for options). Existing identity keeps its canonical ID across sync/metadata updates.
-- **Provider mappings:** separate `provider_instrument_mappings` records keyed uniquely by `(provider, nativeIdentifier)` and linked to canonical instruments; Upstox/FYERS mappings are independent and never treated as interchangeable. Conflicting remaps are reported, not guessed.
-- **Aliases:** stored with type/source/context/status; lookup can be contextual (exchange/segment) to avoid silent ambiguous resolution.
-- **Index/derivative separation:** index instruments can carry `indexEligibility` metadata distinguishing cash-index catalogue membership, derivative eligibility, approved product scope, and verified exchange eligibility (source/time-aware fields). NSE cash-index catalogue is not treated as NSE index F&O eligibility; BSE derivative scope remains limited to SENSEX/SENSEX F&O by design.
-- **Sync semantics:** source-independent validated batches (`COMPLETE`/`PARTIAL`/`INCREMENTAL`) applied in DB transactions. Invalid/conflicting batches do not leave partial catalog writes; failed/incomplete sync preserves previous valid data; partial batches do not mark absent instruments removed; a source does not remove another source's mappings; ambiguous conflicts reported. Sync runs record scope/status/counts/conflicts/timestamps for diagnostics/auditability (failed-run persistence best-effort outside rolled-back catalog transaction).
-- **Provenance/extensibility:** provider-specific/source-native attributes preserved in structured JSON metadata/provenance fields without breaking canonical consumers; raw provider-supplied market fields are never fabricated (no live market fields implemented in M2).
+### 3.4 M4 Stage A — canonical live contracts and bounded state (published)
+- `packages/contracts`: canonical live contracts (per-provider observations, freshness/availability, source selection, bounded snapshot with monotonic revision, defensive copies, session-aware freshness).
+- `packages/market-core`: `LiveStateStore` / `MarketDataService` with bounded in-memory state, explicit tracking, monotonic revision, and consistent snapshot reads.
 
-### 3.4 Verification snapshot (2026-11-16)
+### 3.5 M4 Stage B — Upstox V3 streaming adapter (published)
+- `packages/broker-upstox`: `UpstoxMarketDataStream` using the pinned official `upstox-js-sdk@2.31.0` for market-data streaming only; custom protobuf decoder removed.
+- Lifecycle/decoder corrections: per-mode frames, connect race guard, CAS/IEP/full-feed field preservation, lossless int64 handling, close ownership and readiness guards. No real socket opened in tests.
+
+### 3.6 M4 Stage D — provider-ready live-data backend vertical slice (this commit)
+- **Contracts:** `LiveSnapshot.connections`; Zod schemas for snapshots, change/control events, provider status and subscriptions; `StreamingState` aliased to the single authoritative `ProviderConnectionState`; `LiveEventSource` / `SubscriptionRepository` ports.
+- **Canonical service:** `MarketDataService.subscribe(listener)` — one synchronous notification per successful revision change, detached data, isolated listener failures, no events for no-ops.
+- **Realtime hub (`packages/realtime`):** `LiveEventHub` with bounded replay (count + approximate bytes), bounded per-client queues, drop counters, coalesced `snapshot-required`, periodic `refresh` control event, atomic replay-to-live registration, cursor precedence (`Last-Event-ID` authoritative), client isolation and clean shutdown.
+- **Persistence (`packages/database`):** `streaming_subscriptions` table + migration `0004_flat_spitfire.sql` (SQL, journal, snapshot); `SqliteSubscriptionRepository` with transactional row replacement and durable generation in `app_meta`, serialized writes, duplicate rejection.
+- **Supervisor (`apps/api`):** provider-agnostic driver seam, serialized reconciliation against the latest committed generation, ACTIVE Upstox mapping resolution (no fabricated identifiers), bounded retry with fake drivers, shutdown guards, runtime state written through `MarketDataService`.
+- **Locked production boundary:** `LockedUpstoxDriver` fails safely on any start/update attempt; no SDK construction, sockets or retry scheduling. Real driver construction is unreachable through startup/API/config and requires a separately authorized, independently reviewed Stage G change.
+- **REST/SSE:** `GET /api/market/snapshot`, `GET /api/market/stream`, `GET/PUT /api/market/subscriptions` (PUT local-owner-only); `/api/providers/status` composes auth status with runtime streaming state.
+- **Config:** small validated live policy with defensible defaults; no user-controlled live-connection authorization setting.
+- **Tests:** 48 new server-side tests (notifications, hub, persistence/migration, supervisor + locked boundary, routes/SSE, provider-status composition). No Stage E client tests, no real network.
+
+### 3.7 Verification snapshot (2026-11-17)
 
 | Check | Result |
 |---|---|
-| `bun run typecheck` | Pass (exit 0) |
-| `bun test` | Pass - 120 tests, 0 failures, 457 expect() calls, 15 files (agent-reported local verification; not CI evidence) |
-| `bun run build` | Pass (exit 0) |
-| M1 regression | Config, database, API, runtime, production serving, MCP health-contract, and contract tests pass |
-| M2 migration safety | Clean-install migration and M1 (`app_meta`) → M2 upgrade pass on isolated temporary databases |
+| `bun run typecheck` | Pass (exit 0) — all 12 workspaces |
+| `bun test` | Pass — 235 tests, 0 failures, 889 expect() calls, 23 files (local verification; not CI evidence) |
+| Focused Stage D tests | Pass — 48 tests, 0 failures, 156 expect() calls, 6 files |
+| `bun run build` | Pass (exit 0) — packages/apps checks; web Vite build succeeded |
+| `git diff --check` | Pass (exit 0) |
+| Migration safety | Clean-install and M3→M4 upgrade tests pass on isolated temporary databases |
 
-### 3.5 Manual/official verification notes
+### 3.8 Manual/official verification notes
 
 - **LAN:** configurable bind/LAN mode implemented and documented; external second-device LAN testing was not performed in this environment.
-- **Official provider/exchange research:** Upstox instrument-key/field concepts reviewed from official docs (2026-11-16). NSE equity-derivatives contract specifications (updated 11 Aug 2026), products page (updated 12 Aug 2026), and NIFTY India FPI 150 product page (FUTIDX/OPTIDX) were verified as current NSE publications supporting the six approved NSE index underlyings; SEBI Annual Report 2025–26 (five eligible NSE indices as of 31 Mar 2026) reconciled as a different observation date. BSE/FYERS detailed identifier/master specifics and actual listed contracts/specs/expiries remain to be verified from authoritative sources before integration. No provider APIs/SDKs integrated; no real exchange/provider data loaded.
+- **Official provider/exchange research:** Upstox instrument-key/field concepts and SDK version reviewed from official docs; NSE equity-derivatives contract specifications and products pages verified as current NSE publications. BSE/FYERS detailed identifier/master specifics and actual listed contracts/specs/expiries remain to be verified from authoritative sources before integration. No live provider connection or real exchange/provider data was used in Stage D.
 
 ## 4. Not implemented (confirmed gaps)
 
-- Provider adapters and live broker connectivity (Upstox/FYERS auth, REST/WS, subscriptions, normalization).
-- Bulk exchange catalog downloads, production instrument data seeding, real provider catalog ingestion.
-- Canonical market engine for live/historical/option-chain data processing.
-- Live in-memory market state, realtime SSE market delivery, bounded buffers/drop policy.
+- Live provider connection and real streaming (Stage D production driver is locked/disabled; Stage G requires separate authorization).
+- FYERS Data Socket streaming adapter (Stage C, on hold).
 - Historical candle retrieval/sync/caching and option-chain snapshot capture/storage.
 - Watchlists, alerts, scanners, condition evaluation, delivery channels.
-- Market-data REST/MCP tools/resources/events beyond health/status foundation; Streamable HTTP MCP transport.
-- Instrument search UI, market-data WebUI screens, operational configuration UI, charts.
-- Secure credential storage, backup/restore, integrity maintenance, diagnostics UI.
+- MCP market tools/resources/events beyond health/status foundation; Streamable HTTP MCP transport.
+- Instrument search UI, market-data WebUI screens (Stage E), operational configuration UI, charts.
+- Backup/restore, integrity maintenance, diagnostics UI.
 - News and X/Twitter integrations (later phase).
 
 ## 5. Documentation status
 
-- Roadmap updated to reflect M1 and M2 published on `develop`, with M3 as the active implementation milestone.
-- Architecture/catalog/semantics/lifecycle/decisions/references updated to record M2 implementation, persistence ownership, sync semantics, and remaining unverified/provider-integration gaps.
+- Roadmap updated to reflect M1–M3 and M4 Stages A/B published and Stage D implemented.
+- Architecture/catalog/semantics/lifecycle/decisions/references updated to record the live-data pipeline, persistence ownership, locked production boundary, and remaining unverified/provider-integration gaps.
 - `AGENTS.md` and `README.md` remain aligned with the two-branch workflow and current foundation state; task reports must record exact Git state.
 
 ## 6. Known notes and limitations
 
-- M2 is published on `develop` at `fa40420` + `484c0a6`; `main` remains unchanged.
-- Catalog domain is not yet wired to API/UI/MCP market surfaces and has no real provider data.
-- Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before M3.
+- M1–M3 and M4 Stages A/B are published on `develop`; `main` remains unchanged. Stage D is pushed to `develop` in this task.
+- The canonical catalog and live pipeline are not yet wired to WebUI live views or MCP market surfaces; no real provider data is loaded.
+- Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before live integration.
 - Production start requires a prior build (`bun run build` then `bun run start`).
 - `project-status.json` remains out-of-scope if it reappears.
 
 ## 7. Readiness for next phase
 
-**Ready:** M1 runtime foundation and M2 canonical catalog/persistence/sync primitives are published and verified in the real application. The M3 readiness/research gate is complete (official Upstox and FYERS auth, rate-limit and app-type findings recorded in [REFERENCES.md](REFERENCES.md) and [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md)).
+**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D backend live-data pipeline are implemented and verified in the real application. Stage D delivers a provider-ready backend vertical slice with a locked production driver boundary; no live provider connection is attempted.
 
-**Active milestone:** **M3 — Provider adapter framework and resilient connectivity (Upstox + FYERS)** is implemented in the working tree: portable encrypted SQLite credential store with a local key file, Upstox Analytics Token adapter, FYERS V3 non-trading-app OAuth adapter with loopback callback, independent provider registry, credential routes on the main app behind a single local-peer check, LAN-safe read-only diagnostics and minimal WebUI provider status. Reliability work covers bounded timeouts/retries, atomic credential updates, fail-closed key handling and provider independence. No live broker authentication was performed; all provider tests use mocks. M3 remains uncommitted.
+**Next stages:** **Stage E** (WebUI streaming selections and live-data experience, including EventSource close/fetch/reconnect and `refresh` client behavior), then **Stage F** (deep reconnect/recovery/concurrency hardening), **Stage C** (FYERS Data Socket adapter), and **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.

@@ -9,8 +9,11 @@
                     ".":  "./src/index.ts"
                 },
     "type":  "module",
+    "dependencies":  {
+                         "@markethub/contracts":  "workspace:*"
+                     },
     "devDependencies":  {
-                            "typescript":  "7.0.2"
-                        },
+                             "typescript":  "7.0.2"
+                         },
     "private":  true
 }

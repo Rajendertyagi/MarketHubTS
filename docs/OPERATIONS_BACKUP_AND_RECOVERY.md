@@ -69,8 +69,8 @@
 
 ## 7. Current implementation status
 
-- **Implemented:** API graceful shutdown handlers (SIGINT/SIGTERM) closing DB/server; DB open with WAL/foreign_keys/NORMAL/busy_timeout and best-effort checkpoint on close; basic health diagnostics endpoint.
-- **Not implemented:** configurable startup/background service behavior, LAN configuration UI, comprehensive diagnostics/logging UI, backup/restore, integrity maintenance workflows, MCP HTTP/LAN serving. **Implemented (M3, uncommitted):** portable encrypted credential storage with key file and explicit reset path.
+- **Implemented:** API graceful shutdown handlers (SIGINT/SIGTERM) stopping the supervisor and realtime hub before closing the server and DB; DB open with WAL/foreign_keys/NORMAL/busy_timeout and best-effort checkpoint on close; basic health diagnostics endpoint. **Implemented (M3):** portable encrypted credential storage with key file and explicit reset path. **Implemented (M4-D):** subscription persistence with durable generation; locked production streaming driver that opens no socket and schedules no retries.
+- **Not implemented:** configurable startup/background service behavior, LAN configuration UI, comprehensive diagnostics/logging UI, backup/restore, integrity maintenance workflows, MCP HTTP/LAN serving.
 
 ## 8. Risks and open items
 

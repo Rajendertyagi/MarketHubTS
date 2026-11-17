@@ -1,12 +1,14 @@
 # Testing
 
 > **Status:** Aligned summary. Authoritative details: [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md).
-> **Last updated:** 2026-11-15
+> **Last updated:** 2026-11-17
 
-## Current checks (verified scaffold)
-- `bun test`: **PASS** — 2 tests, 0 fail (`tests/health.test.ts`, health contract schema).
-- `bun run typecheck`: **PASS** — all workspace packages/apps.
+## Current checks (verified 2026-11-17)
+- `bun test`: **PASS** — 235 tests, 0 fail, 889 expect() calls, 23 files (local verification; not CI evidence).
+- Focused Stage D tests: **PASS** — 48 tests, 0 fail, 156 expect() calls, 6 files.
+- `bun run typecheck`: **PASS** — all 12 workspace packages/apps.
 - `bun run build`: **PASS** — package/app checks and web Vite production build.
+- `git diff --check`: **PASS** (exit 0).
 - Manual smoke: API started and `GET /health` returned OK with database check OK.
 
 ## Target validation strategy

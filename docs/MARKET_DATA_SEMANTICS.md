@@ -1,10 +1,10 @@
 # Market Data Semantics
 
 > **Status:** Aligned summary. Authoritative details: [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [ARCHITECTURE.md](ARCHITECTURE.md).
-> **Last updated:** 2026-11-16
+> **Last updated:** 2026-11-17
 
 ## Current state
-M1/M2 implement the application foundation and canonical catalog domain foundation (contracts, identity, persistence, transactional sync primitives) with synthetic/test validation. **Live market data processing/normalization, provider ingestion, historical/option-chain pipelines, and consumer-facing market surfaces are not implemented.** No raw provider-supplied market fields are fabricated.
+M1/M2 implement the application foundation and canonical catalog domain foundation (contracts, identity, persistence, transactional sync primitives) with synthetic/test validation. M4 Stages A/B/D add canonical live contracts, observation normalization with provenance and session-aware freshness, deterministic source selection, bounded in-memory live state, subscription persistence, a bounded realtime hub and REST/SSE delivery. Stage D production uses a locked driver, so no live provider connection or real market data is used. **Historical/option-chain pipelines and consumer-facing WebUI/MCP market surfaces are not implemented.** No raw provider-supplied market fields are fabricated.
 
 ## Confirmed canonical rules (target)
 - **Single source of truth** for instrument identity, symbol normalization, exchange/segment, quotes, depth, OHLC candles, timestamps, ordering, and freshness.

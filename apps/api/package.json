@@ -14,6 +14,7 @@
                          "@markethub/contracts":  "workspace:*",
                          "@markethub/database":  "workspace:*",
                          "@markethub/market-core":  "workspace:*",
+                         "@markethub/realtime":  "workspace:*",
                          "@markethub/broker-upstox":  "workspace:*",
                          "@markethub/broker-fyers":  "workspace:*",
                          "@markethub/shared":  "workspace:*",
@@ -21,7 +22,7 @@
                          "zod":  "4.6.7"
                      },
     "devDependencies":  {
-                            "bun-types":  "1.4.4",
-                            "typescript":  "7.0.2"
-                        }
+                             "bun-types":  "1.4.4",
+                             "typescript":  "7.0.2"
+                         }
 }

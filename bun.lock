@@ -19,6 +19,7 @@
         "@markethub/contracts": "workspace:*",
         "@markethub/database": "workspace:*",
         "@markethub/market-core": "workspace:*",
+        "@markethub/realtime": "workspace:*",
         "@markethub/shared": "workspace:*",
         "hono": "4.13.18",
         "zod": "4.6.7",
@@ -138,6 +139,9 @@
     "packages/realtime": {
       "name": "@markethub/realtime",
       "version": "0.1.0",
+      "dependencies": {
+        "@markethub/contracts": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "7.0.2",
       },

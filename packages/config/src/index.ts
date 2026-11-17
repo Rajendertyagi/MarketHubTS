@@ -3,6 +3,34 @@ import { z } from "zod";
 const logLevels = ["debug", "info", "warn", "error"] as const;
 const envModes = ["development", "production", "test"] as const;
 
+export interface LivePolicyConfig {
+  maxInstruments: number;
+  openMaxAgeMs: number;
+  unknownMaxAgeMs: number;
+  maxRetainedObservationAgeMs: number;
+  replayMaxEvents: number;
+  replayMaxBytes: number;
+  clientMaxEvents: number;
+  clientMaxBytes: number;
+  refreshIntervalMs: number;
+  reconnectMaxAttempts: number;
+  reconnectBaseDelayMs: number;
+}
+
+const livePolicySchema = z.object({
+  maxInstruments: z.number().int().positive(),
+  openMaxAgeMs: z.number().int().positive(),
+  unknownMaxAgeMs: z.number().int().positive(),
+  maxRetainedObservationAgeMs: z.number().int().positive(),
+  replayMaxEvents: z.number().int().positive(),
+  replayMaxBytes: z.number().int().positive(),
+  clientMaxEvents: z.number().int().positive(),
+  clientMaxBytes: z.number().int().positive(),
+  refreshIntervalMs: z.number().int().nonnegative(),
+  reconnectMaxAttempts: z.number().int().nonnegative(),
+  reconnectBaseDelayMs: z.number().int().positive()
+});
+
 const configSchema = z.object({
   env: z.enum(envModes),
   host: z.string().min(1),
@@ -16,7 +44,8 @@ const configSchema = z.object({
   version: z.string().min(1),
   fyersAppId: z.string().optional(),
   fyersRedirectUri: z.string().optional(),
-  upstoxTokenExpiresAt: z.string().optional()
+  upstoxTokenExpiresAt: z.string().optional(),
+  livePolicy: livePolicySchema
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -57,6 +86,16 @@ function parsePort(value: string | undefined, fallback: number, path: string): n
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
     throw new ConfigError([{ path, message: "must be an integer between 1 and 65535" }]);
+  }
+  return n;
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number, path: string, allowZero = false): number {
+  if (value === undefined || value === "") return fallback;
+  const n = Number(value);
+  const min = allowZero ? 0 : 1;
+  if (!Number.isInteger(n) || n < min) {
+    throw new ConfigError([{ path, message: `must be an integer >= ${min}` }]);
   }
   return n;
 }
@@ -111,7 +150,23 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const fyersRedirectUri = source.MARKETHUB_FYERS_REDIRECT_URI || undefined;
   const upstoxTokenExpiresAt = source.MARKETHUB_UPSTOX_TOKEN_EXPIRES_AT || undefined;
 
-  const candidate = { env, host, port, lan, dbPath, logLevel, webHost, webPort, apiUrl, version, fyersAppId, fyersRedirectUri, upstoxTokenExpiresAt };
+  // A small validated live policy with defensible defaults. Buffer knobs are
+  // intentionally not exposed as env vars; only operator-relevant values are.
+  const livePolicy: LivePolicyConfig = {
+    maxInstruments: parsePositiveInt(source.MARKETHUB_LIVE_MAX_INSTRUMENTS, 200, "MARKETHUB_LIVE_MAX_INSTRUMENTS"),
+    openMaxAgeMs: parsePositiveInt(source.MARKETHUB_LIVE_OPEN_MAX_AGE_MS, 15_000, "MARKETHUB_LIVE_OPEN_MAX_AGE_MS"),
+    unknownMaxAgeMs: parsePositiveInt(source.MARKETHUB_LIVE_UNKNOWN_MAX_AGE_MS, 5_000, "MARKETHUB_LIVE_UNKNOWN_MAX_AGE_MS"),
+    maxRetainedObservationAgeMs: parsePositiveInt(source.MARKETHUB_LIVE_MAX_RETAINED_AGE_MS, 60_000, "MARKETHUB_LIVE_MAX_RETAINED_AGE_MS"),
+    replayMaxEvents: 1000,
+    replayMaxBytes: 2_000_000,
+    clientMaxEvents: 256,
+    clientMaxBytes: 512_000,
+    refreshIntervalMs: parsePositiveInt(source.MARKETHUB_LIVE_REFRESH_INTERVAL_MS, 15_000, "MARKETHUB_LIVE_REFRESH_INTERVAL_MS", true),
+    reconnectMaxAttempts: parsePositiveInt(source.MARKETHUB_LIVE_RECONNECT_MAX_ATTEMPTS, 5, "MARKETHUB_LIVE_RECONNECT_MAX_ATTEMPTS", true),
+    reconnectBaseDelayMs: parsePositiveInt(source.MARKETHUB_LIVE_RECONNECT_BASE_DELAY_MS, 1000, "MARKETHUB_LIVE_RECONNECT_BASE_DELAY_MS")
+  };
+
+  const candidate = { env, host, port, lan, dbPath, logLevel, webHost, webPort, apiUrl, version, fyersAppId, fyersRedirectUri, upstoxTokenExpiresAt, livePolicy };
   const parsed = configSchema.safeParse(candidate);
   if (!parsed.success) {
     const issues: ConfigIssue[] = parsed.error.issues.map((i) => ({

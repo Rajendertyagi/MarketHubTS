@@ -1,7 +1,7 @@
 # Data Lifecycle and Storage
 
-> **Status:** Confirmed lifecycle requirements and target storage design; M1/M2 persistence foundations implemented (app metadata + canonical catalog/sync storage). Live/historical/option-chain data lifecycles remain pending.
-> **Last updated:** 2026-11-16
+> **Status:** Confirmed lifecycle requirements and storage design; M1/M2 persistence foundations and M4 Stage D live subscription persistence implemented. Live ticks remain in memory only; historical/option-chain data lifecycles remain pending.
+> **Last updated:** 2026-11-17
 > **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
 
 ## 1. Storage principles (confirmed)
@@ -21,7 +21,8 @@
 | Persistence | **Do not permanently store every incoming tick or every market-depth change** |
 | Restart behavior | Live state repopulated from connected provider streams after restart |
 | Metadata | Must carry source/provider, timestamp (original observation where available), and freshness/availability state |
-| Resource control | Bounded structures/queues; prevent unbounded memory growth (planned) |
+| Resource control | Bounded structures/queues; prevent unbounded memory growth. **Implemented (M4-D):** `LiveEventHub` bounds replay history and per-client queues by event count and approximate bytes; overflow drops data events (with counters and one coalesced `snapshot-required`) rather than subscribers. |
+| Desired subscriptions | **Implemented (M4-D):** `streaming_subscriptions` persists canonical instrument selections with enabled/disabled state; a durable generation in `app_meta` (`streaming_subscriptions_generation`) advances transactionally with each full replacement, including empty replacements. |
 
 ## 3. Historical data lifecycle
 
@@ -62,8 +63,9 @@
 
 ### 6.1 Current implementation (verified)
 - `packages/database`: `openDatabase()` creates dirs, opens `bun:sqlite` DB (`MARKETHUB_DB_PATH` or `./data/markethub.sqlite`), sets `PRAGMA journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout=5000`, returns Drizzle handle + sqlite handle + safe close (best-effort WAL checkpoint). `checkDatabase()` runs `SELECT 1`.
-- **Migrations (versioned, additive):** `0000_tan_la_nuit.sql` (`app_meta`) and `0001_good_agent_brand.sql` (catalog foundation). Drizzle config (`drizzle.config.ts`, sqlite, `./drizzle` out) and migration runner (`src/migrate.ts`) implemented.
-- **Catalog schema (M2):** `canonical_instruments`, `provider_instrument_mappings`, `instrument_aliases`, `catalog_sync_runs` with PK/FK/unique/index constraints and JSON fields for extensible/provider-specific metadata/provenance.
+- **Migrations (versioned, additive):** `0000_tan_la_nuit.sql` (`app_meta`), `0001_lively_mauler.sql` (catalog foundation), `0002_round_baron_strucker.sql`, `0003_sad_edwin_jarvis.sql` (provider settings), and `0004_flat_spitfire.sql` (`streaming_subscriptions`). Drizzle config (`drizzle.config.ts`, sqlite, `./drizzle` out) and migration runner (`src/migrate.ts`) implemented. Each migration has its SQL file, journal entry and generated snapshot.
+- **Catalog schema (M2):** `canonical_instruments`, `derivative_contracts`, `provider_instrument_mappings`, `instrument_aliases`, `instrument_identifier_history`, `catalog_sync_runs` with PK/FK/unique/index constraints and JSON fields for extensible/provider-specific metadata/provenance.
+- **Live subscription schema (M4-D):** `streaming_subscriptions` (canonical ID PK, enabled flag, timestamps) plus the durable generation key in `app_meta`. `SqliteSubscriptionRepository.replace()` deletes and reinserts rows and increments the generation in one serialized `BEGIN IMMEDIATE` transaction; no provider SDK/network work occurs inside it.
 - **Repository/transactions (M2):** `SqliteCatalogRepository` provides lookups and transactional catalog writes used by `CatalogSyncService`; failed/conflicting syncs roll back catalog changes (no partial catalog writes). Failed-run audit persistence is best-effort outside rolled-back catalog transactions when supported.
 - **Not yet implemented:** domain schemas/storage for candles, option-chain snapshots, watchlists, alerts/scanners/history, operational config persistence beyond foundation, backup/restore, integrity maintenance workflows.
 

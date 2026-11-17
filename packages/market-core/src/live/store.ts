@@ -1,5 +1,6 @@
 import type {
   FreshnessPolicy,
+  LiveChangeEvent,
   LiveItem,
   LiveSnapshot,
   LiveStateOptions,
@@ -39,6 +40,7 @@ export class LiveStateStore {
   private readonly maxInstruments: number;
   private readonly session: () => MarketSessionState;
   private readonly onEvict: ((canonicalId: string) => void) | undefined;
+  private readonly listeners = new Set<(event: LiveChangeEvent) => void>();
   private revisionValue = 0;
 
   constructor(options: LiveStateOptions) {
@@ -53,20 +55,43 @@ export class LiveStateStore {
     return this.revisionValue;
   }
 
+  /**
+   * Subscribe to successful revision changes. Notifications are synchronous and
+   * carry detached data. Listener failures are isolated and never break the
+   * mutation or other listeners. Returns an unsubscribe function.
+   */
+  subscribe(listener: (event: LiveChangeEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private notify(event: LiveChangeEvent): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // A misbehaving consumer must not corrupt canonical state or peers.
+      }
+    }
+  }
+
   /** Explicitly track an instrument. No automatic or silent eviction. */
   track(canonicalId: string, pinned = false): void {
     if (this.items.has(canonicalId)) return;
     if (this.items.size >= this.maxInstruments) {
       throw new LiveStateCapacityError(canonicalId, this.maxInstruments);
     }
-    this.items.set(canonicalId, {
+    const nowMs = this.now().getTime();
+    const item: LiveItem = {
       canonicalId,
       observations: {},
-      selected: selectObservation(canonicalId, {}, this.connectionStates(), this.session(), this.policy, this.now().getTime()),
+      selected: selectObservation(canonicalId, {}, this.connectionStates(), this.session(), this.policy, nowMs),
       pinned,
-      updatedAtMs: this.now().getTime()
-    });
+      updatedAtMs: nowMs
+    };
+    this.items.set(canonicalId, item);
     this.revisionValue++;
+    this.notify({ type: "item-updated", revision: this.revisionValue, canonicalId, item: this.materialize(item, nowMs) });
   }
 
   /** Explicit removal only. Returns true if an item was removed. */
@@ -75,6 +100,7 @@ export class LiveStateStore {
     if (removed) {
       this.revisionValue++;
       this.onEvict?.(canonicalId);
+      this.notify({ type: "item-removed", revision: this.revisionValue, canonicalId });
     }
     return removed;
   }
@@ -97,13 +123,18 @@ export class LiveStateStore {
       item.canonicalId, item.observations, this.connectionStates(), this.session(), this.policy, nowMs
     );
     this.revisionValue++;
+    this.notify({
+      type: "item-updated", revision: this.revisionValue, canonicalId: observation.canonicalId,
+      item: this.materialize(item, nowMs)
+    });
   }
 
   /** Connection state is owned here, never stored inside observations. */
   setConnectionState(provider: ProviderId, state: ProviderConnectionState, error: string | null = null): void {
     const previous = this.connections.get(provider);
     if (previous?.state === state && previous.error === error) return;
-    this.connections.set(provider, { provider, state, changedAtMs: this.now().getTime(), error });
+    const status: ProviderConnectionStatus = { provider, state, changedAtMs: this.now().getTime(), error };
+    this.connections.set(provider, status);
     // Connectedness affects selection eligibility, so recompute all selections.
     const nowMs = this.now().getTime();
     for (const item of this.items.values()) {
@@ -112,6 +143,10 @@ export class LiveStateStore {
       );
     }
     this.revisionValue++;
+    this.notify({
+      type: "provider-connection-changed", revision: this.revisionValue, provider,
+      status: { ...status }, requiresSnapshotRefresh: true
+    });
   }
 
   getConnectionStatus(provider: ProviderId): ProviderConnectionStatus | undefined {
@@ -134,7 +169,8 @@ export class LiveStateStore {
     return {
       revision: this.revisionValue,
       capturedAtMs: nowMs,
-      items: [...this.items.values()].map((item) => this.materialize(item, nowMs))
+      items: [...this.items.values()].map((item) => this.materialize(item, nowMs)),
+      connections: this.allConnectionStatuses()
     };
   }
 

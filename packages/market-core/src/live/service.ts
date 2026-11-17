@@ -1,4 +1,5 @@
 import type {
+  LiveChangeEvent,
   LiveItem,
   LiveSnapshot,
   LiveStateOptions,
@@ -20,6 +21,11 @@ export class MarketDataService {
 
   get revision(): number {
     return this.store.revision;
+  }
+
+  /** Synchronous change notifications for consumers such as the realtime hub. */
+  subscribe(listener: (event: LiveChangeEvent) => void): () => void {
+    return this.store.subscribe(listener);
   }
 
   track(canonicalId: string, pinned = false): void {

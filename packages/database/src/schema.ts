@@ -249,6 +249,22 @@ export const providerCredentials = sqliteTable(
   (t) => [uniqueIndex("provider_credentials_identity_uq").on(t.provider, t.name)]
 );
 
+// Desired live-streaming selections. One row per canonical instrument; the
+// durable generation lives in app_meta under STREAMING_GENERATION_KEY.
+export const streamingSubscriptions = sqliteTable(
+  "streaming_subscriptions",
+  {
+    canonicalId: text("canonical_id").primaryKey(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => [index("streaming_subscriptions_enabled_idx").on(t.enabled)]
+);
+
+export type StreamingSubscriptionRow = typeof streamingSubscriptions.$inferSelect;
+export type NewStreamingSubscriptionRow = typeof streamingSubscriptions.$inferInsert;
+
 export type CanonicalInstrumentRow = typeof canonicalInstruments.$inferSelect;
 export type NewCanonicalInstrumentRow = typeof canonicalInstruments.$inferInsert;
 export type DerivativeContractRow = typeof derivativeContracts.$inferSelect;

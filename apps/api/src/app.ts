@@ -18,10 +18,12 @@ import { checkDatabase, type DatabaseHandle } from "@markethub/database";
 import { nowIso } from "@markethub/shared";
 import type { AppConfig } from "@markethub/config";
 import type { CredentialStore, ProviderConfig, ProviderId } from "@markethub/contracts";
-import type { ProviderRegistry } from "@markethub/market-core";
+import type { MarketDataService, ProviderRegistry } from "@markethub/market-core";
+import type { LiveEventHub } from "@markethub/realtime";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
+import type { StreamSupervisor } from "./stream-supervisor";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -35,6 +37,9 @@ export interface AppDependencies {
   providerConfig?: ProviderConfig;
   upstox?: UpstoxAdapter;
   fyers?: FyersAdapter;
+  service?: MarketDataService;
+  hub?: LiveEventHub;
+  supervisor?: StreamSupervisor;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -67,6 +72,7 @@ function buildReadiness(deps: AppDependencies): ReadinessStatus {
 
 import { isLoopbackHost, isPrivateLanIpv4 } from "./lib/net";
 import { registerProviderRoutes } from "./provider-routes";
+import { registerMarketRoutes } from "./market-routes";
 export function isAllowedCorsOrigin(origin: string, config: Pick<AppConfig, "lan" | "port" | "webPort">): boolean {
   if (!origin) return false;
   const allowed = new Set<string>([
@@ -142,6 +148,9 @@ export function createApp(deps: AppDependencies) {
 
 
   registerProviderRoutes(app, deps);
+  if (deps.service && deps.hub && deps.supervisor) {
+    registerMarketRoutes(app, { service: deps.service, hub: deps.hub, supervisor: deps.supervisor });
+  }
   app.get("/api/status", (c) => {
     const health = healthStatusSchema.parse({
       status: "ok",

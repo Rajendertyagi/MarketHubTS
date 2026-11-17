@@ -1,7 +1,7 @@
 # Testing and Acceptance
 
-> **Status:** Target validation strategy and acceptance criteria; current automated coverage is minimal (health contract test only).
-> **Last updated:** 2026-11-16
+> **Status:** Validation strategy and acceptance criteria; automated coverage now spans foundation, catalog, provider auth, live contracts, Upstox stream, and the M4 Stage D backend vertical slice.
+> **Last updated:** 2026-11-17
 > **Related:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Validation strategy
@@ -13,14 +13,26 @@
 - **Provider realism with safety:** use mocks/simulators and sanitized recorded fixtures/captures (verified free of secrets) for deterministic tests; controlled live verification only when authorized and without placing orders.
 - **Failure-focused:** explicitly test disconnects, limits, stale/unavailable data, partial sync failures, and recovery (including fault containment in a shared-process modular monolith).
 
-## 2. Current checks (verified scaffold)
+## 2. Current checks (verified 2026-11-17)
 
-| Check | Command | Result (scaffold verification) |
+| Check | Command | Result |
 |---|---|---|
-| Contract/schema test | `bun test` | PASS — 2 tests, 0 fail (`tests/health.test.ts`) |
-| Typecheck | `bun run typecheck` | PASS — all workspace packages/apps |
+| Full test suite | `bun test` | PASS — 235 tests, 0 fail, 889 expect() calls, 23 files (local verification; not CI evidence) |
+| Focused Stage D tests | `bun test tests/market/notifications.test.ts tests/market/realtime-hub.test.ts tests/market/subscriptions.test.ts tests/market/supervisor.test.ts tests/market/stream-routes.test.ts tests/providers/status-composition.test.ts` | PASS — 48 tests, 0 fail, 156 expect() calls, 6 files |
+| Typecheck | `bun run typecheck` | PASS — all 12 workspace packages/apps |
 | Build | `bun run build` | PASS — packages/apps checks; web Vite build succeeded |
+| Whitespace check | `git diff --check` | PASS (exit 0) |
 | Manual smoke | run API + request `/health` | PASS — API returned `ok` with DB check `ok` |
+
+### 2.1 Stage D server-side coverage (implemented)
+
+- **Service notifications:** one event per successful revision change; no event for no-ops; untrack emits only on removal; detached item data; connection change signals resync; listener exceptions isolated; unsubscribe stops notifications.
+- **Snapshot/schema:** Zod-valid snapshot with connection statuses; provider status schemas validate; `/api/providers/status` composes auth + runtime state with preserved response structure.
+- **Realtime hub:** initial snapshot + live; replay after valid cursor with no gaps/duplicates; expired/invalid/future/empty `Last-Event-ID` cursors emit one `snapshot-required` and terminate; atomic registration; bounded replay and client queues by count and bytes; overflow drops data with counters and one coalesced `snapshot-required`; client isolation; abort cleanup; hub shutdown; control events never advance revision; `refresh` emitted without advancing revision.
+- **Persistence/routes:** clean-install migration; M3→M4 upgrade preserving data; repository round-trip; empty replacement advances generation; invalid canonical IDs rejected atomically; missing/inactive mappings reported unavailable with no fabricated identifiers; serialized reconciliation with durable generation guard; snapshot route validated; subscription routes local-owner-only; SSE cursor/replay via `app.request()`; multi-client isolation/cleanup.
+- **Supervisor:** fake driver; loads persisted state and latest generation; ACTIVE Upstox mappings only; empty/no-eligible handling; reconciles changes via driver; propagates runtime state to the service; bounded retry deterministic with a fake driver; stop prevents late callbacks; one driver failure cannot corrupt shared state; locked production driver fails safely on any start attempt and never instantiates an SDK, opens a socket or schedules retries.
+
+Stage E client behavior (EventSource close/fetch/reconnect after `provider-connection-changed` and `snapshot-required`, and `refresh` handling) is specified as a contract but is explicitly out of Stage D scope and not tested here. No real network call occurs in any Stage D test.
 
 ## 3. Provider-state matrix (required)
 
@@ -84,8 +96,10 @@ Specific numeric targets must be established and evidenced during implementation
 
 - **M1:** schema/migration/catalog-sync safety tests pass.
 - **M2:** provider-state matrix (connectivity) and secret-handling checks pass.
-- **M3:** live pipeline, bounded buffers/overflow rule, restart repopulation, multi-client isolation verified.
-- **M4:** historical cache/snapshot persistence, retention, and config-independence verified.
+- **M3:** provider auth states, secret handling and provider independence verified with mocks.
+- **M4 Stage A/B:** canonical live contracts, bounded state, freshness/source selection and Upstox stream adapter tests pass.
+- **M4 Stage D:** server-side live pipeline, bounded buffers/overflow rule, subscription persistence/generation, SSE cursor/replay, multi-client isolation and locked production boundary verified (see §2.1). WebUI client behavior is Stage E; deep reconnect/soak hardening is Stage F; live provider verification is Stage G.
+- **M5:** historical cache/snapshot persistence, retention, and config-independence verified.
 - **M5:** MCP transport/capability/permission/parity tests pass, including alert-event resource/subscription/read-after-notify, cursor/reconnect recovery, multi-client isolation, and polling/tool fallback behavior (per verified spec/SDK).
 - **M6:** alert waiting-state, scanner limitation reporting, delivery and shared-history tests pass.
 - **M7:** chart/data correctness (backend source of truth), UI responsiveness/customization verified.

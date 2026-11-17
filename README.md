@@ -2,7 +2,7 @@
 
 **AI-first, local-first Indian stock-market data platform** focused on comprehensive NSE and BSE F&O market information.
 
-> **Status:** Application foundation implemented (runtime/configuration, SQLite migrations, API health/readiness, WebUI system-status shell, LAN-capable local operation, dev/prod workflows). **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+> **Status:** Application foundation (M1), canonical catalog (M2), provider auth framework (M3), and M4 Stages A/B/D live-data backend are implemented on `develop`. Stage D adds a provider-ready backend vertical slice with a locked production driver — no live provider connection is attempted. **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
 
 ## What MarketHubTS is (confirmed)
 
@@ -16,7 +16,7 @@
 
 Not an automated trading platform, not an AI trading recommendation/prediction/signal engine, not sentiment analysis, not chat, not broker account management (orders/positions/holdings/funds/margin/personal trade history), and not general CSV/Excel market-data export.
 
-## Current implementation (foundation milestone)
+## Current implementation
 
 - Bun workspace monorepo (`apps/*`, `packages/*`), strict TypeScript baseline.
 - **Runtime/configuration:** centralized validated config (`packages/config`, Zod), `.env.example`, compatibility with `PORT`/`MARKETHUB_DB_PATH`, LAN/local modes, no secret exposure in public diagnostics.
@@ -25,8 +25,11 @@ Not an automated trading platform, not an AI trading recommendation/prediction/s
 - **WebUI (`apps/web`):** React + Vite application shell (TanStack Router/Query, Tailwind) showing real backend/runtime status with loading/error/recovery states (no fabricated market data).
 - **MCP (`apps/mcp-server`):** stdio `markethub_health` tool preserved (uses local API health contract).
 - **Workflows:** Windows-compatible `bun run dev`, `bun run build`, `bun run start` (single local instance serving API + built WebUI in production).
-- **Tests:** automated coverage for config, database/migrations, API/health/readiness/errors, runtime startup/shutdown, production serving, and MCP contract regression; typecheck/build passing.
-- Placeholder packages remain: `market-core`, `realtime`, `analytics`, `broker-fyers`, `broker-upstox`.
+- **Market domain (`packages/contracts`, `packages/market-core`):** canonical instrument identity/catalog with transactional sync; canonical live contracts, observation normalization, session-aware freshness, deterministic source selection, and bounded in-memory live state with change notifications.
+- **Providers (`packages/broker-upstox`, `packages/broker-fyers`):** portable encrypted credential store, independent Upstox/FYERS auth adapters, and an Upstox V3 SDK streaming adapter (market-data streaming only). FYERS Data Socket streaming is on hold.
+- **Live backend (`packages/realtime`, `apps/api`):** bounded realtime hub, subscription persistence with durable generation, supervisor, and REST/SSE market endpoints (`/api/market/snapshot`, `/api/market/stream`, `/api/market/subscriptions`). Production uses a locked driver: no SDK construction, socket or provider connection.
+- **Tests:** 235 tests passing (48 focused Stage D tests), typecheck/build passing. No real network or live provider connection in tests.
+- Placeholder package remains: `analytics`. WebUI live views (Stage E), FYERS streaming (Stage C) and live verification (Stage G) are pending.
 
 ## Prerequisites
 

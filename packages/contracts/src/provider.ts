@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { providerConnectionStateSchema, type ProviderConnectionState } from "./live";
 
 // --- Provider identity and configuration (non-secret only) ---
 export const providerIdSchema = z.enum(["UPSTOX", "FYERS"]);
@@ -65,9 +66,11 @@ export const providerAuthStateSchema = z.enum([
 ]);
 export type ProviderAuthState = z.infer<typeof providerAuthStateSchema>;
 
-// Streaming is deliberately not implemented in M3.
-export const streamingStateSchema = z.literal("NOT_STARTED");
-export type StreamingState = z.infer<typeof streamingStateSchema>;
+// Runtime streaming state is the single authoritative connection-state schema
+// defined in live.ts. ProviderRegistry owns auth/status; the supervisor owns
+// runtime connection state and writes it through MarketDataService.
+export const streamingStateSchema = providerConnectionStateSchema;
+export type StreamingState = ProviderConnectionState;
 
 export const capabilityStateSchema = z.enum(["AVAILABLE", "UNAVAILABLE", "UNKNOWN"]);
 export type CapabilityState = z.infer<typeof capabilityStateSchema>;
@@ -111,6 +114,43 @@ export interface ProviderStatusMap {
   UPSTOX: ProviderStatus;
   FYERS: ProviderStatus;
 }
+
+export const providerCapabilitySchema = z.object({
+  name: z.string(),
+  state: capabilityStateSchema,
+  source: capabilitySourceSchema,
+  asOf: z.string().optional(),
+  note: z.string().optional()
+});
+
+export const providerLimitSchema = z.object({
+  name: z.string(),
+  value: z.union([z.string(), z.number(), z.null()]),
+  state: capabilityStateSchema,
+  source: capabilitySourceSchema,
+  publishedAt: z.string().optional(),
+  note: z.string().optional()
+});
+
+export const providerStatusSchema = z.object({
+  id: providerIdSchema,
+  enabled: z.boolean(),
+  authState: providerAuthStateSchema,
+  streamingState: streamingStateSchema,
+  validatedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  expiryKnown: z.boolean(),
+  capabilities: z.array(providerCapabilitySchema),
+  limits: z.array(providerLimitSchema),
+  restrictions: z.array(z.string()),
+  error: z.string().nullable(),
+  lastErrorAt: z.string().nullable()
+});
+
+export const providerStatusMapSchema = z.object({
+  UPSTOX: providerStatusSchema,
+  FYERS: providerStatusSchema
+});
 
 // --- Authentication flow results ---
 export interface AuthStartResult {
