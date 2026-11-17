@@ -88,7 +88,7 @@ Each adapter must handle (as applicable and supported):
 | SDK/Bun | **M3:** direct Bun `fetch`, no broker SDKs. **M4 Stage B (scoped exception):** official `upstox-js-sdk@2.31.0` (pinned) is used for **market-data streaming only**; no order/trading operation is introduced. This deliberately reverses the earlier no-broker-SDK decision for Upstox streaming. |
 | Market data feed (V3) | Protobuf WebSocket feed; **M4 Stage B** uses the official SDK instead of the removed custom decoder/proto. SDK declares 9 direct dependencies (measured install: 124 packages, 1 blocked transitive `protobufjs` postinstall). Version-specific workarounds: call `autoReconnect(false)` before connect (SDK defaults it on); never use SDK `changeMode()` (it sends `sub` instead of `change_mode`) — use unsubscribe+subscribe; handle Buffer/Uint8Array/string message payloads; wait for SDK protobuf readiness before subscribing. MarketHubTS retains ownership of subscriptions, normalization, freshness and reconnection. |
 | Historical / expired instruments | Historical Data supported by Analytics Token; expired-instruments APIs require Upstox Plus — **M5** entitlement decision. |
-| Option chain / quotes / depth fields | Field availability **(verify)** before M4/M5; never fabricate missing fields. |
+| Option chain / quotes / depth fields | Streaming quote, depth, OHLC, Greeks and CAS fields are mapped and tested against the SDK's protobuf schema (M4 Stage B). Actual account-level delivery remains unverified because no live connection has been performed. Option-chain functionality remains a future milestone; never fabricate missing fields. |
 | Instruments/master data | File/field details **(verify)** before bulk ingestion (out of M3 scope). |
 
 ## 7. FYERS — verification status
@@ -129,4 +129,4 @@ Each adapter must handle (as applicable and supported):
 
 ## 10. Open verification items
 
-See [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md) and [REFERENCES.md](REFERENCES.md) for remaining gaps: actual account entitlements, Analytics Token generation on the account, exact provider field availability, feed protocols (M4), and historical/expired entitlements (M5).
+See [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md) and [REFERENCES.md](REFERENCES.md) for remaining gaps: actual account entitlements, Analytics Token generation on the account, exact provider field availability, FYERS Data Socket protocol and field delivery (Stage C, currently on hold), and historical/expired entitlements (M5).
