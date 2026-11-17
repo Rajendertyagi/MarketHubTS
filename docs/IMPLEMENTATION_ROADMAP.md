@@ -133,7 +133,7 @@
 |---|---|---|
 | A | Canonical live contracts, per-provider observations, bounded in-memory state, monotonic revision, defensive copies, session-aware freshness, source selection | **Published** (`2dfe969`, `0cdb6dc`) |
 | B | Upstox V3 streaming adapter on pinned `upstox-js-sdk@2.31.0`; SDK used for market-data streaming only; lifecycle/decoder corrections | **Published** (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`) |
-| D | Provider-ready live-data backend vertical slice: service notifications, subscription persistence + durable generation, bounded realtime hub, REST/SSE, minimal supervisor, locked production driver boundary | **Implemented (this commit, pushed to `develop`)** |
+| D | Provider-ready live-data backend vertical slice: service notifications, subscription persistence + durable generation, bounded realtime hub, REST/SSE, minimal supervisor, locked production driver boundary | **Published on `develop` and accepted** (final commit `f51e7db`) |
 | E | WebUI streaming selections and live-data experience, incl. EventSource close/fetch/reconnect and `refresh` client behavior | Pending |
 | F | Deep reconnect/recovery/concurrency/resource hardening; race/fault injection, sustained-load/soak tests | Pending |
 | C | FYERS Data Socket adapter, after D/E/F prove the first provider path | On hold / pending |

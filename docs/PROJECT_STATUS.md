@@ -1,6 +1,6 @@
 # Project Status
 
-> **Status:** Milestones 1–3 and M4 Stages A/B are **published on `develop`**. M4 Stage D (provider-ready live-data backend vertical slice) is implemented in this commit and pushed to `develop`. Not a functioning market-data platform yet — no live provider connection (production driver is locked/disabled), no historical or option-chain data.
+> **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stage D are published on `develop` and accepted**. Stage D delivers the provider-ready backend, not a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stage E (WebUI live-data experience) and subsequent stages remain outstanding.
 > **Last updated:** 2026-11-17
 > **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
@@ -20,8 +20,8 @@ This is **not** a functioning market-data platform: no live provider connection 
 | Remote | `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`) |
 | Permanent branches | `main` (stable) and `develop` (active development). No additional permanent branches; no PR workflow required by project protocol. |
 | `main` / `origin/main` | `277d5e248ea972c0fea984105b86708563205a6a` (unchanged) |
-| `develop` / `origin/develop` | Current HEAD is the Stage D commit (pushed in this task). Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
-| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (this commit). `main` untouched throughout. |
+| `develop` / `origin/develop` | `f51e7dbe4dbba52f368814dd6d7feca70c47defb` — final Stage D correction (stale reconnect-timer cancellation), synced with remote. Pre-Stage-D baseline: `e736af42c82891f35db1a5ae3dde311e65bcb267`. Re-check with `git log -1` / `git status --short --branch`. |
+| Publication history | M1 (`eceb02c`, `62ed5d9`, `ccbb66b`); M2 (`fa40420`, `484c0a6`); M3 (`0cd1c34`, `ef1aa39`, `bcc84c2`, `9b76fb0`, `7448a9f`); M4 Stage A (`2dfe969`, `0cdb6dc`); M4 Stage B (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`); M4 Stage D (`4dcce71` implementation, `650c8ff` first fix-forward, `d2f72fc` final review corrections + V3 references, `a0aa0ae` reconnect/pending-update lifecycle, `f51e7db` stale reconnect-timer cancellation). `main` untouched throughout. |
 
 ### 2.2 Historical context (preserved)
 
@@ -68,27 +68,29 @@ This is **not** a functioning market-data platform: no live provider connection 
 - `packages/broker-upstox`: `UpstoxMarketDataStream` using the pinned official `upstox-js-sdk@2.31.0` for market-data streaming only; custom protobuf decoder removed.
 - Lifecycle/decoder corrections: per-mode frames, connect race guard, CAS/IEP/full-feed field preservation, lossless int64 handling, close ownership and readiness guards. No real socket opened in tests.
 
-### 3.6 M4 Stage D — provider-ready live-data backend vertical slice (this commit)
+### 3.6 M4 Stage D — provider-ready live-data backend vertical slice (published, accepted)
 - **Contracts:** `LiveSnapshot.connections`; Zod schemas for snapshots, change/control events, provider status and subscriptions; `StreamingState` aliased to the single authoritative `ProviderConnectionState`; `LiveEventSource` / `SubscriptionRepository` ports.
 - **Canonical service:** `MarketDataService.subscribe(listener)` — one synchronous notification per successful revision change, detached data, isolated listener failures, no events for no-ops.
 - **Realtime hub (`packages/realtime`):** `LiveEventHub` with bounded replay (count + approximate bytes), bounded per-client queues, drop counters, coalesced `snapshot-required`, periodic `refresh` control event, atomic replay-to-live registration, cursor precedence (`Last-Event-ID` authoritative), client isolation and clean shutdown.
 - **Persistence (`packages/database`):** `streaming_subscriptions` table + migration `0004_flat_spitfire.sql` (SQL, journal, snapshot); `SqliteSubscriptionRepository` with transactional row replacement and durable generation in `app_meta`, serialized writes, duplicate rejection.
-- **Supervisor (`apps/api`):** provider-agnostic driver seam, serialized reconciliation against the latest committed generation, ACTIVE Upstox mapping resolution (no fabricated identifiers), bounded retry with fake drivers, shutdown guards, runtime state written through `MarketDataService`.
+- **Supervisor (`apps/api`):** provider-agnostic driver seam, serialized reconciliation against the latest committed generation, ACTIVE Upstox mapping resolution (no fabricated identifiers), bounded retry with fake drivers, shutdown guards, runtime state written through `MarketDataService`. Final corrections: DISCONNECTED/ERROR retire the driver so retry performs a fresh `start()` (not an in-place update); pending start/update operations are tracked until settlement with final cleanup after shutdown/retirement; desired and applied generations are tracked separately; driver retirement cancels any stale reconnect timer so a newer epoch can schedule its retry.
 - **Locked production boundary:** `LockedUpstoxDriver` fails safely on any start/update attempt; no SDK construction, sockets or retry scheduling. Real driver construction is unreachable through startup/API/config and requires a separately authorized, independently reviewed Stage G change.
 - **REST/SSE:** `GET /api/market/snapshot`, `GET /api/market/stream`, `GET/PUT /api/market/subscriptions` (PUT local-owner-only); `/api/providers/status` composes auth status with runtime streaming state.
 - **Config:** small validated live policy with defensible defaults; no user-controlled live-connection authorization setting.
-- **Tests:** 48 new server-side tests (notifications, hub, persistence/migration, supervisor + locked boundary, routes/SSE, provider-status composition). No Stage E client tests, no real network.
+- **Tests:** 69 focused Stage D server-side tests across 6 files (notifications, hub, persistence/migration, supervisor + locked boundary, routes/SSE, provider-status composition), including deterministic regression tests for every independent-review correction. No Stage E client tests, no real network.
 
-### 3.7 Verification snapshot (2026-11-17)
+### 3.7 Verification snapshot (final, 2026-11-17)
 
 | Check | Result |
 |---|---|
 | `bun run typecheck` | Pass (exit 0) — all 12 workspaces |
-| `bun test` | Pass — 235 tests, 0 failures, 889 expect() calls, 23 files (local verification; not CI evidence) |
-| Focused Stage D tests | Pass — 48 tests, 0 failures, 156 expect() calls, 6 files |
+| `bun test` | Pass — **256 tests, 0 failures, 1003 expect() calls, 23 files** (local verification; not CI evidence) |
+| Focused Stage D tests | Pass — **69 tests, 0 failures, 270 expect() calls, 6 files** |
+| Focused supervisor tests | Pass — 24 tests, 0 failures, 121 expect() calls |
 | `bun run build` | Pass (exit 0) — packages/apps checks; web Vite build succeeded |
 | `git diff --check` | Pass (exit 0) |
 | Migration safety | Clean-install and M3→M4 upgrade tests pass on isolated temporary databases |
+| Locked boundary | No SDK construction, socket or provider contact in API/realtime/contracts source; production composes only `LockedUpstoxDriver` |
 
 ### 3.8 Manual/official verification notes
 
@@ -114,7 +116,7 @@ This is **not** a functioning market-data platform: no live provider connection 
 
 ## 6. Known notes and limitations
 
-- M1–M3 and M4 Stages A/B are published on `develop`; `main` remains unchanged. Stage D is pushed to `develop` in this task.
+- M1–M3, M4 Stages A/B and Stage D are published on `develop`; `main` remains unchanged. Stage D is accepted; its final commit is `f51e7db`.
 - The canonical catalog and live pipeline are not yet wired to WebUI live views or MCP market surfaces; no real provider data is loaded.
 - Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before live integration.
 - Production start requires a prior build (`bun run build` then `bun run start`).
@@ -122,6 +124,6 @@ This is **not** a functioning market-data platform: no live provider connection 
 
 ## 7. Readiness for next phase
 
-**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D backend live-data pipeline are implemented and verified in the real application. Stage D delivers a provider-ready backend vertical slice with a locked production driver boundary; no live provider connection is attempted.
+**Ready:** M1 runtime foundation, M2 catalog/persistence/sync, M3 provider auth framework, and M4 Stages A/B/D backend live-data pipeline are implemented, verified and published. **Stage D is accepted.** It delivers a provider-ready backend vertical slice with a locked production driver boundary; no live provider connection is attempted and no real feed has been tested.
 
-**Next stages:** **Stage E** (WebUI streaming selections and live-data experience, including EventSource close/fetch/reconnect and `refresh` client behavior), then **Stage F** (deep reconnect/recovery/concurrency hardening), **Stage C** (FYERS Data Socket adapter), and **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.
+**Next:** **Stage E** (WebUI streaming selections and live-data experience, including EventSource close/fetch/reconnect and `refresh` client behavior) proceeds under a **separately scoped assignment**. Then **Stage F** (deep reconnect/recovery/concurrency hardening), **Stage C** (FYERS Data Socket adapter), and **Stage G** (first live provider verification). Agreed order remains **D → E → F → C → G**. Stage G requires a single-pass gate: all implementation stages complete, independent review, written scenarios/pass-fail criteria, sanitized fixture handling, explicit authorization, and a separately reviewed change to the locked boundary before any real connection.

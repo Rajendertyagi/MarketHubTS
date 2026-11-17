@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet } from "@tanstack/react-router";
 import { fetchProvidersStatus, fetchSystemStatus, formatUptime, type ProviderStatusView } from "./lib/status";
 import { StatusBadge, toneForState } from "./components/StatusBadge";
+import { LivePanel } from "./components/LivePanel";
+import { SubscriptionPanel } from "./components/SubscriptionPanel";
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -139,6 +141,7 @@ function ProviderPanel() {
 }
 
 export function App() {
+  const [activeTab, setActiveTab] = useState<"overview" | "live">("overview");
   const [lastSuccessAt, setLastSuccessAt] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["system-status"],
@@ -184,7 +187,14 @@ export function App() {
         </div>
         <nav className="mx-auto max-w-6xl px-4 sm:px-6" aria-label="Primary">
           <div className="flex gap-1 border-t border-slate-800/80 pt-2 pb-0">
-            <span className="rounded-t-md border border-b-0 border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-100">Overview</span>
+            <button type="button" onClick={() => setActiveTab("overview")} aria-current={activeTab === "overview" ? "page" : undefined}
+              className={`rounded-t-md border border-b-0 px-3 py-2 text-sm font-medium ${activeTab === "overview" ? "border-slate-700 bg-slate-900 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+              Overview
+            </button>
+            <button type="button" onClick={() => setActiveTab("live")} aria-current={activeTab === "live" ? "page" : undefined}
+              className={`rounded-t-md border border-b-0 px-3 py-2 text-sm font-medium ${activeTab === "live" ? "border-slate-700 bg-slate-900 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+              Live data
+            </button>
             <span className="px-3 py-2 text-sm text-slate-500" title="Not implemented in this milestone">Market modules (planned)</span>
           </div>
         </nav>
@@ -264,6 +274,12 @@ export function App() {
         )}
 
         <ProviderPanel />
+        {activeTab === "live" && (
+          <>
+            <LivePanel />
+            <SubscriptionPanel />
+          </>
+        )}
         <Outlet />
       </main>
     </div>

@@ -1,6 +1,6 @@
 # Provider Integration
 
-> **Status:** Confirmed requirements and adapter design. M1–M3 and M4 Stages A/B are published on `develop`; M4 Stage D (provider-ready live-data backend vertical slice) is implemented in this commit. FYERS streaming (Stage C) remains on hold. Authentication, app types and published rate limits for both providers are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live provider connection or real-account authentication has been performed; all provider tests use mocks/fake drivers. Items still unknown are marked **(verify)**.
+> **Status:** Confirmed requirements and adapter design. M1–M3, M4 Stages A/B and **M4 Stage D are published on `develop` and accepted** (Stage D final commit `f51e7db`). FYERS streaming (Stage C) remains on hold. Authentication, app types and published rate limits for both providers are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live provider connection or real-account authentication has been performed; all provider tests use mocks/fake drivers. Items still unknown are marked **(verify)**.
 > **Last updated:** 2026-11-17
 > **Related:** [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [REFERENCES.md](REFERENCES.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
