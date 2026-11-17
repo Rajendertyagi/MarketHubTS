@@ -208,11 +208,12 @@ export const subscriptionReplaceRequestSchema = z.object({
 });
 export type SubscriptionReplaceRequest = z.infer<typeof subscriptionReplaceRequestSchema>;
 
+// Public resolution deliberately excludes provider-native identifiers. Those
+// stay internal to mapping resolution and the driver handoff.
 export const subscriptionResolutionSchema = z.object({
   canonicalId: z.string().min(1),
   enabled: z.boolean(),
   available: z.boolean(),
-  nativeIdentifier: z.string().nullable(),
   reason: z.string().nullable()
 });
 export type SubscriptionResolution = z.infer<typeof subscriptionResolutionSchema>;

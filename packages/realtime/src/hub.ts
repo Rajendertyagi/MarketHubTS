@@ -52,20 +52,38 @@ class ClientQueue implements ClientSession {
   private pendingRefresh = false;
   droppedDataEvents = 0;
 
-  constructor(readonly id: number, private readonly opts: LiveEventHubOptions) {}
+  constructor(
+    readonly id: number,
+    private readonly opts: LiveEventHubOptions,
+    private readonly onDrop: (count: number) => void
+  ) {}
+
+  private drop(): void {
+    this.droppedDataEvents++;
+    this.onDrop(1);
+  }
 
   pushData(outbound: OutboundEvent, bytes: number): void {
     if (this.closed) return;
     if (this.resyncRequired) {
-      this.droppedDataEvents++;
+      this.drop();
       return;
     }
     if (this.queue.length >= this.opts.clientMaxEvents || this.bytes + bytes > this.opts.clientMaxBytes) {
-      this.droppedDataEvents++;
+      this.drop();
       this.resyncRequired = true;
       this.pushControl({ event: "snapshot-required", data: { type: "snapshot-required", reason: "client-queue-overflow" } });
       return;
     }
+    this.enqueue({ outbound, bytes });
+  }
+
+  /**
+   * Initial snapshot is accounted against the client byte/count budget. Its
+   * size is pre-validated in openStream(), so it always fits when called.
+   */
+  pushInitialSnapshot(outbound: OutboundEvent, bytes: number): void {
+    if (this.closed) return;
     this.enqueue({ outbound, bytes });
   }
 
@@ -216,12 +234,26 @@ export class LiveEventHub {
       }
     }
 
-    const client = new ClientQueue(this.nextClientId++, this.opts);
-    this.clients.set(client.id, client);
-
     if (cursor.kind === "none") {
-      client.pushControl({ event: "snapshot", id: String(snapshot.revision), data: snapshot });
-    } else if (cursor.kind === "value" && cursor.value < current) {
+      // The initial snapshot is a full payload: validate it against the client
+      // budget before registering a session. If it cannot fit, return a
+      // deterministic snapshot-required so the client retrieves via REST.
+      const snapshotEvent: OutboundEvent = {
+        event: "snapshot", id: String(snapshot.revision), data: snapshot
+      };
+      const bytes = estimateBytes(snapshotEvent);
+      if (bytes > this.opts.clientMaxBytes || 1 > this.opts.clientMaxEvents) {
+        return { outcome: "snapshot-required", reason: "snapshot-exceeds-client-budget" };
+      }
+      const client = new ClientQueue(this.nextClientId++, this.opts, (n) => { this.totalDropped += n; });
+      this.clients.set(client.id, client);
+      client.pushInitialSnapshot(snapshotEvent, bytes);
+      return { outcome: "session", session: client };
+    }
+
+    const client = new ClientQueue(this.nextClientId++, this.opts, (n) => { this.totalDropped += n; });
+    this.clients.set(client.id, client);
+    if (cursor.kind === "value" && cursor.value < current) {
       for (const entry of this.history) {
         if (entry.revision > cursor.value) client.pushData(entry.outbound, entry.bytes);
       }
@@ -236,13 +268,12 @@ export class LiveEventHub {
   }
 
   getStats(): HubStats {
-    let dropped = this.totalDropped;
-    for (const client of this.clients.values()) dropped += client.droppedDataEvents;
+    // Cumulative across all clients, including those already disconnected.
     return {
       replayEvents: this.history.length,
       replayBytes: this.historyBytes,
       clients: this.clients.size,
-      totalDroppedDataEvents: dropped
+      totalDroppedDataEvents: this.totalDropped
     };
   }
 }

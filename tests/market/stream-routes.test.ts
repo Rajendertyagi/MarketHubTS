@@ -6,7 +6,10 @@ import { loadConfig, resetConfigCache } from "../../packages/config/src/index";
 import {
   defaultMigrationsFolder, openDatabase, runMigrations, SqliteCatalogRepository, SqliteSubscriptionRepository
 } from "../../packages/database/src/index";
-import { canonicalInstrumentSchema, liveSnapshotSchema, subscriptionStateViewSchema } from "../../packages/contracts/src/index";
+import {
+  canonicalInstrumentSchema, liveSnapshotSchema, providerInstrumentMappingSchema, subscriptionStateViewSchema,
+  type CatalogRepository, type SubscriptionRepository
+} from "../../packages/contracts/src/index";
 import { MarketDataService } from "../../packages/market-core/src/index";
 import { LiveEventHub } from "../../packages/realtime/src/index";
 import { createApp } from "../../apps/api/src/app";
@@ -17,7 +20,10 @@ import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 const A = "v1|NSE|INDEX|INDEX|CODE:NIFTY50";
 const BASE = 1_700_000_000_000;
 
-function makeDeps() {
+function makeDeps(opts: {
+  wrapCatalog?: (real: CatalogRepository) => CatalogRepository;
+  wrapSubscriptions?: (real: SubscriptionRepository) => SubscriptionRepository;
+} = {}) {
   resetConfigCache();
   const dir = mkdtempSync(join(tmpdir(), "markethub-routes-"));
   const dbPath = join(dir, "test.sqlite");
@@ -36,8 +42,10 @@ function makeDeps() {
     clientMaxEvents: 100, clientMaxBytes: 1_000_000, refreshIntervalMs: 0
   });
   hub.start();
-  const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
-  const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
+  const realCatalog = new SqliteCatalogRepository(db.db, db.sqlite);
+  const realSubscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
+  const catalog = opts.wrapCatalog ? opts.wrapCatalog(realCatalog) : realCatalog;
+  const subscriptions = opts.wrapSubscriptions ? opts.wrapSubscriptions(realSubscriptions) : realSubscriptions;
   const supervisor = new StreamSupervisor({ service, subscriptions, catalog, driver: new LockedUpstoxDriver() });
   const deps = { config, db, logger, startedAt: Date.now(), service, hub, supervisor };
   const app = createApp(deps);
@@ -48,7 +56,7 @@ function makeDeps() {
     closeDatabaseHandle(db);
     removeTempDir(dir);
   };
-  return { app, deps, catalog, service, hub, supervisor, localEnv, cleanup };
+  return { app, deps, catalog: realCatalog, subscriptions: realSubscriptions, service, hub, supervisor, localEnv, cleanup };
 }
 
 async function seedInstrument(catalog: SqliteCatalogRepository, canonicalId: string) {
@@ -139,6 +147,7 @@ describe("market REST routes", () => {
         body: JSON.stringify({ selections: [{ canonicalId: "unknown", enabled: true }] })
       }, h.localEnv);
       expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("invalid_request");
       expect((await h.supervisor.getView()).generation).toBe(0);
     } finally { h.cleanup(); }
   });
@@ -155,6 +164,79 @@ describe("market REST routes", () => {
       const json = await res.json();
       expect(json.generation).toBe(1);
       expect(json.selections).toEqual([{ canonicalId: A, enabled: true }]);
+    } finally { h.cleanup(); }
+  });
+
+  test("public subscription views never expose provider-native identifiers", async () => {
+    const h = makeDeps();
+    try {
+      const NATIVE = "NSE_EQ_11536";
+      await h.catalog.transaction(async (tx) => {
+        await tx.upsertInstrument(canonicalInstrumentSchema.parse({
+          canonicalId: A, identityKey: `key:${A}`, exchange: "NSE", segment: "INDEX",
+          marketType: "INDEX", instrumentCategory: "INDEX", canonicalSymbol: A, displayName: A
+        }));
+        await tx.upsertMapping(providerInstrumentMappingSchema.parse({
+          provider: "UPSTOX", nativeIdentifier: NATIVE, canonicalId: A, status: "ACTIVE"
+        }));
+      });
+      const put = await h.app.request("/api/market/subscriptions", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selections: [{ canonicalId: A, enabled: true }] })
+      }, h.localEnv);
+      expect(put.status).toBe(200);
+      const putText = await put.text();
+      expect(putText).not.toContain(NATIVE);
+      expect(JSON.parse(putText).runtime.resolutions[0]).toEqual({
+        canonicalId: A, enabled: true, available: true, reason: null
+      });
+      const get = await h.app.request("/api/market/subscriptions");
+      expect(await get.text()).not.toContain(NATIVE);
+    } finally { h.cleanup(); }
+  });
+
+  test("post-commit mapping failure is reported as committed state with runtime error, not invalid_request", async () => {
+    const h = makeDeps({
+      wrapCatalog: (real) => ({
+        async getInstrumentByCanonicalId(canonicalId: string) {
+          return real.getInstrumentByCanonicalId(canonicalId);
+        },
+        async listMappingsByCanonicalId(): Promise<any[]> {
+          throw new Error("mapping resolution failed");
+        }
+      } as unknown as CatalogRepository)
+    });
+    try {
+      await seedInstrument(h.catalog, A);
+      const res = await h.app.request("/api/market/subscriptions", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selections: [{ canonicalId: A, enabled: true }] })
+      }, h.localEnv);
+      expect(res.status).toBe(200); // not 400 — desired state was committed
+      const json = await res.json();
+      expect(json.generation).toBe(1);
+      expect(json.selections).toEqual([{ canonicalId: A, enabled: true }]);
+      expect(json.runtime.lastError).toContain("mapping resolution failed");
+      expect((await h.subscriptions.load()).generation).toBe(1);
+    } finally { h.cleanup(); }
+  });
+
+  test("persistence failure is reported as persistence_failed, not invalid_request", async () => {
+    const h = makeDeps({
+      wrapSubscriptions: (real) => ({
+        load: () => real.load(),
+        replace: async () => { throw new Error("disk write failed"); }
+      })
+    });
+    try {
+      const res = await h.app.request("/api/market/subscriptions", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selections: [] })
+      }, h.localEnv);
+      expect(res.status).toBe(500);
+      const json = await res.json();
+      expect(json.error).toBe("persistence_failed");
+      expect(json.message).toContain("disk write failed");
     } finally { h.cleanup(); }
   });
 });

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalInstrumentSchema, providerInstrumentMappingSchema,
-  type FreshnessPolicy, type NormalizeObservationInput
+  type FreshnessPolicy, type NormalizeObservationInput, type ProviderInstrumentMapping
 } from "../../packages/contracts/src/index";
 import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCatalogRepository, SqliteSubscriptionRepository } from "../../packages/database/src/index";
-import { MarketDataService } from "../../packages/market-core/src/index";
+import { MarketDataService, type CatalogRepository } from "../../packages/market-core/src/index";
 import {
   DriverLockedError, LockedUpstoxDriver, StreamSupervisor,
   type DriverCallbacks, type DriverSubscription, type StreamingDriver
@@ -51,6 +51,70 @@ function observation(canonicalId: string, ltp: number): NormalizeObservationInpu
     rawProviderTimestamp: BASE, providerTimestampUnit: "MS",
     providerTimestampMeaning: "last traded time", receivedAtMs: BASE
   };
+}
+
+/** Driver whose start() stays pending until explicitly resolved. */
+class DeferredDriver implements StreamingDriver {
+  starts: DriverSubscription[][] = [];
+  stopCount = 0;
+  callbacks: DriverCallbacks | null = null;
+  private startCalled = false;
+  private readonly startWaiters: Array<() => void> = [];
+  private resolveStart: (() => void) | null = null;
+
+  async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
+    this.starts.push(subs.map((s) => ({ ...s })));
+    this.callbacks = callbacks;
+    this.startCalled = true;
+    for (const wake of this.startWaiters.splice(0)) wake();
+    await new Promise<void>((resolve) => { this.resolveStart = resolve; });
+  }
+  async updateSubscriptions(): Promise<void> {}
+  stop(): void { this.stopCount++; }
+  getConnectionState() { return "NOT_STARTED"; }
+  waitForStartCalled(): Promise<void> {
+    if (this.startCalled) return Promise.resolve();
+    return new Promise((resolve) => this.startWaiters.push(resolve));
+  }
+  resolvePendingStart(): void { this.resolveStart?.(); }
+}
+
+/** Catalog that can hold mapping resolution pending for a deterministic race. */
+function deferredMappings(inner: CatalogRepository) {
+  let hold = true;
+  const waiters: Array<() => void> = [];
+  const pending: Array<{ canonicalId: string; resolve: (v: ProviderInstrumentMapping[]) => void }> = [];
+  const catalog = {
+    async getInstrumentByCanonicalId(canonicalId: string) {
+      return inner.getInstrumentByCanonicalId(canonicalId);
+    },
+    listMappingsByCanonicalId(canonicalId: string): Promise<ProviderInstrumentMapping[]> {
+      if (!hold) return inner.listMappingsByCanonicalId(canonicalId);
+      return new Promise((resolve) => {
+        pending.push({ canonicalId, resolve });
+        for (const wake of waiters.splice(0)) wake();
+      });
+    }
+  } as unknown as CatalogRepository;
+  return {
+    catalog,
+    waitForCall: (): Promise<void> => pending.length > 0
+      ? Promise.resolve()
+      : new Promise((resolve) => waiters.push(resolve)),
+    release: async (): Promise<void> => {
+      hold = false;
+      const held = pending.splice(0);
+      for (const item of held) item.resolve(await inner.listMappingsByCanonicalId(item.canonicalId));
+    }
+  };
+}
+
+async function waitForGeneration(repo: SqliteSubscriptionRepository, generation: number): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if ((await repo.load()).generation >= generation) return;
+    await Bun.sleep(1);
+  }
+  throw new Error(`generation ${generation} was not committed`);
 }
 
 async function harness(driver: StreamingDriver = new FakeDriver(), reconnect?: { maxAttempts: number; baseDelayMs: number }) {
@@ -198,6 +262,130 @@ describe("StreamSupervisor", () => {
     expect(() => driver.emitObservation(observation("untracked", 1))).not.toThrow();
     expect(h.service.getItem(A)).toBeDefined();
     h.cleanup();
+  });
+});
+
+describe("review fixes — supervisor lifecycle and generation", () => {
+  test("stop cancels a pending driver start and cleans up the resolved driver", async () => {
+    const driver = new DeferredDriver();
+    const h = await harness(driver);
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = h.supervisor.start();
+    await driver.waitForStartCalled();
+    expect(driver.starts.length).toBe(1);
+
+    h.supervisor.stop();
+    expect(driver.stopCount).toBe(1); // stopped while start() was still pending
+
+    const revisionAtStop = h.service.revision;
+    driver.resolvePendingStart();
+    await startPromise;
+
+    // A start resolving after stop must not leave a running driver or mutate state.
+    expect(driver.stopCount).toBe(1);
+    expect(h.service.revision).toBe(revisionAtStop);
+    expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
+
+    // Late callbacks from the resolved driver are ignored.
+    driver.callbacks!.onObservation(observation(A, 100));
+    driver.callbacks!.onConnectionState("STREAMING");
+    expect(h.service.revision).toBe(revisionAtStop);
+    h.cleanup();
+  });
+
+  test("a stale generation cannot mutate tracking or driver state after a concurrent commit", async () => {
+    const dir = mkdtemp(join(tmpdir(), "markethub-race-"));
+    const handle = openDatabase({ dbPath: join(dir, "race.sqlite") });
+    runMigrations(handle.db, defaultMigrationsFolder);
+    const realCatalog = new SqliteCatalogRepository(handle.db, handle.sqlite);
+    const subscriptions = new SqliteSubscriptionRepository(handle.db, handle.sqlite);
+    const service = new MarketDataService({
+      now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
+    });
+    const driver = new FakeDriver();
+    const deferred = deferredMappings(realCatalog);
+    const supervisor = new StreamSupervisor({ service, subscriptions, catalog: deferred.catalog, driver });
+
+    await realCatalog.transaction(async (tx) => {
+      for (const [id, key] of [[A, "key-A"], [B, "key-B"]] as const) {
+        await tx.upsertInstrument(canonicalInstrumentSchema.parse({
+          canonicalId: id, identityKey: `key:${id}`, exchange: "NSE", segment: "INDEX",
+          marketType: "INDEX", instrumentCategory: "INDEX", canonicalSymbol: id, displayName: id
+        }));
+        await tx.upsertMapping(providerInstrumentMappingSchema.parse({
+          provider: "UPSTOX", nativeIdentifier: key, canonicalId: id, status: "ACTIVE"
+        }));
+      }
+    });
+
+    // Generation 1 with selection A, persisted directly (bypassing the supervisor).
+    await subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = supervisor.start(); // reconcile gen 1, held on mapping resolution
+    await deferred.waitForCall();
+
+    // Commit generation 2 with selection B while gen 1 resolution is pending.
+    const replacePromise = supervisor.replaceSubscriptions([{ canonicalId: B, enabled: true }]);
+    await waitForGeneration(subscriptions, 2);
+
+    await deferred.release();
+    await startPromise;
+    await replacePromise;
+
+    // Stale gen 1 must not have tracked A or started/updated the driver with A.
+    expect(service.getItem(A)).toBeUndefined();
+    expect(service.getItem(B)).toBeDefined();
+    expect(driver.starts.length).toBe(1);
+    expect(driver.starts[0]).toEqual([{ canonicalId: B, nativeIdentifier: "key-B" }]);
+    expect(driver.updates.length).toBe(0);
+    expect(supervisor.getView().generation).toBe(2);
+    expect(supervisor.getView().selections).toEqual([{ canonicalId: B, enabled: true }]);
+
+    supervisor.stop();
+    closeDatabaseHandle(handle);
+    removeTempDir(dir);
+  });
+
+  test("post-commit reconciliation failure is captured in runtime status, not thrown", async () => {
+    const dir = mkdtemp(join(tmpdir(), "markethub-reconfail-"));
+    const handle = openDatabase({ dbPath: join(dir, "fail.sqlite") });
+    runMigrations(handle.db, defaultMigrationsFolder);
+    const realCatalog = new SqliteCatalogRepository(handle.db, handle.sqlite);
+    const subscriptions = new SqliteSubscriptionRepository(handle.db, handle.sqlite);
+    const service = new MarketDataService({
+      now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
+    });
+    const failingCatalog = {
+      async getInstrumentByCanonicalId(canonicalId: string) {
+        return realCatalog.getInstrumentByCanonicalId(canonicalId);
+      },
+      async listMappingsByCanonicalId(): Promise<ProviderInstrumentMapping[]> {
+        throw new Error("mapping resolution failed");
+      }
+    } as unknown as CatalogRepository;
+    const supervisor = new StreamSupervisor({
+      service, subscriptions, catalog: failingCatalog, driver: new FakeDriver()
+    });
+
+    await realCatalog.transaction(async (tx) => {
+      await tx.upsertInstrument(canonicalInstrumentSchema.parse({
+        canonicalId: A, identityKey: `key:${A}`, exchange: "NSE", segment: "INDEX",
+        marketType: "INDEX", instrumentCategory: "INDEX", canonicalSymbol: A, displayName: A
+      }));
+    });
+
+    const result = await supervisor.replaceSubscriptions([{ canonicalId: A, enabled: true }]);
+    // Desired state is committed and exposed despite the runtime failure.
+    expect(result.generation).toBe(1);
+    expect(result.view.selections).toEqual([{ canonicalId: A, enabled: true }]);
+    expect(result.view.runtime.lastError).toContain("mapping resolution failed");
+    expect((await subscriptions.load()).generation).toBe(1);
+
+    supervisor.stop();
+    closeDatabaseHandle(handle);
+    removeTempDir(dir);
   });
 });
 

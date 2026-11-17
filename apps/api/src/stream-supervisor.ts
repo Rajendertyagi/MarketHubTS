@@ -68,6 +68,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Client-side failure before any persistence: unknown/duplicate canonical ids. */
+export class SubscriptionValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubscriptionValidationError";
+  }
+}
+
+/** Server-side failure while persisting desired state. */
+export class SubscriptionPersistenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubscriptionPersistenceError";
+  }
+}
+
 export interface StreamSupervisorOptions {
   service: MarketDataService;
   subscriptions: SubscriptionRepository;
@@ -98,6 +114,8 @@ export class StreamSupervisor {
   private connectionState: ProviderConnectionState = "NOT_STARTED";
   private lastError: string | null = null;
   private driverStarted = false;
+  /** True from just before driver.start() until it settles or is cleaned up. */
+  private startPending = false;
   private epoch = 0;
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -109,51 +127,107 @@ export class StreamSupervisor {
 
   /** Load persisted desired state and reconcile once at startup. */
   async start(): Promise<void> {
-    await this.enqueueReconcile();
+    const state = await this.opts.subscriptions.load();
+    this.generation = state.generation;
+    this.selections = state.selections.map((s) => ({ ...s }));
+    await this.enqueueReconcile(state.generation);
   }
 
-  /** Validate, persist transactionally, then reconcile against the latest committed generation. */
+  /**
+   * Validate, persist transactionally, then reconcile. Validation and
+   * persistence failures are typed so the transport can classify them; a
+   * post-commit reconciliation failure is captured in runtime status and never
+   * misrepresented as an invalid request.
+   */
   async replaceSubscriptions(selections: SubscriptionSelection[]): Promise<ReplaceSubscriptionsResult> {
-    if (this.stopped) throw new Error("Stream supervisor is stopped");
+    if (this.stopped) throw new SubscriptionValidationError("Stream supervisor is stopped");
+
     const seen = new Set<string>();
     for (const selection of selections) {
       if (seen.has(selection.canonicalId)) {
-        throw new Error(`Duplicate canonical id: ${selection.canonicalId}`);
+        throw new SubscriptionValidationError(`Duplicate canonical id: ${selection.canonicalId}`);
       }
       seen.add(selection.canonicalId);
       const instrument = await this.opts.catalog.getInstrumentByCanonicalId(selection.canonicalId);
       if (!instrument) {
-        throw new Error(`Unknown canonical id: ${selection.canonicalId}`);
+        throw new SubscriptionValidationError(`Unknown canonical id: ${selection.canonicalId}`);
       }
     }
 
-    const committed = await this.opts.subscriptions.replace(selections);
-    await this.enqueueReconcile();
+    let committed: number;
+    try {
+      committed = await this.opts.subscriptions.replace(selections);
+    } catch (error) {
+      throw new SubscriptionPersistenceError(errorMessage(error));
+    }
+
+    // Desired state is committed: expose it immediately, independent of runtime.
+    this.generation = committed;
+    this.selections = selections.map((s) => ({ ...s }));
+    await this.enqueueReconcile(committed);
     return { generation: committed, view: this.getView() };
   }
 
-  private enqueueReconcile(): Promise<void> {
+  /**
+   * Serialized reconciliation. A reconciliation for an older generation is
+   * skipped; post-commit runtime failures are recorded in lastError rather
+   * than thrown, so committed desired state is never hidden.
+   */
+  private enqueueReconcile(expectedGeneration: number): Promise<void> {
     const run = async () => {
       if (this.stopped) return;
-      const state = await this.opts.subscriptions.load();
-      // An older reconciliation must never overwrite newer desired state.
-      if (state.generation < this.generation) return;
-      this.generation = state.generation;
-      await this.applySelections(state.selections);
+      try {
+        const state = await this.opts.subscriptions.load();
+        if (state.generation < expectedGeneration) return;
+        await this.applySelections(state.selections, state.generation);
+      } catch (error) {
+        this.lastError = errorMessage(error);
+      }
     };
     const queued = this.queue.then(run, run);
     this.queue = queued.then(() => undefined, () => undefined);
     return queued;
   }
 
-  private async applySelections(selections: SubscriptionSelection[]): Promise<void> {
+  private async applySelections(selections: SubscriptionSelection[], generation: number): Promise<void> {
     if (this.stopped) return;
-    this.selections = selections.map((s) => ({ ...s }));
     const enabled = selections.filter((s) => s.enabled);
-    const desiredIds = new Set(enabled.map((s) => s.canonicalId));
 
-    // Canonical service tracks every enabled desired selection, even when its
-    // provider mapping is unavailable (never fabricate a provider identifier).
+    // Phase 1: resolve mappings (async). No canonical service or driver mutation.
+    const resolutions: SubscriptionResolution[] = [];
+    const driverSubscriptions: DriverSubscription[] = [];
+    for (const selection of enabled) {
+      const mappings = await this.opts.catalog.listMappingsByCanonicalId(selection.canonicalId);
+      const active = mappings.find((m) => m.provider === this.provider && m.status === "ACTIVE");
+      if (active) {
+        // Native identifier stays internal — used only for the driver handoff.
+        resolutions.push({
+          canonicalId: selection.canonicalId, enabled: true, available: true, reason: null
+        });
+        driverSubscriptions.push({ canonicalId: selection.canonicalId, nativeIdentifier: active.nativeIdentifier });
+      } else {
+        resolutions.push({
+          canonicalId: selection.canonicalId, enabled: true, available: false,
+          reason: "NO_ACTIVE_UPSTOX_MAPPING"
+        });
+      }
+    }
+    for (const selection of selections.filter((s) => !s.enabled)) {
+      resolutions.push({
+        canonicalId: selection.canonicalId, enabled: false, available: false, reason: "DISABLED"
+      });
+    }
+
+    // Phase 2: generation guard after all async resolution. A concurrent PUT
+    // that committed a newer generation invalidates this reconciliation.
+    const latest = await this.opts.subscriptions.load();
+    if (this.stopped || latest.generation !== generation) return;
+
+    // Phase 3: apply runtime state. No await occurs before the mutations below
+    // except the driver calls, which begin synchronously.
+    this.lastError = null;
+    this.resolutions = resolutions;
+    const desiredIds = new Set(enabled.map((s) => s.canonicalId));
     for (const id of [...this.trackedIds]) {
       if (!desiredIds.has(id)) {
         this.opts.service.untrack(id);
@@ -167,38 +241,9 @@ export class StreamSupervisor {
       }
     }
 
-    const resolutions: SubscriptionResolution[] = [];
-    const driverSubscriptions: DriverSubscription[] = [];
-    for (const selection of enabled) {
-      const mappings = await this.opts.catalog.listMappingsByCanonicalId(selection.canonicalId);
-      const active = mappings.find((m) => m.provider === this.provider && m.status === "ACTIVE");
-      if (active) {
-        resolutions.push({
-          canonicalId: selection.canonicalId, enabled: true, available: true,
-          nativeIdentifier: active.nativeIdentifier, reason: null
-        });
-        driverSubscriptions.push({ canonicalId: selection.canonicalId, nativeIdentifier: active.nativeIdentifier });
-      } else {
-        resolutions.push({
-          canonicalId: selection.canonicalId, enabled: true, available: false,
-          nativeIdentifier: null, reason: "NO_ACTIVE_UPSTOX_MAPPING"
-        });
-      }
-    }
-    for (const selection of selections.filter((s) => !s.enabled)) {
-      resolutions.push({
-        canonicalId: selection.canonicalId, enabled: false, available: false,
-        nativeIdentifier: null, reason: "DISABLED"
-      });
-    }
-    this.resolutions = resolutions;
-
     // Empty desired set is valid: stop any stream and report NOT_STARTED.
     if (driverSubscriptions.length === 0) {
-      if (this.driverStarted) {
-        this.opts.driver.stop();
-        this.driverStarted = false;
-      }
+      this.stopDriverResource();
       this.setConnectionState("NOT_STARTED", null);
       return;
     }
@@ -211,15 +256,24 @@ export class StreamSupervisor {
       } catch (error) {
         this.lastError = errorMessage(error);
         this.setConnectionState("ERROR", this.lastError);
-        this.opts.driver.stop();
-        this.driverStarted = false;
+        this.stopDriverResource();
         if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
       }
     }
   }
 
+  /** Stop the driver whether it is fully started or still starting. */
+  private stopDriverResource(): void {
+    if (this.driverStarted || this.startPending) {
+      this.opts.driver.stop();
+      this.driverStarted = false;
+      this.startPending = false;
+    }
+  }
+
   private async startDriver(subscriptions: DriverSubscription[]): Promise<void> {
     const epoch = ++this.epoch;
+    this.startPending = true;
     this.setConnectionState("CONNECTING", null);
     try {
       await this.opts.driver.start(subscriptions, {
@@ -245,11 +299,27 @@ export class StreamSupervisor {
           }
         }
       });
-      if (epoch !== this.epoch || this.stopped) return;
+      if (epoch !== this.epoch || this.stopped) {
+        // Resolved after stop/supersede: clean up any resource it created.
+        if (this.startPending) {
+          this.opts.driver.stop();
+          this.startPending = false;
+        }
+        return;
+      }
+      this.startPending = false;
       this.driverStarted = true;
       this.lastError = null;
     } catch (error) {
-      if (epoch !== this.epoch || this.stopped) return;
+      if (epoch !== this.epoch || this.stopped) {
+        // Even a failed start may have allocated resources before rejecting.
+        if (this.startPending) {
+          this.opts.driver.stop();
+          this.startPending = false;
+        }
+        return;
+      }
+      this.startPending = false;
       this.lastError = errorMessage(error);
       this.setConnectionState("ERROR", this.lastError);
       this.driverStarted = false;
@@ -269,7 +339,7 @@ export class StreamSupervisor {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (epoch !== this.epoch || this.stopped) return;
-      void sleep(0).then(() => this.enqueueReconcile());
+      void sleep(0).then(() => this.enqueueReconcile(this.generation));
     }, delay);
     this.reconnectTimer.unref?.();
   }
@@ -300,10 +370,8 @@ export class StreamSupervisor {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.driverStarted) {
-      this.opts.driver.stop();
-      this.driverStarted = false;
-    }
+    // Covers a driver whose start() is still pending as well as a started one.
+    this.stopDriverResource();
     this.setConnectionState("NOT_STARTED", null);
   }
 }

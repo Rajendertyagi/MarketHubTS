@@ -9,7 +9,10 @@ import {
 import type { MarketDataService } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import { isLocalPeer } from "./lib/net";
-import type { StreamSupervisor } from "./stream-supervisor";
+import {
+  SubscriptionPersistenceError, SubscriptionValidationError,
+  type StreamSupervisor
+} from "./stream-supervisor";
 
 export interface MarketRouteDependencies {
   service: MarketDataService;
@@ -69,9 +72,17 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
     }
     try {
       const result = await deps.supervisor.replaceSubscriptions(parsed.data.selections);
+      // The view exposes committed generation/selections separately from
+      // runtime status (including any post-commit reconciliation error).
       return c.json(subscriptionStateViewSchema.parse(result.view));
     } catch (error) {
-      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: error instanceof Error ? error.message : String(error) }), 400);
+      if (error instanceof SubscriptionValidationError) {
+        return c.json(apiErrorSchema.parse({ error: "invalid_request", message: error.message }), 400);
+      }
+      if (error instanceof SubscriptionPersistenceError) {
+        return c.json(apiErrorSchema.parse({ error: "persistence_failed", message: error.message }), 500);
+      }
+      return c.json(apiErrorSchema.parse({ error: "internal_error", message: "An unexpected error occurred" }), 500);
     }
   });
 }

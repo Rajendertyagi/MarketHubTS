@@ -44,6 +44,17 @@ These rules apply to any provider/external API integration. They are the concret
 - **Durable non-secret settings belong in SQLite, secrets in the encrypted store.** App IDs, redirect URIs and expiry metadata are settings; tokens, app secrets and API secrets are credentials. Keep the two paths separate and load settings on startup.
 - **Durability tradeoffs must be explicit.** WAL + `synchronous=NORMAL` can lose the last commits on power loss without corrupting the database. This is acceptable only when the lost write is re-enterable (e.g. a credential the user still holds). Do not silently change the setting; record the justification and do not claim stronger durability than configured.
 
+## 3B. Async lifecycle and reconciliation correctness rules (learned from M4 Stage D review)
+
+These rules apply to any supervisor, reconciler or bounded delivery buffer. They are the concrete lessons from the Stage D independent review and must be checked during design and review, not discovered after publication.
+
+- **Shutdown must cover in-flight starts, not only completed ones.** A driver/resource whose `start()` is still pending is a live resource. Track a pending-start state, stop it on shutdown, and stop it again if the promise resolves after stop. Guard every late callback with both an epoch and a stopped flag so it cannot mutate canonical state after shutdown.
+- **Re-check optimistic generation after every async resolution step.** Reading a desired-state generation, awaiting mapping/IO, then applying it can apply stale state if a newer generation committed during the await. Re-read the committed generation after async resolution and abort if it changed; never apply stale selections to canonical state or hand them to a driver.
+- **Classify failures by phase, not with one catch-all.** Validation failures before persistence are client errors; persistence failures are server errors; a post-commit reconciliation failure must not be reported as an invalid request. Expose committed generation and desired selections separately from runtime status/error so a committed write is never hidden by a later runtime failure.
+- **Full payloads must respect the same memory budget as incremental events.** An initial snapshot is not exempt from per-client byte/count bounds. Account for it explicitly and, when it exceeds the bound, return a deterministic resync signal (REST retrieval) rather than queueing an unbounded payload. Keep control events coalesced and bounded.
+- **Provider-native identifiers stay internal.** Public subscription/status views expose canonical IDs, state and safe reasons only. Native provider identifiers belong in mapping resolution and the driver handoff, never in externally exposed contracts.
+- **Telemetry counters must be maintained where the event occurs.** A cumulative drop counter must be incremented on every drop (including for clients that later disconnect); do not derive a "total" from currently connected clients unless the metric is explicitly named and documented as such.
+
 ## 4. Code quality
 
 - **TypeScript:** strict typing enabled and meaningful types at module boundaries. Avoid unnecessary `any`; prefer `unknown` + validation/narrowing at boundaries.

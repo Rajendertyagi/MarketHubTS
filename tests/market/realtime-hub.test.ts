@@ -170,15 +170,38 @@ describe("LiveEventHub — bounds and overflow", () => {
     hub.stop();
   });
 
-  test("client queue is bounded by bytes", async () => {
+  test("oversized initial snapshot is rejected instead of bypassing the byte budget", () => {
     const { service, hub } = harness({ clientMaxBytes: 1 });
+    service.track(A);
+    service.track(B); // non-trivial snapshot
+    const result = hub.openStream(noCursor);
+    expect(result.outcome).toBe("snapshot-required");
+    // No session was registered carrying an oversized queued snapshot.
+    expect(hub.getStats().clients).toBe(0);
+    hub.stop();
+  });
+
+  test("initial snapshot is accounted against the per-client byte budget", async () => {
+    const service = new MarketDataService({
+      now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
+    });
+    service.track(A);
+    const snapshotBytes = JSON.stringify({
+      event: "snapshot", id: String(service.revision), data: service.getSnapshot()
+    }).length;
+    const hub = new LiveEventHub(service, {
+      replayMaxEvents: 100, replayMaxBytes: 1_000_000,
+      clientMaxEvents: 100, clientMaxBytes: snapshotBytes,
+      refreshIntervalMs: 0
+    });
+    hub.start();
     const result = hub.openStream(noCursor);
     expect(result.outcome).toBe("session");
     if (result.outcome !== "session") return;
-    // The initial snapshot bypasses data limits; the next data event overflows.
-    expect((await result.session.next())!.event).toBe("snapshot");
-    service.track(A);
-    expect((await result.session.next())!.event).toBe("snapshot-required");
+    // The queued snapshot fills the budget; the next data event must overflow.
+    service.track(B);
+    const events = await readN(result.session, 2);
+    expect(events.map((e) => e.event)).toEqual(["snapshot", "snapshot-required"]);
     hub.stop();
   });
 });
@@ -242,5 +265,23 @@ describe("LiveEventHub — control events, isolation and lifecycle", () => {
     hub.stop();
     expect(hub.getStats().clients).toBe(0);
     expect(await result.session.next()).toBeNull();
+  });
+
+  test("drop telemetry stays cumulative after the overflowing client disconnects", async () => {
+    const { service, hub } = harness({ clientMaxEvents: 2 });
+    const result = hub.openStream(noCursor);
+    expect(result.outcome).toBe("session");
+    if (result.outcome !== "session") return;
+    await result.session.next(); // snapshot
+    service.track(A);
+    service.track(B);
+    service.track(C); // overflow -> one dropped data event
+    expect(hub.getStats().totalDroppedDataEvents).toBe(1);
+
+    hub.closeSession(result.session);
+    expect(hub.getStats().clients).toBe(0);
+    // Cumulative counter survives client removal.
+    expect(hub.getStats().totalDroppedDataEvents).toBe(1);
+    hub.stop();
   });
 });
