@@ -3,6 +3,7 @@ import type { CredentialStore, ProviderConnectionState } from "@markethub/contra
 import type { NormalizeObservationInput } from "@markethub/market-core";
 import { sanitizeError } from "@markethub/market-core";
 import { UPSTOX_TOKEN_CREDENTIAL } from "./constants";
+import { upstoxComponentUpdates } from "./components";
 
 // createRequire selects the full CommonJS build of the SDK under Bun 1.4.4.
 const require = createRequire(import.meta.url);
@@ -45,6 +46,8 @@ export interface UpstoxSubscription {
 export interface UpstoxStreamCallbacks {
   onObservation: (input: NormalizeObservationInput) => void;
   onConnectionState: (state: ProviderConnectionState, error?: string | null) => void;
+  /** Optional canonical component sink; the adapter translates decoded frames. */
+  onComponentUpdate?: (update: import("@markethub/contracts").ComponentUpdate) => void;
 }
 
 export interface UpstoxStreamOptions {
@@ -485,7 +488,7 @@ export class UpstoxMarketDataStream {
       if (ltt.unsafe) { native.ltpcLttRaw = ltt.raw; native.ltpcLttUnsafe = true; }
 
       if (Object.keys(native).length) value.native = native;
-      this.callbacks?.onObservation({
+      const observation: NormalizeObservationInput = {
         provider: "UPSTOX",
         canonicalId: sub.canonicalId,
         value,
@@ -495,7 +498,13 @@ export class UpstoxMarketDataStream {
         receivedAtMs,
         providerSequence: null,
         sourceVersion: "v3"
-      });
+      };
+      this.callbacks?.onObservation(observation);
+      if (this.callbacks?.onComponentUpdate) {
+        for (const update of upstoxComponentUpdates(observation)) {
+          this.callbacks.onComponentUpdate(update);
+        }
+      }
     }
   }
 

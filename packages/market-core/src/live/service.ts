@@ -1,4 +1,7 @@
 import type {
+  ComponentKind,
+  ComponentObservation,
+  ComponentUpdate,
   LiveChangeEvent,
   LiveItem,
   LiveSnapshot,
@@ -6,6 +9,7 @@ import type {
   ProviderConnectionState,
   ProviderConnectionStatus,
   ProviderId,
+  SelectedComponent,
   SelectedObservation
 } from "@markethub/contracts";
 import { normalizeObservation, type NormalizeObservationInput } from "./normalize";
@@ -38,6 +42,21 @@ export class MarketDataService {
 
   applyProviderUpdate(input: NormalizeObservationInput): void {
     this.store.applyObservation(normalizeObservation(input));
+  }
+
+  /** Apply a canonical component update with partial-merge semantics. */
+  applyComponentUpdate(update: ComponentUpdate): void {
+    this.store.applyComponentUpdate(update);
+  }
+
+  /** Independently selected component for one canonical instrument. */
+  getSelectedComponent(canonicalId: string, component: ComponentKind): SelectedComponent | undefined {
+    return this.store.getSelectedComponent(canonicalId, component);
+  }
+
+  /** Retained component observation for one provider. */
+  getComponent(canonicalId: string, provider: ProviderId, component: ComponentKind): ComponentObservation | undefined {
+    return this.store.getComponent(canonicalId, provider, component);
   }
 
   setProviderConnection(provider: ProviderId, state: ProviderConnectionState, error: string | null = null): void {

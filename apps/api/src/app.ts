@@ -24,6 +24,7 @@ import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
 import type { StreamSupervisor } from "./stream-supervisor";
+import type { SubscriptionCoordinator } from "./subscription-coordinator";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -40,6 +41,7 @@ export interface AppDependencies {
   service?: MarketDataService;
   hub?: LiveEventHub;
   supervisor?: StreamSupervisor;
+  coordinator?: SubscriptionCoordinator;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -148,8 +150,13 @@ export function createApp(deps: AppDependencies) {
 
 
   registerProviderRoutes(app, deps);
-  if (deps.service && deps.hub && deps.supervisor) {
-    registerMarketRoutes(app, { service: deps.service, hub: deps.hub, supervisor: deps.supervisor });
+  if (deps.service && deps.hub && (deps.supervisor || deps.coordinator)) {
+    registerMarketRoutes(app, {
+      service: deps.service,
+      hub: deps.hub,
+      supervisor: deps.supervisor,
+      coordinator: deps.coordinator
+    });
   }
   app.get("/api/status", (c) => {
     const health = healthStatusSchema.parse({

@@ -4,7 +4,9 @@ import {
   apiErrorSchema,
   liveSnapshotSchema,
   subscriptionReplaceRequestSchema,
-  subscriptionStateViewSchema
+  subscriptionStateViewSchema,
+  type SubscriptionSelection,
+  type SubscriptionStateView
 } from "@markethub/contracts";
 import type { MarketDataService } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
@@ -13,11 +15,34 @@ import {
   SubscriptionPersistenceError, SubscriptionValidationError,
   type StreamSupervisor
 } from "./stream-supervisor";
+import type { SubscriptionCoordinator } from "./subscription-coordinator";
+
+/** Either the standalone supervisor or the shared coordinator can own the view. */
+export interface SubscriptionStatePort {
+  getView(): SubscriptionStateView;
+  replaceSubscriptions(selections: SubscriptionSelection[]): Promise<{ view: SubscriptionStateView }>;
+}
 
 export interface MarketRouteDependencies {
   service: MarketDataService;
   hub: LiveEventHub;
-  supervisor: StreamSupervisor;
+  supervisor?: StreamSupervisor | undefined;
+  coordinator?: SubscriptionCoordinator | undefined;
+}
+
+function subscriptionPort(deps: MarketRouteDependencies): SubscriptionStatePort {
+  if (deps.coordinator) {
+    const coordinator = deps.coordinator;
+    return {
+      getView: () => coordinator.getView(),
+      replaceSubscriptions: async (selections) => ({ view: await coordinator.replaceSubscriptions(selections) })
+    };
+  }
+  const supervisor = deps.supervisor!;
+  return {
+    getView: () => supervisor.getView(),
+    replaceSubscriptions: async (selections) => ({ view: (await supervisor.replaceSubscriptions(selections)).view })
+  };
 }
 
 /** REST/SSE consumers of the one canonical market-data service. No market logic here. */
@@ -58,7 +83,7 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
   });
 
   app.get("/api/market/subscriptions", (c) => {
-    return c.json(subscriptionStateViewSchema.parse(deps.supervisor.getView()));
+    return c.json(subscriptionStateViewSchema.parse(subscriptionPort(deps).getView()));
   });
 
   app.put("/api/market/subscriptions", async (c) => {
@@ -71,7 +96,7 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
       return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid subscription payload" }), 400);
     }
     try {
-      const result = await deps.supervisor.replaceSubscriptions(parsed.data.selections);
+      const result = await subscriptionPort(deps).replaceSubscriptions(parsed.data.selections);
       // The view exposes committed generation/selections separately from
       // runtime status (including any post-commit reconciliation error).
       return c.json(subscriptionStateViewSchema.parse(result.view));

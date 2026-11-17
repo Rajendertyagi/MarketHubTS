@@ -1,4 +1,7 @@
 import type {
+  ComponentKind,
+  ComponentObservation,
+  ComponentUpdate,
   FreshnessPolicy,
   LiveChangeEvent,
   LiveItem,
@@ -8,10 +11,12 @@ import type {
   ProviderConnectionState,
   ProviderConnectionStatus,
   ProviderId,
-  ProviderObservation
+  ProviderObservation,
+  SelectedComponent
 } from "@markethub/contracts";
 import { evaluateFreshness } from "./freshness";
 import { selectObservation } from "./selection";
+import { ComponentStore } from "./components";
 
 export class LiveStateCapacityError extends Error {
   constructor(canonicalId: string, maxInstruments: number) {
@@ -41,6 +46,8 @@ export class LiveStateStore {
   private readonly session: () => MarketSessionState;
   private readonly onEvict: ((canonicalId: string) => void) | undefined;
   private readonly listeners = new Set<(event: LiveChangeEvent) => void>();
+  /** Canonical component storage (quote/depth/derivatives) per provider/instrument. */
+  private readonly components = new ComponentStore(() => this.now());
   private revisionValue = 0;
 
   constructor(options: LiveStateOptions) {
@@ -90,6 +97,7 @@ export class LiveStateStore {
       updatedAtMs: nowMs
     };
     this.items.set(canonicalId, item);
+    this.components.track(canonicalId);
     this.revisionValue++;
     this.notify({ type: "item-updated", revision: this.revisionValue, canonicalId, item: this.materialize(item, nowMs) });
   }
@@ -98,6 +106,7 @@ export class LiveStateStore {
   untrack(canonicalId: string): boolean {
     const removed = this.items.delete(canonicalId);
     if (removed) {
+      this.components.untrack(canonicalId);
       this.revisionValue++;
       this.onEvict?.(canonicalId);
       this.notify({ type: "item-removed", revision: this.revisionValue, canonicalId });
@@ -127,6 +136,54 @@ export class LiveStateStore {
       type: "item-updated", revision: this.revisionValue, canonicalId: observation.canonicalId,
       item: this.materialize(item, nowMs)
     });
+  }
+
+  /**
+   * Apply a canonical component update. Partial updates merge into the same
+   * provider/component before selection; per-field timestamps are preserved.
+   */
+  applyComponentUpdate(update: ComponentUpdate): void {
+    this.components.applyUpdate(update);
+    const item = this.items.get(update.canonicalId);
+    if (item) item.updatedAtMs = this.now().getTime();
+    this.revisionValue++;
+    const nowMs = this.now().getTime();
+    const materialized = item ? this.materialize(item, nowMs) : this.emptyItem(update.canonicalId, nowMs);
+    this.notify({ type: "item-updated", revision: this.revisionValue, canonicalId: update.canonicalId, item: materialized });
+  }
+
+  /** Independently selected component for one canonical instrument. */
+  getSelectedComponent(canonicalId: string, component: ComponentKind): SelectedComponent | undefined {
+    if (!this.items.has(canonicalId)) return undefined;
+    return this.components.select(
+      canonicalId, component, this.connectionStates(), this.session(), this.policy, this.now().getTime()
+    );
+  }
+
+  /** A retained component observation for one provider, or undefined. */
+  getComponent(canonicalId: string, provider: ProviderId, component: ComponentKind): ComponentObservation | undefined {
+    return this.components.get(canonicalId, provider, component);
+  }
+
+  private emptyItem(canonicalId: string, nowMs: number): LiveItem {
+    return {
+      canonicalId,
+      observations: {},
+      selected: selectObservation(canonicalId, {}, this.connectionStates(), this.session(), this.policy, nowMs),
+      pinned: false,
+      updatedAtMs: nowMs,
+      components: this.selectAllComponents(canonicalId, nowMs)
+    };
+  }
+
+  private selectAllComponents(canonicalId: string, nowMs: number): Partial<Record<ComponentKind, SelectedComponent>> {
+    const out: Partial<Record<ComponentKind, SelectedComponent>> = {};
+    for (const component of ["quote", "depth", "derivatives"] as const) {
+      out[component] = this.components.select(
+        canonicalId, component, this.connectionStates(), this.session(), this.policy, nowMs
+      );
+    }
+    return out;
   }
 
   /** Connection state is owned here, never stored inside observations. */
@@ -190,6 +247,7 @@ export class LiveStateStore {
     copy.selected = selectObservation(
       copy.canonicalId, observations, this.connectionStates(), this.session(), this.policy, nowMs
     );
+    copy.components = this.selectAllComponents(copy.canonicalId, nowMs);
     return copy;
   }
 

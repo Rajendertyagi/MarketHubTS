@@ -9,7 +9,8 @@ import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
 import { createLogger } from "./lib/logger";
-import { LockedUpstoxDriver, StreamSupervisor } from "./stream-supervisor";
+import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
+import { SubscriptionCoordinator } from "./subscription-coordinator";
 
 type RunningServer = ReturnType<typeof Bun.serve>;
 
@@ -18,7 +19,7 @@ let shutdownPromise: Promise<void> | null = null;
 let server: RunningServer | null = null;
 let db: DatabaseHandle | null = null;
 let hub: LiveEventHub | null = null;
-let supervisor: StreamSupervisor | null = null;
+let coordinator: SubscriptionCoordinator | null = null;
 
 async function main() {
   const config = loadConfig();
@@ -75,20 +76,36 @@ async function main() {
 
   const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
   const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
-  // Stage D production boundary: the real Upstox SDK driver is never constructed.
-  // A fresh locked driver is created on every acquisition; no provider connection
-  // is ever attempted. Only a separately authorized Stage G change may unlock it.
-  supervisor = new StreamSupervisor({
+  // AD-024 production boundary: one shared coordinator owns desired state; each
+  // configured provider has an independent runtime with its own locked driver.
+  // No real SDK, socket or provider connection is ever constructed. Only a
+  // separately authorized Stage G change may unlock a real driver.
+  const runtimeOptions = {
     service, subscriptions, catalog,
-    createDriver: () => new LockedUpstoxDriver(),
+    coordinated: true,
     reconnect: { maxAttempts: policy.reconnectMaxAttempts, baseDelayMs: policy.reconnectBaseDelayMs }
+  };
+  const upstoxRuntime = new StreamSupervisor({
+    ...runtimeOptions, provider: "UPSTOX", createDriver: () => new LockedProviderDriver("UPSTOX")
   });
-  await supervisor.start();
+  const fyersRuntime = new StreamSupervisor({
+    ...runtimeOptions, provider: "FYERS", createDriver: () => new LockedProviderDriver("FYERS")
+  });
+  coordinator = new SubscriptionCoordinator({
+    service, subscriptions, catalog,
+    runtimes: [
+      { provider: "UPSTOX", supervisor: upstoxRuntime },
+      { provider: "FYERS", supervisor: fyersRuntime }
+    ]
+  });
+  await upstoxRuntime.start();
+  await fyersRuntime.start();
+  await coordinator.start();
 
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
-    service, hub, supervisor
+    service, hub, coordinator
   });
 
   try {
@@ -97,7 +114,7 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "server", message });
-    try { supervisor?.stop(); } catch {}
+    try { coordinator?.stop(); } catch {}
     try { hub?.stop(); } catch {}
     try { db?.close(); } catch {}
     process.exitCode = 1;
@@ -109,10 +126,10 @@ async function main() {
     shuttingDown = true;
     shutdownPromise = (async () => {
       logger.info("shutdown_start", { signal });
-      // 1) stop accepting subscription/config work; 2) stop/cancel supervisor
-      // (the locked driver owns no resources, so there is nothing to close).
-      try { supervisor?.stop(); } catch (error) {
-        logger.warn("supervisor_stop_error", { message: error instanceof Error ? error.message : String(error) });
+      // 1) stop accepting subscription/config work; 2) stop/cancel the shared
+      // coordinator and its provider runtimes (locked drivers own no resources).
+      try { coordinator?.stop(); } catch (error) {
+        logger.warn("coordinator_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
       // 4) stop hub timers and clients before the HTTP server and DB close.
       try { hub?.stop(); } catch (error) {

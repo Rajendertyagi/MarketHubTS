@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ProviderId } from "./provider";
 import { availabilityStateSchema, provenanceSchema, type AvailabilityState, type Provenance } from "./market";
+import type { ComponentKind, SelectedComponent } from "./live-components";
 
 // Provider ids are inlined as a value schema here so live.ts never needs a
 // runtime import from provider.ts (provider.ts imports the connection schema
@@ -46,6 +47,9 @@ export type ObservationAgeBasis = z.infer<typeof observationAgeBasisSchema>;
 export interface CanonicalLiveValue {
   ltp?: number;
   lastTradedQuantity?: number;
+  /** Previous trading session's close — the unambiguous canonical field. */
+  previousClose?: number;
+  /** @deprecated Compatibility alias for previousClose during migration. */
   close?: number;
   open?: number;
   high?: number;
@@ -58,6 +62,7 @@ export interface CanonicalLiveValue {
 export const canonicalLiveValueSchema = z.object({
   ltp: z.number().finite().optional(),
   lastTradedQuantity: z.number().finite().optional(),
+  previousClose: z.number().finite().optional(),
   close: z.number().finite().optional(),
   open: z.number().finite().optional(),
   high: z.number().finite().optional(),
@@ -133,6 +138,8 @@ export interface LiveItem {
   selected: SelectedObservation;
   pinned: boolean;
   updatedAtMs: number;
+  /** Additive canonical component selections; absent for legacy-only items. */
+  components?: Partial<Record<ComponentKind, SelectedComponent>>;
 }
 
 export const liveItemSchema = z.object({
@@ -143,7 +150,10 @@ export const liveItemSchema = z.object({
   }),
   selected: selectedObservationSchema,
   pinned: z.boolean(),
-  updatedAtMs: z.number().int().nonnegative()
+  updatedAtMs: z.number().int().nonnegative(),
+  // Additive component selections are validated loosely here; the component
+  // contracts in live-components.ts are the authority for their shape.
+  components: z.record(z.string(), z.unknown()).optional()
 });
 
 // --- Consistent snapshot with store-wide revision (SSE groundwork) ---
@@ -233,7 +243,9 @@ export const subscriptionStateViewSchema = z.object({
   /** Desired generation: latest committed generation from persistence. */
   generation: z.number().int().nonnegative(),
   /** Runtime status, including the separately tracked applied generation. */
-  runtime: subscriptionRuntimeStatusSchema
+  runtime: subscriptionRuntimeStatusSchema,
+  /** Per-provider runtime status when coordinated by a SubscriptionCoordinator. */
+  runtimes: z.record(z.string(), subscriptionRuntimeStatusSchema).optional()
 });
 export type SubscriptionStateView = z.infer<typeof subscriptionStateViewSchema>;
 

@@ -59,11 +59,17 @@ export function normalizeObservation(input: NormalizeObservationInput): Provider
     ...(input.sourceVersion ? { sourceVersion: input.sourceVersion } : {}),
     ...(input.notes ? { notes: input.notes } : {})
   };
+  // Additive migration: `close` is the deprecated alias for previous-session
+  // close. Populate `previousClose` from it without repurposing `close`.
+  const value = structuredClone(input.value);
+  if (value.previousClose === undefined && value.close !== undefined) {
+    value.previousClose = value.close;
+  }
   return {
     provider: input.provider,
     canonicalId: input.canonicalId,
     // Clone at the boundary: the caller retains ownership of the input object.
-    value: structuredClone(input.value),
+    value,
     rawProviderTimestamp: input.rawProviderTimestamp,
     providerTimestampUnit: input.providerTimestampUnit,
     providerTimestampMeaning: input.providerTimestampMeaning,

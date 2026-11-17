@@ -25,6 +25,7 @@ export type {
   SdkStreamer,
   StreamerFactory
 } from "./stream";
+export { upstoxComponentUpdates, upstoxCapabilities } from "./components";
 
 export interface UpstoxAdapterOptions {
   credentials: CredentialStore;

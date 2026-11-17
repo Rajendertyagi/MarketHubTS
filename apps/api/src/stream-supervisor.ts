@@ -20,6 +20,8 @@ export interface DriverSubscription {
 export interface DriverCallbacks {
   onObservation(input: NormalizeObservationInput): void;
   onConnectionState(state: ProviderConnectionState, error?: string | null): void;
+  /** Optional canonical component sink; forwarded to the shared service. */
+  onComponentUpdate?(update: import("@markethub/contracts").ComponentUpdate): void;
 }
 
 export interface StreamingDriver {
@@ -34,20 +36,22 @@ export interface StreamingDriver {
 }
 
 export class DriverLockedError extends Error {
-  constructor() {
-    super("Live Upstox streaming is locked in Stage D; real driver construction is disabled");
+  constructor(provider: ProviderId = "UPSTOX") {
+    super(`Live ${provider} streaming is locked; real driver construction is disabled`);
     this.name = "DriverLockedError";
   }
 }
 
 /**
- * Production boundary for Stage D. Real SDK construction, sockets and retry
- * scheduling are unreachable: every start/update attempt fails safely. Only a
- * separately authorized and independently reviewed Stage G change may unlock
- * real driver construction and connection behavior.
+ * Production boundary. Real SDK construction, sockets and retry scheduling are
+ * unreachable: every start/update attempt fails safely. Only a separately
+ * authorized and independently reviewed Stage G change may unlock real driver
+ * construction and connection behavior.
  */
-export class LockedUpstoxDriver implements StreamingDriver {
+export class LockedProviderDriver implements StreamingDriver {
   readonly locked = true;
+
+  constructor(private readonly provider: ProviderId = "UPSTOX") {}
 
   getConnectionState(): ProviderConnectionState {
     return "NOT_STARTED";
@@ -56,15 +60,22 @@ export class LockedUpstoxDriver implements StreamingDriver {
   async start(
     _subscriptions: DriverSubscription[], _callbacks: DriverCallbacks, _signal: AbortSignal
   ): Promise<void> {
-    throw new DriverLockedError();
+    throw new DriverLockedError(this.provider);
   }
 
   async updateSubscriptions(_subscriptions: DriverSubscription[], _signal: AbortSignal): Promise<void> {
-    throw new DriverLockedError();
+    throw new DriverLockedError(this.provider);
   }
 
   stop(): void {
     // No SDK instance, socket or timer exists — nothing to release. Idempotent.
+  }
+}
+
+/** Backwards-compatible Upstox locked driver used by existing Stage D tests. */
+export class LockedUpstoxDriver extends LockedProviderDriver {
+  constructor() {
+    super("UPSTOX");
   }
 }
 
@@ -149,6 +160,13 @@ export interface StreamSupervisorOptions {
   quiescenceMs?: number;
   /** Deterministic jitter source; delay = base * 2^attempt * (0.5 + random()*0.5). */
   random?: () => number;
+  /**
+   * When true, this supervisor is a provider runtime driven by a shared
+   * SubscriptionCoordinator: it does not write the subscription repository and
+   * does not track/untrack canonical instruments. Desired state is supplied via
+   * applyDesiredState(). Default false preserves the standalone Stage D behavior.
+   */
+  coordinated?: boolean;
 }
 
 export interface ReplaceSubscriptionsResult {
@@ -200,10 +218,28 @@ export class StreamSupervisor {
 
   /** Load persisted desired state and reconcile once at startup. */
   async start(): Promise<void> {
+    if (this.opts.coordinated) {
+      // The coordinator owns desired state and calls applyDesiredState().
+      return;
+    }
     const state = await this.opts.subscriptions.load();
     this.generation = state.generation;
     this.selections = state.selections.map((s) => ({ ...s }));
     await this.enqueueReconcile(state.generation);
+  }
+
+  /**
+   * Coordinator-driven desired-state application. The runtime reconciles the
+   * supplied generation without writing shared persistence or shared tracking.
+   */
+  async applyDesiredState(selections: SubscriptionSelection[], generation: number): Promise<void> {
+    if (!this.opts.coordinated) {
+      throw new Error("applyDesiredState requires a coordinated provider runtime");
+    }
+    if (this.stopped) return;
+    this.generation = generation;
+    this.selections = selections.map((s) => ({ ...s }));
+    await this.enqueueReconcile(generation);
   }
 
   /**
@@ -213,6 +249,9 @@ export class StreamSupervisor {
    * misrepresented as an invalid request.
    */
   async replaceSubscriptions(selections: SubscriptionSelection[]): Promise<ReplaceSubscriptionsResult> {
+    if (this.opts.coordinated) {
+      throw new SubscriptionValidationError("Coordinated runtimes cannot write shared desired state; use SubscriptionCoordinator");
+    }
     if (this.stopped) throw new SubscriptionValidationError("Stream supervisor is stopped");
 
     const seen = new Set<string>();
@@ -305,16 +344,20 @@ export class StreamSupervisor {
     this.lastError = null;
     this.resolutions = resolutions;
     const desiredIds = new Set(enabled.map((s) => s.canonicalId));
-    for (const id of [...this.trackedIds]) {
-      if (!desiredIds.has(id)) {
-        this.opts.service.untrack(id);
-        this.trackedIds.delete(id);
+    // In coordinated mode the SubscriptionCoordinator is the sole owner of
+    // shared track/untrack decisions; runtimes never modify shared tracking.
+    if (!this.opts.coordinated) {
+      for (const id of [...this.trackedIds]) {
+        if (!desiredIds.has(id)) {
+          this.opts.service.untrack(id);
+          this.trackedIds.delete(id);
+        }
       }
-    }
-    for (const id of desiredIds) {
-      if (!this.trackedIds.has(id)) {
-        this.opts.service.track(id);
-        this.trackedIds.add(id);
+      for (const id of desiredIds) {
+        if (!this.trackedIds.has(id)) {
+          this.opts.service.track(id);
+          this.trackedIds.add(id);
+        }
       }
     }
 
@@ -520,6 +563,14 @@ export class StreamSupervisor {
           this.opts.service.applyProviderUpdate(input);
         } catch {
           // Late or invalid observations must not corrupt shared state.
+        }
+      },
+      onComponentUpdate: (update) => {
+        if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
+        try {
+          this.opts.service.applyComponentUpdate(update);
+        } catch {
+          // Late or invalid component updates must not corrupt shared state.
         }
       },
       onConnectionState: (state, error) => {
