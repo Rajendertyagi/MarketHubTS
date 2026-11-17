@@ -1,7 +1,7 @@
 # Implementation Roadmap
 
 > **Status:** Dependency-based roadmap from verified scaffold to product milestones. No arbitrary dates/estimates.
-> **Last updated:** 2026-11-16
+> **Last updated:** 2026-11-17
 > **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Planning principles
