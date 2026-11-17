@@ -2,7 +2,7 @@
 
 **AI-first, local-first Indian stock-market data platform** focused on comprehensive NSE and BSE F&O market information.
 
-> **Status:** Application foundation (M1), canonical catalog (M2), provider auth framework (M3), and M4 Stages A/B/D live-data backend are implemented on `develop`. Stage D adds a provider-ready backend vertical slice with a locked production driver — no live provider connection is attempted. **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+> **Status:** Application foundation (M1), canonical catalog (M2), provider auth framework (M3), and M4 Stages A/B/D/E/F are implemented. Stages D and E are accepted; Stage F (reconnect/recovery/concurrency/resource hardening) passed independent review and was integrated into `main` by an authorized fast-forward that synchronized `main` and `develop`. Stage D adds a provider-ready backend vertical slice with a locked production driver — no live provider connection is attempted. **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
 
 ## What MarketHubTS is (confirmed)
 
@@ -22,14 +22,14 @@ Not an automated trading platform, not an AI trading recommendation/prediction/s
 - **Runtime/configuration:** centralized validated config (`packages/config`, Zod), `.env.example`, compatibility with `PORT`/`MARKETHUB_DB_PATH`, LAN/local modes, no secret exposure in public diagnostics.
 - **Database:** `packages/database` (`bun:sqlite` + Drizzle) with reliable initialization, WAL/foreign_keys/NORMAL/busy_timeout, versioned migrations, and initial `app_meta` migration.
 - **API (`apps/api`):** Hono + Bun with startup/shutdown lifecycle, `/health` (compatible), `/ready`, `/api/status`, structured errors/logging, deliberate CORS policy, and production static serving of the built WebUI.
-- **WebUI (`apps/web`):** React + Vite application shell (TanStack Router/Query, Tailwind) showing real backend/runtime status with loading/error/recovery states (no fabricated market data).
+- **WebUI (`apps/web`):** React + Vite application shell (TanStack Router/Query, Tailwind) showing real backend/runtime status with loading/error/recovery states (no fabricated market data), plus the Stage E live-data tab (streaming selections and canonical-field-only live views with a deterministic SSE client).
 - **MCP (`apps/mcp-server`):** stdio `markethub_health` tool preserved (uses local API health contract).
 - **Workflows:** Windows-compatible `bun run dev`, `bun run build`, `bun run start` (single local instance serving API + built WebUI in production).
 - **Market domain (`packages/contracts`, `packages/market-core`):** canonical instrument identity/catalog with transactional sync; canonical live contracts, observation normalization, session-aware freshness, deterministic source selection, and bounded in-memory live state with change notifications.
 - **Providers (`packages/broker-upstox`, `packages/broker-fyers`):** portable encrypted credential store, independent Upstox/FYERS auth adapters, and an Upstox V3 SDK streaming adapter (market-data streaming only). FYERS Data Socket streaming is on hold.
 - **Live backend (`packages/realtime`, `apps/api`):** bounded realtime hub, subscription persistence with durable generation, supervisor, and REST/SSE market endpoints (`/api/market/snapshot`, `/api/market/stream`, `/api/market/subscriptions`). Production uses a locked driver: no SDK construction, socket or provider connection.
-- **Tests:** 235 tests passing (48 focused Stage D tests), typecheck/build passing. No real network or live provider connection in tests.
-- Placeholder package remains: `analytics`. WebUI live views (Stage E), FYERS streaming (Stage C) and live verification (Stage G) are pending.
+- **Tests:** 352 tests passing (69 focused Stage D, 55 focused web, 50 focused Stage F), typecheck/build passing. No real network or live provider connection in tests. Figures are the verified local snapshot in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) §3.9; they are not GitHub CI evidence.
+- Placeholder package remains: `analytics`. FYERS streaming (Stage C) and live verification (Stage G) are pending; WebUI live views (Stage E) and reconnect/recovery hardening (Stage F) are implemented.
 
 ## Prerequisites
 

@@ -27,22 +27,22 @@ The confirmed product requirements in [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREM
 
 ## 3. Current architecture and implementation state (verified from source)
 
-This section reflects the actual `develop` source at HEAD `2e2384b`, not prior summaries.
+This section reflects the actual `develop` source (unchanged since `2e2384b`), not prior summaries.
 
 ### 3.1 What exists today
 
 | Area | Verified implementation |
 |---|---|
-| Canonical service | `packages/market-core/src/live/service.ts` — `MarketDataService` facade over `LiveStateStore`; one instance composed in `apps/api/src/index.ts` and shared by REST, SSE and the supervisor. |
+| Canonical service | `packages/market-core/src/live/service.ts` — `MarketDataService` facade over `LiveStateStore`; **owns canonical storage and freshness evaluation** (freshness via `evaluateFreshness` in `live/freshness.ts`); one instance composed in `apps/api/src/index.ts` and shared by REST, SSE and the supervisor. |
 | Live state | `packages/market-core/src/live/store.ts` — `LiveStateStore` holds `LiveItem` per canonical ID; each item has `observations: Partial<Record<ProviderId, ProviderObservation>>` and one derived `selected: SelectedObservation`. Bounded by `maxInstruments`; monotonic revision; synchronous detached notifications; defensive `structuredClone`. |
 | Observation model | `packages/contracts/src/live.ts` — `ProviderObservation` carries provider, canonical ID, `CanonicalLiveValue` (ltp, ltq, close, open, high, low, volume, `native`), source/receipt timestamps with unit and meaning, freshness, availability and provenance. `CanonicalLiveValue` has **no depth field**; depth is only ever inside `native`. |
 | Source selection | `packages/market-core/src/live/selection.ts` — `selectObservation()` picks **one whole observation from one provider**; connected + FRESH observations win, ranked by compatible source timestamp or `receivedAt`; otherwise LAST_KNOWN fallback. |
 | Freshness | `packages/market-core/src/live/freshness.ts` — session-aware (OPEN/CLOSED/UNKNOWN), source-vs-receipt age basis, bounded retained age. |
 | Normalization | `packages/market-core/src/live/normalize.ts` — `normalizeObservation()` validates timestamps (MS/SECONDS/UNKNOWN), builds provenance, clones input. |
 | Subscription persistence | `packages/database/src/subscriptions.ts` — `SqliteSubscriptionRepository` stores `streaming_subscriptions` rows and one durable generation in `app_meta` (`streaming_subscriptions_generation`); full replacement + generation increment in one serialized `BEGIN IMMEDIATE` transaction; no SDK/network work inside. |
-| Supervisor | `apps/api/src/stream-supervisor.ts` — `StreamSupervisor` owns desired-state reconciliation, mapping resolution, shared `service.track/untrack`, and the full driver lifecycle. Stage F hardening: terminal driver instances, at-most-once `stop()`, mandatory `AbortSignal`, five-variant `OperationOutcome`, supervisor-owned logical completion, generation guards after async resolution, stale-callback gating by epoch + instance, explicit retry exhaustion, abort-safe retry sleep, deterministic timer seams. |
+| Supervisor | `apps/api/src/stream-supervisor.ts` — `StreamSupervisor` owns desired-state reconciliation, mapping resolution, shared `service.track/untrack`, **connection lifecycle and reconnection** (connection state transitions, retry/backoff, driver retirement/restart), and the driver-instance lifecycle. Stage F hardening: terminal driver instances, at-most-once `stop()`, mandatory `AbortSignal`, five-variant `OperationOutcome`, supervisor-owned logical completion, generation guards after async resolution, stale-callback gating by epoch + instance, explicit retry exhaustion, abort-safe retry sleep, deterministic timer seams. |
 | Production boundary | `apps/api/src/index.ts` composes **one** `StreamSupervisor` with `provider` defaulting to `UPSTOX` and `createDriver: () => new LockedUpstoxDriver()`. The locked driver fails safely on `start`/`update`; no SDK, socket or retry is created. Real connection is Stage G and requires separate authorization. |
-| Upstox stream | `packages/broker-upstox/src/stream.ts` — `UpstoxMarketDataStream` on pinned `upstox-js-sdk@2.31.0`; SDK behind a structural seam; emits `NormalizeObservationInput`; owns subscriptions, normalization, freshness and reconnection. Workarounds: `autoReconnect(false)` before connect, never SDK `changeMode()` (unsubscribe+subscribe), protobuf-readiness gate, defensive payload decoding. |
+| Upstox stream | `packages/broker-upstox/src/stream.ts` — `UpstoxMarketDataStream` on pinned `upstox-js-sdk@2.31.0`; SDK behind a structural seam; **handles provider protocol and provider-specific normalization** (decoding SDK frames into `NormalizeObservationInput`); owns its SDK instance and subscription map. It does **not** own canonical freshness evaluation (that is `MarketDataService`/`LiveStateStore`) or reconnection (that is `StreamSupervisor`). Workarounds: `autoReconnect(false)` before connect, never SDK `changeMode()` (unsubscribe+subscribe), protobuf-readiness gate, defensive payload decoding. |
 | FYERS | `packages/broker-fyers/src/index.ts` — V3 non-trading-app OAuth adapter only. **No Data Socket streaming adapter exists** (Stage C, on hold). |
 | REST/SSE | `apps/api/src/market-routes.ts` — `GET /api/market/snapshot`, `GET /api/market/stream` (SSE), `GET/PUT /api/market/subscriptions` (PUT local-owner-only). `packages/realtime/src/hub.ts` — bounded replay/per-client queues, drop counters, coalesced `snapshot-required`, periodic `refresh`, cursor precedence. |
 | WebUI | `apps/web/src/lib/live.ts` — pure reducer + canonical-field-only display projection; `value.native` and provider-native fields are never displayed. Stage E live-data tab exists. |
@@ -118,6 +118,17 @@ Official sources reviewed on 2026-11-17 (full URL list in §16).
 
 **Use the official `fyers-api-v3` SDK behind the adapter boundary; do not write a native Bun WebSocket client.** The raw Data Socket wire protocol (handshake, subscribe frames, token encoding, HSM framing) is **undocumented**; only the obfuscated SDK implements it. A native implementation would require reverse-engineering obfuscated code — brittle, unsupported, and contrary to the project's "no guessing / no invented APIs" rule. Node compatibility ≠ Bun compatibility: the SDK targets Node (`engines >=14`) and depends on `ws`/`axios`; running it under Bun is **Requires live verification**. Keep the adapter isolated so that if Bun execution fails, only the process boundary changes (e.g. a small Node subprocess) and the canonical service layer is untouched. This mirrors the accepted Upstox SDK exception. **No dependency is installed or changed by this document.**
 
+### 6.2 Streaming capabilities vs REST capabilities
+
+The capability matrix (§7) and the component model (§9) describe **live streaming** data only. REST capabilities are a separate surface with different retrieval, persistence and permission rules, and must not be conflated with streaming:
+
+- **FYERS OI, IV and Greeks are not streaming fields.** They do not appear in any Data Socket message (`sf`/`if`/`dp`/lite). They are available only through **REST** endpoints (`getOptionChain`, `get_fno_historical_data` with `include_oi`/`include_greeks`), which are plan-dependent and subject to REST rate limits. They therefore belong to the **option-chain / historical milestones (M5)**, not to the live `derivatives` component. A live FYERS `derivatives` component must be reported **unavailable/unsupported**, never populated from a REST call on a tick and never fabricated.
+- **Upstox OI/IV/Greeks are streaming fields** in the full / option-greeks feed (§5), so an Upstox `derivatives` component is legitimate; account entitlement remains unverified.
+- **REST retrieval does not mutate operational config.** MCP on-demand option-chain/historical retrieval must not change saved capture/streaming settings (confirmed requirement, AD-008/AD-010). REST-only fields are not part of a streaming capability request (§10) and must not be advertised as available in live views.
+- **Historical data** is REST-only for both providers and is likewise out of the streaming component model.
+
+This distinction prevents a false claim that FYERS supplies live derivatives metrics and keeps the streaming foundation honest about what each provider actually delivers over the socket.
+
 ## 7. Provider capability matrix
 
 Statuses: **Verified** / **Plan-dependent** / **Not documented** / **Not available** / **Requires live verification**. "Not available" means the field does not appear in the documented live feed; it may exist via REST (noted).
@@ -139,7 +150,7 @@ Statuses: **Verified** / **Plan-dependent** / **Not documented** / **Not availab
 | Connection limits | Verified (2/user normal, 5 Plus) | Not documented (only "one instance at a time"; TBT 3×5 on Prime) |
 | Historical data | Verified (V3 candles, OHLCV+OI, no static IP) | Not available in Data Socket (REST, plan-dependent depth) |
 
-**Rules for using this matrix:** a "Not available" live field must be reported as unavailable, never calculated from other fields. Plan-dependent capabilities (Upstox D30) must not be assumed for an account. Capability status is source-attributed and may change; do not hardcode a plan entitlement as a permanent architectural assumption (AD-023).
+**Rules for using this matrix:** this matrix describes **streaming** capabilities only; REST-only fields (FYERS OI/IV/Greeks, historical data) are noted as such and belong to §6.2 / M5, not to live components. A "Not available" live field must be reported as unavailable, never calculated from other fields and never filled from a REST call on a tick. Plan-dependent capabilities (Upstox D30) must not be assumed for an account. Capability status is source-attributed and may change; do not hardcode a plan entitlement as a permanent architectural assumption (AD-023).
 
 ## 8. Decision A — shared subscription ownership + independent provider runtimes
 
@@ -150,7 +161,7 @@ Split the current `StreamSupervisor` responsibilities into two layers, reusing i
 **Shared `SubscriptionCoordinator` (one instance, single writer):**
 - Owns desired selections, the durable generation and `SubscriptionRepository` (the **only** writer).
 - Validates canonical instruments against the catalog.
-- Owns shared instrument tracking/untracking with **reference counting across providers** — an instrument is untracked only when no provider runtime still needs it.
+- Owns shared instrument tracking/untracking **from the owner's desired enabled selections**: an instrument is tracked when it is enabled in the desired state and untracked when it is removed or disabled. Provider runtimes never modify shared tracking.
 - Fans out desired-state updates to each configured provider runtime; never blocks a healthy provider because another fails.
 - Exposes the public `SubscriptionStateView` (desired generation + per-runtime status).
 
@@ -159,7 +170,9 @@ Split the current `StreamSupervisor` responsibilities into two layers, reusing i
 - Applies the desired generation to its own driver; maintains its **own applied generation**.
 - Owns connection, retry, timeout, error and driver-instance lifecycle (the existing Stage F engine).
 - Reports: connection state, desired generation, applied generation, resolved instruments, unsupported/missing mappings, subscription-limit failures, last error, retry state.
-- **Never writes** the shared desired-subscription repository and **never untracks** a shared instrument on its own.
+- **Never writes** the shared desired-subscription repository and **never modifies** shared instrument tracking.
+
+**On reference counting:** the desired enabled selections are the single source of truth for what the owner wants tracked, so the coordinator can track/untrack directly from them. **Reference counting is not introduced here** — it would add bookkeeping without a current requirement. It should be added only if a concrete additional ownership requirement appears (for example, a future feature that must keep an instrument tracked independently of the owner's streaming selections, such as a continuously running scanner). If that arises, the coordinator remains the sole owner of the reference counts; provider runtimes still never modify tracking.
 
 ### 8.2 Why this design
 
@@ -178,15 +191,17 @@ Split the current `StreamSupervisor` responsibilities into two layers, reusing i
 
 ### 9.1 Model
 
-Replace "one whole observation per provider" with **independently updated components** per canonical instrument. A proposed component classification (justified by the provider message shapes in §5–§6, not five arbitrary abstractions):
+Replace "one whole observation per provider" with **independently updated canonical components** per canonical instrument. The taxonomy is deliberately small — three components justified by the provider message shapes in §5–§6, not a category per message type:
 
 | Component | Contents | Upstox source | FYERS source |
 |---|---|---|---|
-| `quote` | LTP, day OHLC, close, volume, last traded qty/time, best bid/ask | LTPC + full/index feed | `sf` / `if` |
+| `quote` | LTP, day OHLC, close, volume, last traded qty/time, best bid/ask | LTPC + full feed | `sf` |
 | `depth` | Five-level (or D30) bid/ask price, size, order count | full / full_d30 `marketLevel` | `dp` |
-| `derivatives` | OI, IV, Greeks | full / option_greeks feed | **not in Data Socket** (REST only) |
-| `index` | Index LTP/OHLC/change | `IndexFullFeed` | `if` |
-| `extended` | Provider-native fields preserved verbatim, attributed | `native` | `native` |
+| `derivatives` | OI, IV, Greeks | full / option_greeks feed | **not in Data Socket** (REST-only; §6.2) |
+
+**Index is an instrument type, not a component.** An index instrument (canonical `INDEX` category, §4.2) carries a `quote` component; its live data is a reduced quote (LTP/OHLC/change, no volume or bid/ask). Upstox `IndexFullFeed` and FYERS `if` are quote messages for index instruments, not a separate data kind. Treating index as an instrument type avoids a redundant component and keeps identity/catalog semantics in one place.
+
+**Provider-native fields are not a canonical component.** They remain an opaque, attributed extension payload (`native`) carried alongside the canonical components, preserved verbatim but never interpreted as canonical market data, never used for source selection, and never displayed as canonical values (§13). This keeps canonical market data separate from provider-specific extensions.
 
 Each component instance carries: provider, canonical ID, value, source timestamp (+ unit + meaning), receipt timestamp, freshness, availability, provenance, and a component-level revision/sequence where available. Components are updated **only** by messages that actually contain them; a `dp` message updates `depth` and leaves `quote` untouched.
 
@@ -204,13 +219,13 @@ Selection is performed **independently per component**: the best fresh `quote` m
 
 - **Keep one observation per provider and merge fields at read time.** Rejected: still loses a component when a partial message replaces the whole observation (§3.2 issue 3), and cannot represent two providers contributing different components with independent provenance.
 - **Aggregate partial messages inside each adapter into a full observation.** Rejected: the adapter would need to retain cross-message state and would still force a single-provider selection; it also duplicates canonical storage logic in adapters.
-- **Five fully separate services.** Rejected: unnecessary; components are fields within one canonical item, not independent services.
+- **A separate service per component (or per provider message type).** Rejected: unnecessary; components are fields within one canonical item, not independent services, and a component per message type would recreate the index/extended redundancy this taxonomy removes.
 
 ## 10. Decision C — provider-neutral capability contracts
 
 ### 10.1 Requirement
 
-Consumers must never see broker SDK mode names (`ltpc`, `full`, `option_greeks`, `full_d30`, `SymbolUpdate`, `DepthUpdate`). Define a provider-neutral capability vocabulary in shared contracts, e.g. `quote`, `depth5`, `depth30`, `greeks`, `index`, with mandatory / optional / provider-dependent classification. A consumer requests capabilities per canonical instrument (or a defined selection layer); each adapter translates the request into its own subscription/mode calls.
+Consumers must never see broker SDK mode names (`ltpc`, `full`, `option_greeks`, `full_d30`, `SymbolUpdate`, `DepthUpdate`). Define a provider-neutral capability vocabulary in shared contracts, e.g. `quote`, `depth5`, `depth30`, `derivatives` (OI/IV/Greeks), with mandatory / optional / provider-dependent classification. Index is an instrument type, not a capability: an index instrument requests `quote` (a reduced quote with no volume or bid/ask). A consumer requests capabilities per canonical instrument (or a defined selection layer); each adapter translates the request into its own subscription/mode calls. Capability requests describe **streaming** data only; REST-only fields are not streaming capabilities (§6.2).
 
 ### 10.2 Rules
 
@@ -230,7 +245,9 @@ Consumers must never see broker SDK mode names (`ltpc`, `full`, `option_greeks`,
 
 The design must account for: both connected; only Upstox; only FYERS; both disconnected; one reconnecting while the other streams; a provider failing during a subscription update; a newer desired generation arriving during mapping resolution; stale callbacks from retired instances; a provider reaching its symbol limit; missing mappings; partial quote/depth messages; out-of-order and duplicate messages; stale source timestamps; shutdown with an operation pending; and multiple WebUI/REST/SSE/MCP clients.
 
-Mechanisms: Stage F generation re-check after async resolution; epoch + instance callback gating; terminal instances with at-most-once stop; bounded retry with explicit exhaustion; per-component monotonic guards (ignore stale/duplicate source timestamps per component); bounded queues and memory (existing `LiveEventHub` bounds); coordinator fan-out that isolates a failing runtime; shutdown that stops runtimes before the hub and DB close.
+Mechanisms: Stage F generation re-check after async resolution; epoch + instance callback gating; terminal instances with at-most-once stop; bounded retry with explicit exhaustion; bounded queues and memory (existing `LiveEventHub` bounds); coordinator fan-out that isolates a failing runtime; shutdown that stops runtimes before the hub and DB close.
+
+**Timestamp and ordering handling.** Per-component update guards must **never reject an update solely because its source timestamp equals the previous one**. Coarse source-timestamp precision (e.g. FYERS `last_traded_time`/`exch_feed_time` in whole seconds, §6) means several distinct successive updates can legitimately carry the same source timestamp. Ordering and duplicate decisions must consider, in combination: (a) the documented **meaning and unit** of the source timestamp; (b) any **provider sequence identifier** where available; and (c) **receipt ordering** (local arrival) as the tie-breaker when source timestamps are equal or untrusted. An update is dropped only when it is demonstrably stale or duplicate by these combined signals — not on timestamp equality alone. Each component retains its own source timestamp, sequence (if any) and receipt order so a legitimate successive update with a coarse or repeated timestamp is preserved.
 
 ## 13. API / WebUI / MCP implications
 
@@ -258,7 +275,7 @@ Acceptance criteria (measurable):
 2. Both providers independently reconcile the same desired state.
 3. Each provider reports its own applied generation.
 4. One provider failure does not interrupt the other.
-5. One provider cannot untrack an instrument still required by shared canonical state.
+5. Shared tracking is owned solely by the coordinator from the owner's desired enabled selections; no provider runtime can add or remove a tracked instrument.
 6. Quote and depth updates cannot overwrite each other.
 7. Every component preserves independent provenance and freshness.
 8. Source selection does not fabricate fields or hide missing data.
@@ -273,8 +290,9 @@ Required regression tests (to be written with implementation, not by this docume
 
 - Single-writer generation: concurrent PUTs produce one committed generation; two runtimes never both write the repository.
 - Two-runtime reconciliation: same desired state applied independently; distinct applied generations; one runtime failing does not change the other's state.
-- Shared tracking: runtime A untracking an instrument still desired by runtime B does not remove it from canonical state (reference counting).
+- Shared tracking: the coordinator tracks/untracks exactly the owner's desired enabled selections; provider runtimes never call `track`/`untrack`, so no runtime can remove an instrument another runtime still needs (no reference counting required).
 - Partial messages: a `dp`-only update leaves `quote` intact; an `sf`-only update leaves `depth` intact; both preserve independent timestamps/provenance.
+- Equal/coarse timestamps: successive updates with the same whole-second source timestamp are preserved (receipt order / sequence breaks the tie); only demonstrably stale or duplicate updates are dropped; an update is never rejected solely for timestamp equality.
 - Per-component selection: fresh Upstox quote + fresh FYERS depth coexist with correct per-component attribution; no mixed atomic snapshot.
 - No fabrication: absent OI/IV/Greeks/depth reported unavailable; no cross-field calculation.
 - Mapping failure: missing FYERS mapping does not disable an instrument served by Upstox, and vice versa.
