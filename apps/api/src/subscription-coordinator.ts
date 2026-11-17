@@ -50,6 +50,9 @@ export class SubscriptionCoordinator {
   async replaceSubscriptions(selections: SubscriptionSelection[]): Promise<SubscriptionStateView> {
     if (this.stopped) throw new SubscriptionValidationError("Subscription coordinator is stopped");
     await this.validate(selections);
+    // Pre-flight capacity check BEFORE persistence: a later track() failure
+    // must not leave a committed generation with unapplied shared tracking.
+    this.assertCapacity(selections);
 
     let committed: number;
     try {
@@ -75,7 +78,18 @@ export class SubscriptionCoordinator {
     }
   }
 
+  /** Reject desired state that would exceed live-state capacity before any write. */
+  private assertCapacity(selections: SubscriptionSelection[]): void {
+    const desired = new Set(selections.filter((s) => s.enabled).map((s) => s.canonicalId));
+    if (desired.size > this.opts.service.maxInstruments) {
+      throw new SubscriptionValidationError(
+        `desired enabled selections (${desired.size}) exceed live state capacity (${this.opts.service.maxInstruments})`
+      );
+    }
+  }
+
   private async applyDesiredState(selections: SubscriptionSelection[], generation: number): Promise<void> {
+    this.assertCapacity(selections);
     this.generation = generation;
     this.selections = selections.map((s) => ({ ...s }));
     this.syncTracking();

@@ -324,7 +324,7 @@ export class StreamSupervisor {
       } else {
         resolutions.push({
           canonicalId: selection.canonicalId, enabled: true, available: false,
-          reason: "NO_ACTIVE_UPSTOX_MAPPING"
+          reason: `NO_ACTIVE_${this.provider}_MAPPING`
         });
       }
     }

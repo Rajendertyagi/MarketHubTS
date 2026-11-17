@@ -27,6 +27,11 @@ export class MarketDataService {
     return this.store.revision;
   }
 
+  /** Maximum number of tracked canonical instruments (for pre-flight capacity checks). */
+  get maxInstruments(): number {
+    return this.store.maxInstruments;
+  }
+
   /** Synchronous change notifications for consumers such as the realtime hub. */
   subscribe(listener: (event: LiveChangeEvent) => void): () => void {
     return this.store.subscribe(listener);

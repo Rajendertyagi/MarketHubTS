@@ -79,14 +79,14 @@ function mapping(provider: ProviderId, canonicalId: string, native: string): Pro
   });
 }
 
-function harness() {
+function harness(maxInstruments = 10) {
   const dir = mkdtemp(join(tmpdir(), "mh-coordinator-"));
   const db = openDatabase({ dbPath: join(dir, "test.sqlite") });
   runMigrations(db.db, defaultMigrationsFolder);
   const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
   const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
   const service = new MarketDataService({
-    now: () => new Date(BASE), policy, maxInstruments: 10, session: () => "OPEN"
+    now: () => new Date(BASE), policy, maxInstruments, session: () => "OPEN"
   });
 
   const upstoxDriver = new FakeDriver();
@@ -196,7 +196,35 @@ describe("SubscriptionCoordinator ownership", () => {
       const fyResolution = h.fyers.getView().runtime.resolutions.find((r) => r.canonicalId === A);
       expect(upResolution?.available).toBe(true);
       expect(fyResolution?.available).toBe(false);
+      expect(fyResolution?.reason).toContain("FYERS");
+      expect(fyResolution?.reason).not.toContain("UPSTOX");
       expect(h.service.getItem(A)).toBeDefined();
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("capacity failure is rejected before persistence and leaves state consistent", async () => {
+    const h = harness(1);
+    try {
+      await h.seed([
+        { instrument: instrument(A), mappings: [mapping("UPSTOX", A, "U-A")] },
+        { instrument: instrument(B), mappings: [mapping("UPSTOX", B, "U-B")] }
+      ]);
+      await h.upstox.start();
+      await h.fyers.start();
+      await h.coordinator.start();
+
+      await expect(h.coordinator.replaceSubscriptions([
+        { canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }
+      ])).rejects.toThrow(/capacity/i);
+
+      // Nothing was persisted and no runtime fan-out occurred.
+      const persisted = await h.subscriptions.load();
+      expect(persisted.generation).toBe(0);
+      expect(persisted.selections).toHaveLength(0);
+      expect(h.upstoxDriver.starts).toHaveLength(0);
+      expect(h.fyersDriver.starts).toHaveLength(0);
     } finally {
       h.cleanup();
     }

@@ -53,6 +53,24 @@ describe("Upstox component adaptation", () => {
     const quote = updates.find((u) => u.component === "quote")!;
     expect((quote.set as Record<string, { value: unknown }>).volume?.value).toBe(0);
   });
+
+  test("last traded time and session OHLC/volume are mapped from the feed", () => {
+    const updates = upstoxComponentUpdates(input({
+      ohlc: [{ interval: "1d", open: 99, high: 102, low: 98, close: 101, vol: 5000, ts: BASE }]
+    }, { close: 99 }));
+    const quote = updates.find((u) => u.component === "quote")!;
+    const set = quote.set as Record<string, { value: unknown }>;
+    expect(set.lastTradedTime).toBeDefined();
+    expect((set.lastTradedTime?.value as { raw: number }).raw).toBe(BASE);
+    expect(set.open?.value).toBe(99);
+    expect(set.high?.value).toBe(102);
+    expect(set.low?.value).toBe(98);
+    expect(set.volume?.value).toBe(5000);
+    // The interval close stays in ohlc[] and never becomes previousClose/LTP.
+    const ohlc = set.ohlc?.value as Array<{ close: number }>;
+    expect(ohlc[0]?.close).toBe(101);
+    expect(set.previousClose?.value).toBe(99);
+  });
 });
 
 describe("Upstox capability reporting", () => {
@@ -86,5 +104,35 @@ describe("Upstox capability reporting", () => {
     const results = upstoxCapabilities("MARKET", "ltpc");
     expect(results.find((r) => r.component === "depth")?.status).toBe("UNSUPPORTED");
     expect(results.find((r) => r.component === "derivatives")?.status).toBe("UNSUPPORTED");
+  });
+
+  test("LTPC quote capability does not claim OHLC, volume or average trade price", () => {
+    const fields = upstoxCapabilities("MARKET", "ltpc").find((r) => r.component === "quote")?.fields ?? [];
+    expect(fields).toContain("ltp");
+    expect(fields).toContain("previousClose");
+    expect(fields).not.toContain("ohlc");
+    expect(fields).not.toContain("volume");
+    expect(fields).not.toContain("averageTradePrice");
+  });
+
+  test("Full quote capability exposes documented OHLC, volume and average trade price", () => {
+    const fields = upstoxCapabilities("MARKET", "full").find((r) => r.component === "quote")?.fields ?? [];
+    expect(fields).toContain("ohlc");
+    expect(fields).toContain("volume");
+    expect(fields).toContain("averageTradePrice");
+  });
+
+  test("index quote capability has OHLC but no volume or average trade price", () => {
+    const fields = upstoxCapabilities("INDEX", "full").find((r) => r.component === "quote")?.fields ?? [];
+    expect(fields).toContain("ohlc");
+    expect(fields).not.toContain("volume");
+    expect(fields).not.toContain("averageTradePrice");
+  });
+
+  test("option_greeks extra quote fields are marked unverified", () => {
+    const quote = upstoxCapabilities("MARKET", "option_greeks").find((r) => r.component === "quote")!;
+    expect(quote.fields).not.toContain("ohlc");
+    expect(quote.fields).not.toContain("averageTradePrice");
+    expect(quote.reason).toContain("unverified");
   });
 });

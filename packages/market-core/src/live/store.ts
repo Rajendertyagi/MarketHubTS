@@ -42,7 +42,7 @@ export class LiveStateStore {
   private readonly connections = new Map<ProviderId, ProviderConnectionStatus>();
   private readonly now: () => Date;
   private readonly policy: FreshnessPolicy;
-  private readonly maxInstruments: number;
+  private readonly maxInstrumentsValue: number;
   private readonly session: () => MarketSessionState;
   private readonly onEvict: ((canonicalId: string) => void) | undefined;
   private readonly listeners = new Set<(event: LiveChangeEvent) => void>();
@@ -53,13 +53,18 @@ export class LiveStateStore {
   constructor(options: LiveStateOptions) {
     this.now = options.now;
     this.policy = options.policy;
-    this.maxInstruments = options.maxInstruments;
+    this.maxInstrumentsValue = options.maxInstruments;
     this.session = options.session;
     this.onEvict = options.onEvict;
   }
 
   get revision(): number {
     return this.revisionValue;
+  }
+
+  /** Maximum number of tracked canonical instruments (for pre-flight capacity checks). */
+  get maxInstruments(): number {
+    return this.maxInstrumentsValue;
   }
 
   /**
@@ -85,8 +90,8 @@ export class LiveStateStore {
   /** Explicitly track an instrument. No automatic or silent eviction. */
   track(canonicalId: string, pinned = false): void {
     if (this.items.has(canonicalId)) return;
-    if (this.items.size >= this.maxInstruments) {
-      throw new LiveStateCapacityError(canonicalId, this.maxInstruments);
+    if (this.items.size >= this.maxInstrumentsValue) {
+      throw new LiveStateCapacityError(canonicalId, this.maxInstrumentsValue);
     }
     const nowMs = this.now().getTime();
     const item: LiveItem = {

@@ -197,9 +197,15 @@ export class ComponentStore {
     if (live.length > 0) {
       const first = live[0]!;
       const compatible = live.length > 1 && live.every((entry) => this.compatible(entry.observation, first.observation));
-      const sorted = [...live].sort((a, b) => compatible
-        ? (b.observation.sourceTimestamp?.normalizedMs ?? 0) - (a.observation.sourceTimestamp?.normalizedMs ?? 0)
-        : b.observation.receivedAtMs - a.observation.receivedAtMs);
+      const sorted = [...live].sort((a, b) => {
+        if (compatible) {
+          const bySource = (b.observation.sourceTimestamp?.normalizedMs ?? 0) - (a.observation.sourceTimestamp?.normalizedMs ?? 0);
+          // Equal source timestamps must not fall back to insertion order;
+          // receipt ordering is the controlled tie-breaker.
+          if (bySource !== 0) return bySource;
+        }
+        return b.observation.receivedAtMs - a.observation.receivedAtMs;
+      });
       const winner = sorted[0]!;
       return {
         canonicalId,
@@ -209,7 +215,7 @@ export class ComponentStore {
         mode: "LIVE",
         freshness: "FRESH",
         reason: compatible
-          ? "eligible live component; ranked by compatible source timestamp"
+          ? "eligible live component; ranked by compatible source timestamp, receipt time breaks ties"
           : "eligible live component; receivedAt fallback (incompatible or missing source timestamps)",
         observation: structuredClone(winner.observation)
       };

@@ -87,6 +87,10 @@ export function upstoxComponentUpdates(input: NormalizeObservationInput): Compon
   if (typeof input.value.lastTradedQuantity === "number") {
     quoteSet.lastTradedQuantity = { value: input.value.lastTradedQuantity, sourceTimestamp: timestamp, receivedAtMs };
   }
+  // Last traded time is available from the normalized observation boundary.
+  if (input.rawProviderTimestamp !== null) {
+    quoteSet.lastTradedTime = { value: timestamp, receivedAtMs };
+  }
   if (typeof input.value.open === "number") quoteSet.open = { value: input.value.open, receivedAtMs };
   if (typeof input.value.high === "number") quoteSet.high = { value: input.value.high, receivedAtMs };
   if (typeof input.value.low === "number") quoteSet.low = { value: input.value.low, receivedAtMs };
@@ -95,6 +99,15 @@ export function upstoxComponentUpdates(input: NormalizeObservationInput): Compon
   if (atp !== undefined) quoteSet.averageTradePrice = { value: atp, receivedAtMs };
   const records = ohlcRecords(native, timestamp);
   if (records.length > 0) quoteSet.ohlc = { value: records, receivedAtMs };
+  // Promote the documented daily bar into session OHLC/volume where supplied.
+  // Its interval `close` stays only in `ohlc[]` — never LTP or previous close.
+  const daily = records.find((r) => r.interval === "1d");
+  if (daily) {
+    quoteSet.open = { value: daily.open, receivedAtMs };
+    quoteSet.high = { value: daily.high, receivedAtMs };
+    quoteSet.low = { value: daily.low, receivedAtMs };
+    if (daily.volume !== undefined) quoteSet.volume = { value: daily.volume, receivedAtMs };
+  }
   if (Object.keys(quoteSet).length > 0) {
     updates.push({
       provider: "UPSTOX", canonicalId: input.canonicalId, component: "quote",
@@ -169,8 +182,27 @@ export function upstoxCapabilities(instrumentType: "INDEX" | "MARKET", mode: "lt
   const base = (component: CapabilityResult["component"], status: CapabilityResult["status"], extra: Partial<CapabilityResult> = {}): CapabilityResult => ({
     component, provider: "UPSTOX", status, ...extra
   });
+
+  // Quote fields are mode-specific. LTPC is documented as only LTP and close
+  // price; it must never claim OHLC, volume or average trade price.
+  let quoteFields: string[];
+  let quoteReason: string | undefined;
+  if (instrumentType === "INDEX") {
+    // IndexFullFeed = LTPC + OHLC only (no volume, no average trade price).
+    quoteFields = ["ltp", "previousClose", "lastTradedTime", "lastTradedQuantity", "ohlc"];
+  } else if (mode === "full" || mode === "full_d30") {
+    quoteFields = ["ltp", "previousClose", "lastTradedTime", "lastTradedQuantity", "ohlc", "volume", "averageTradePrice"];
+  } else if (mode === "option_greeks") {
+    // The mode table says "only Greeks"; the example/schema also shows LTPC and
+    // vtt. Those extra quote fields are documented but not guaranteed.
+    quoteFields = ["ltp", "previousClose", "lastTradedTime", "lastTradedQuantity", "volume"];
+    quoteReason = "LTPC/vtt fields appear in the example/schema but the mode table says only Greeks; live delivery unverified";
+  } else {
+    quoteFields = ["ltp", "previousClose", "lastTradedTime", "lastTradedQuantity"];
+  }
   const results: CapabilityResult[] = [base("quote", "SUPPORTED", {
-    fields: instrumentType === "INDEX" ? ["ltp", "previousClose", "ohlc"] : ["ltp", "previousClose", "lastTradedQuantity", "ohlc", "averageTradePrice"]
+    fields: quoteFields,
+    ...(quoteReason ? { reason: quoteReason } : {})
   })];
 
   if (instrumentType === "INDEX") {

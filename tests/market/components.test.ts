@@ -236,6 +236,19 @@ describe("per-component provider selection", () => {
     expect(derivatives?.value).toBeNull();
   });
 
+  test("equal source timestamps use receipt order across providers", () => {
+    const h = harness();
+    h.connect("UPSTOX");
+    h.connect("FYERS");
+    const sameTs = ts(BASE);
+    // UPSTOX is inserted first but received earlier; FYERS is received later.
+    h.service.applyComponentUpdate(quoteUpdate("UPSTOX", { ltp: field(100, BASE, sameTs) }, BASE));
+    h.service.applyComponentUpdate(quoteUpdate("FYERS", { ltp: field(200, BASE + 1000, sameTs) }, BASE + 1000));
+    const quote = h.service.getSelectedComponent(NIFTY, "quote");
+    expect(quote?.provider).toBe("FYERS");
+    expect((quote?.value as Record<string, unknown>).ltp).toBe(200);
+  });
+
   test("fields are never blended across providers into one selected component", () => {
     const h = harness();
     h.connect("UPSTOX");
