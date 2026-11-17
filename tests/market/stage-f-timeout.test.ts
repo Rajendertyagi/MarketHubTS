@@ -332,6 +332,121 @@ describe("Stage F — timeout retires the instance in both quiescence branches",
   });
 });
 
+describe("Stage F — timeout unresolved-operation recovery", () => {
+  /**
+   * A times out, stays unresolved through quiescence and is quarantined. The
+   * queue is released and a fresh B starts while A is still pending. Only then
+   * is A's old promise settled; it must be completely inert.
+   */
+  function setupTimeoutQuarantine() {
+    let created = 0;
+    const h = harness({
+      createDriver: () => {
+        created++;
+        const d = new DeferredDriver();
+        d.settleOnAbort = false; // stubborn: stays pending through quiescence
+        if (created === 2) d.autoResolveStart = true; // fresh B completes
+        return d;
+      },
+      operationTimeoutMs: 10, quiescenceMs: 20, maxAttempts: 3, baseDelayMs: 1
+    });
+    return h;
+  }
+
+  async function quarantineAndRestart(h: ReturnType<typeof harness>) {
+    const { p } = await startPending(h);
+    const a = h.instances[0]!;
+    const timeout = h.timer.last!;
+    h.timer.fire(timeout.handle as unknown as ReturnType<typeof setTimeout>);
+    const quiescence = h.timer.tasks.filter((t) => t.handle !== timeout.handle).at(-1)!;
+    h.timer.fire(quiescence.handle as unknown as ReturnType<typeof setTimeout>);
+    await flush();
+    expect(a.stopCount).toBe(1);
+    expect(h.supervisor.getLastOperationOutcome()).toMatchObject({ kind: "timed-out" });
+    await p; // queue released while A's promise is still pending
+
+    // Reconnect starts a fresh B while A remains unresolved.
+    const t = h.reconnectTimer.last!;
+    h.reconnectTimer.fire(t.handle as unknown as ReturnType<typeof setTimeout>);
+    await flush();
+    expect(h.instances.length).toBe(2);
+    const b = h.instances[1]!;
+    expect(b.starts.length).toBe(1);
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+    return { a, b };
+  }
+
+  test("late resolution of a quarantined timed-out driver is inert", async () => {
+    const h = setupTimeoutQuarantine();
+    const { a, b } = await quarantineAndRestart(h);
+    const oldCallbacks = a.callbackHistory[0]!;
+
+    const revisionBefore = h.service.revision;
+    const stateBefore = h.supervisor.getView().runtime.connectionState;
+    const outcomeBefore = h.supervisor.getLastOperationOutcome();
+    const bStartsBefore = b.starts.length;
+    const bUpdatesBefore = b.updates.length;
+    const bStopBefore = b.stopCount;
+    const retriesBefore = h.reconnectTimer.active.length;
+
+    // A's old promise resolves only after B has started.
+    expect(() => a.resolveStart()).not.toThrow();
+    await flush();
+
+    expect(a.stopCount).toBe(1); // no additional stop
+    expect(h.service.revision).toBe(revisionBefore); // no canonical mutation
+    expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
+    expect(h.supervisor.getLastOperationOutcome()).toEqual(outcomeBefore);
+    expect(h.reconnectTimer.active.length).toBe(retriesBefore); // no retry
+    expect(b.starts.length).toBe(bStartsBefore); // no effect on B
+    expect(b.updates.length).toBe(bUpdatesBefore);
+    expect(b.stopCount).toBe(bStopBefore);
+    expect(h.supervisor.getView().runtime.generation).toBe(1); // no advance from A
+
+    // Old callbacks from A remain inert.
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("STREAMING");
+    expect(h.service.revision).toBe(revisionBefore);
+    expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
+    h.cleanup();
+  });
+
+  test("late rejection of a quarantined timed-out driver is inert with no unhandled rejection", async () => {
+    const h = setupTimeoutQuarantine();
+    const { a, b } = await quarantineAndRestart(h);
+    const oldCallbacks = a.callbackHistory[0]!;
+
+    const revisionBefore = h.service.revision;
+    const stateBefore = h.supervisor.getView().runtime.connectionState;
+    const outcomeBefore = h.supervisor.getLastOperationOutcome();
+    const bStartsBefore = b.starts.length;
+    const bUpdatesBefore = b.updates.length;
+    const bStopBefore = b.stopCount;
+    const retriesBefore = h.reconnectTimer.active.length;
+
+    // A's old promise rejects only after B has started; the rejection is consumed.
+    expect(() => a.rejectStart(new Error("late start failure"))).not.toThrow();
+    await flush();
+
+    expect(a.stopCount).toBe(1); // no additional stop
+    expect(h.service.revision).toBe(revisionBefore); // no canonical mutation
+    expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
+    expect(h.supervisor.getLastOperationOutcome()).toEqual(outcomeBefore);
+    expect(h.reconnectTimer.active.length).toBe(retriesBefore); // no retry
+    expect(b.starts.length).toBe(bStartsBefore); // no effect on B
+    expect(b.updates.length).toBe(bUpdatesBefore);
+    expect(b.stopCount).toBe(bStopBefore);
+    expect(h.supervisor.getView().runtime.generation).toBe(1); // no advance from A
+
+    // Old callbacks from A remain inert.
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("ERROR", "late error");
+    expect(h.service.revision).toBe(revisionBefore);
+    expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
+    h.cleanup();
+  });
+});
+
 describe("Stage F — callback-triggered retirement while an operation is pending", () => {
   test("DISCONNECTED during pending start: callback-retired, one stop, one retry, fresh instance", async () => {
     const h = harness({

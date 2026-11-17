@@ -526,6 +526,10 @@ export class StreamSupervisor {
         if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
         try {
           if (state === "STREAMING") {
+            // A confirmed stream supersedes any reconnect timer left over from
+            // an earlier retired instance; otherwise that stale timer could
+            // fire a redundant reconciliation against the healthy instance.
+            this.cancelReconnectTimer();
             this.setConnectionState("STREAMING", null);
             this.reconnectAttempts = 0; // reset only on confirmed STREAMING
             return;

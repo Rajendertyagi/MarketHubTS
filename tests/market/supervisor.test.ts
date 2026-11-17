@@ -178,7 +178,7 @@ async function waitForGeneration(repo: SqliteSubscriptionRepository, generation:
 
 async function harnessWithCatalog(
   catalogFactory: (real: CatalogRepository) => CatalogRepository,
-  driver: StreamingDriver = new FakeDriver(),
+  createDriver: () => StreamingDriver = () => new FakeDriver(),
   reconnect?: { maxAttempts: number; baseDelayMs: number }
 ) {
   const dir = mkdtemp(join(tmpdir(), "markethub-sup2-"));
@@ -189,7 +189,13 @@ async function harnessWithCatalog(
   const service = new MarketDataService({
     now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
   });
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), createDriver: () => driver, reconnect });
+  const instances: StreamingDriver[] = [];
+  const trackedCreate = () => {
+    const instance = createDriver();
+    instances.push(instance);
+    return instance;
+  };
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), createDriver: trackedCreate, reconnect });
   const seed = async (canonicalId: string, nativeIdentifier: string) => {
     await realCatalog.transaction(async (tx) => {
       await tx.upsertInstrument(canonicalInstrumentSchema.parse({
@@ -206,7 +212,7 @@ async function harnessWithCatalog(
     closeDatabaseHandle(handle);
     removeTempDir(dir);
   };
-  return { subscriptions, service, supervisor, driver, seed, cleanup };
+  return { subscriptions, service, supervisor, get driver() { return instances[0]!; }, instances, seed, cleanup };
 }
 
 /** Manual reconnect timer scheduler for deterministic timer-race tests. */
@@ -233,7 +239,7 @@ class ManualTimerScheduler implements ReconnectTimerScheduler {
 }
 
 async function harness(
-  driver: StreamingDriver = new FakeDriver(),
+  createDriver: () => StreamingDriver = () => new FakeDriver(),
   reconnect?: { maxAttempts: number; baseDelayMs: number },
   reconnectTimerScheduler?: ReconnectTimerScheduler
 ) {
@@ -245,7 +251,13 @@ async function harness(
   const service = new MarketDataService({
     now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
   });
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, createDriver: () => driver, reconnect, reconnectTimerScheduler });
+  const instances: StreamingDriver[] = [];
+  const trackedCreate = () => {
+    const instance = createDriver();
+    instances.push(instance);
+    return instance;
+  };
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, createDriver: trackedCreate, reconnect, reconnectTimerScheduler });
 
   const seed = async (canonicalId: string, nativeIdentifier: string, mappingStatus: "ACTIVE" | "INACTIVE" = "ACTIVE", provider: "UPSTOX" | "FYERS" = "UPSTOX") => {
     await catalog.transaction(async (tx) => {
@@ -264,7 +276,7 @@ async function harness(
     closeDatabaseHandle(handle);
     removeTempDir(dir);
   };
-  return { catalog, subscriptions, service, supervisor, driver, seed, cleanup };
+  return { catalog, subscriptions, service, supervisor, get driver() { return instances[0]!; }, instances, seed, cleanup };
 }
 
 describe("StreamSupervisor", () => {
@@ -359,16 +371,25 @@ describe("StreamSupervisor", () => {
     h.cleanup();
   });
 
-  test("bounded retry is exercised with a fake driver", async () => {
-    const driver = new FakeDriver();
-    driver.failStart = true;
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+  test("bounded retry is exercised with a fresh failing driver per attempt", async () => {
+    const h = await harness(() => {
+      const d = new FakeDriver();
+      d.failStart = true;
+      return d;
+    }, { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
-    expect(driver.starts.length).toBe(1);
+    expect(h.instances.length).toBe(1);
+    expect((h.instances[0] as FakeDriver).starts.length).toBe(1);
     await Bun.sleep(50);
-    expect(driver.starts.length).toBe(2); // exactly one bounded retry
+    expect(h.instances.length).toBe(2); // exactly one bounded retry
+    // Retired instances are never restarted and stopped at most once.
+    for (const instance of h.instances) {
+      expect((instance as FakeDriver).starts.length).toBe(1);
+      expect((instance as FakeDriver).stopCount).toBe(1);
+    }
+    expect(h.instances[0]).not.toBe(h.instances[1]);
     h.cleanup();
   });
 
@@ -388,7 +409,7 @@ describe("StreamSupervisor", () => {
 describe("review fixes — supervisor lifecycle and generation", () => {
   test("stop cancels a pending driver start and cleans up the resolved driver", async () => {
     const driver = new DeferredDriver();
-    const h = await harness(driver);
+    const h = await harness(() => driver);
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
 
@@ -417,7 +438,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
 
   test("stop then rejection of a pending start performs final cleanup", async () => {
     const driver = new DeferredDriver();
-    const h = await harness(driver);
+    const h = await harness(() => driver);
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
 
@@ -436,25 +457,30 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     h.cleanup();
   });
 
-  test("a current start failure cleans up before retrying", async () => {
-    const driver = new AllocatingFailDriver();
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+  test("a current start failure cleans up before retrying with a fresh instance", async () => {
+    const h = await harness(() => new AllocatingFailDriver(), { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
 
     // First failed start already cleaned up its partial allocation.
-    expect(driver.starts).toBe(1);
-    expect(driver.stopCount).toBe(1);
+    expect(h.instances.length).toBe(1);
+    expect((h.instances[0] as AllocatingFailDriver).starts).toBe(1);
+    expect((h.instances[0] as AllocatingFailDriver).stopCount).toBe(1);
     await Bun.sleep(50);
-    expect(driver.starts).toBe(2); // one bounded retry
-    expect(driver.stopCount).toBe(2); // cleanup after each failed start
+    expect(h.instances.length).toBe(2); // one bounded retry
+    // Each instance started once and was stopped at most once; none restarted.
+    for (const instance of h.instances) {
+      expect((instance as AllocatingFailDriver).starts).toBe(1);
+      expect((instance as AllocatingFailDriver).stopCount).toBe(1);
+    }
+    expect(h.instances[0]).not.toBe(h.instances[1]);
     h.cleanup();
   });
 
   test("a pending update rejection after stop leaves NOT_STARTED with no retry", async () => {
     const driver = new DeferredDriver();
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    const h = await harness(() => driver, { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.seed(B, "key-B");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
@@ -599,11 +625,10 @@ describe("review fixes — supervisor lifecycle and generation", () => {
 
   test("applied generation advances after a successful retry of the same generation", async () => {
     let toggle!: ReturnType<typeof toggleableMappings>;
-    const driver = new FakeDriver();
     const h = await harnessWithCatalog((real) => {
       toggle = toggleableMappings(real);
       return toggle.catalog;
-    }, driver, { maxAttempts: 1, baseDelayMs: 1 });
+    }, () => new FakeDriver(), { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.seed(B, "key-B");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]); // gen 1
@@ -617,9 +642,14 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     toggle.setFail(false);
     // A driver-reported disconnect triggers a bounded reconnect that reconciles
     // the latest committed generation (2) without a new PUT.
-    driver.emitState("DISCONNECTED");
+    (h.instances[0] as FakeDriver).emitState("DISCONNECTED");
     await Bun.sleep(50);
 
+    expect(h.instances.length).toBe(2);
+    for (const instance of h.instances) {
+      expect((instance as FakeDriver).starts.length).toBe(1); // never restarted
+      expect((instance as FakeDriver).stopCount).toBeLessThanOrEqual(1); // at most once
+    }
     const view = h.supervisor.getView();
     expect(view.generation).toBe(2);
     expect(view.runtime.generation).toBe(2); // advanced after successful retry
@@ -630,29 +660,32 @@ describe("review fixes — supervisor lifecycle and generation", () => {
 
 describe("final supervisor lifecycle corrections", () => {
   test("DISCONNECTED retires the driver and retries with a fresh start", async () => {
-    const driver = new FakeDriver();
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    const h = await harness(() => new FakeDriver(), { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
 
-    expect(driver.starts.length).toBe(1);
-    expect(driver.updates.length).toBe(0);
+    const first = h.instances[0] as FakeDriver;
+    expect(first.starts.length).toBe(1);
+    expect(first.updates.length).toBe(0);
     expect(h.supervisor.getView().runtime.generation).toBe(1);
-    const oldCallbacks = driver.callbackHistory[0]!;
-    const stopCountBefore = driver.stopCount;
+    const oldCallbacks = first.callbackHistory[0]!;
 
     // Simulate the driver losing its session.
-    driver.emitState("DISCONNECTED");
-    expect(driver.stopCount).toBe(stopCountBefore + 1); // old driver retired immediately
+    first.emitState("DISCONNECTED");
+    expect(first.stopCount).toBe(1); // old driver retired immediately
 
     // Bounded retry must perform a fresh start, not update the dead driver.
     await Bun.sleep(50);
-    expect(driver.starts.length).toBe(2);
-    expect(driver.updates.length).toBe(0);
+    expect(h.instances.length).toBe(2);
+    const second = h.instances[1] as FakeDriver;
+    expect(second.starts.length).toBe(1);
+    expect(second.updates.length).toBe(0);
+    expect(first.starts.length).toBe(1); // retired instance never restarted
+    expect(first.stopCount).toBe(1); // stopped at most once
 
     // New driver instance reaches STREAMING.
-    driver.emitState("STREAMING");
+    second.emitState("STREAMING");
     const view = h.supervisor.getView();
     expect(view.runtime.connectionState).toBe("STREAMING");
     expect(view.runtime.generation).toBe(1);
@@ -668,20 +701,24 @@ describe("final supervisor lifecycle corrections", () => {
   });
 
   test("ERROR retires the driver and retries with a fresh start", async () => {
-    const driver = new FakeDriver();
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    const h = await harness(() => new FakeDriver(), { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
-    const oldCallbacks = driver.callbackHistory[0]!;
+    const first = h.instances[0] as FakeDriver;
+    const oldCallbacks = first.callbackHistory[0]!;
 
-    driver.emitState("ERROR", "stream failed");
+    first.emitState("ERROR", "stream failed");
     expect(h.supervisor.getView().runtime.lastError).toContain("stream failed"); // recorded immediately
     await Bun.sleep(50);
-    expect(driver.starts.length).toBe(2);
-    expect(driver.updates.length).toBe(0);
+    expect(h.instances.length).toBe(2);
+    const second = h.instances[1] as FakeDriver;
+    expect(second.starts.length).toBe(1);
+    expect(second.updates.length).toBe(0);
+    expect(first.starts.length).toBe(1); // retired instance never restarted
+    expect(first.stopCount).toBe(1); // stopped at most once
 
-    driver.emitState("STREAMING");
+    second.emitState("STREAMING");
     expect(h.supervisor.getView().runtime.lastError).toBeNull(); // cleared on successful restart
     const revision = h.service.revision;
     oldCallbacks.onObservation(observation(A, 999));
@@ -693,7 +730,7 @@ describe("final supervisor lifecycle corrections", () => {
 
   test("empty desired set retires the driver and invalidates its callbacks", async () => {
     const driver = new FakeDriver();
-    const h = await harness(driver);
+    const h = await harness(() => driver);
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
@@ -714,7 +751,7 @@ describe("final supervisor lifecycle corrections", () => {
 
   test("pending update resolving after stop cleans up again without advancing applied generation", async () => {
     const driver = new DeferredDriver();
-    const h = await harness(driver);
+    const h = await harness(() => driver);
     await h.seed(A, "key-A");
     await h.seed(B, "key-B");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
@@ -753,7 +790,7 @@ describe("final supervisor lifecycle corrections", () => {
 
   test("pending update rejecting after stop cleans up again with no retry or state overwrite", async () => {
     const driver = new DeferredDriver();
-    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    const h = await harness(() => driver, { maxAttempts: 1, baseDelayMs: 1 });
     await h.seed(A, "key-A");
     await h.seed(B, "key-B");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
@@ -793,30 +830,31 @@ describe("final supervisor lifecycle corrections", () => {
 
   test("stale reconnect timer is cancelled so a newer driver epoch can retry", async () => {
     const scheduler = new ManualTimerScheduler();
-    const driver = new FakeDriver();
-    const h = await harness(driver, { maxAttempts: 3, baseDelayMs: 1000 }, scheduler);
+    const h = await harness(() => new FakeDriver(), { maxAttempts: 3, baseDelayMs: 1000 }, scheduler);
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
 
     // 1. Driver A started successfully.
-    expect(driver.starts.length).toBe(1);
-    const callbacksA = driver.callbackHistory[0]!;
+    const a = h.instances[0] as FakeDriver;
+    expect(a.starts.length).toBe(1);
+    const callbacksA = a.callbackHistory[0]!;
 
     // 2. A disconnects -> reconnect timer T1 is scheduled.
-    driver.emitState("DISCONNECTED");
+    a.emitState("DISCONNECTED");
     expect(scheduler.active.length).toBe(1);
     const t1 = scheduler.active[0]!.handle;
 
     // 3. Before T1 fires, a subscription replacement starts fresh driver B.
     await h.supervisor.replaceSubscriptions([{ canonicalId: A, enabled: true }]);
-    expect(driver.starts.length).toBe(2);
-    const callbacksB = driver.callbackHistory[1]!;
+    expect(h.instances.length).toBe(2);
+    const b = h.instances[1] as FakeDriver;
+    const callbacksB = b.callbackHistory[0]!;
     // T1 is still pending at this point (a fresh start does not retire a timer).
     expect(scheduler.active.some((t) => t.handle === t1)).toBe(true);
 
     // 4. B disconnects before T1 fires.
-    driver.emitState("DISCONNECTED");
+    b.emitState("DISCONNECTED");
     // 5. T1 is cancelled and a new timer T2 is scheduled for B.
     expect(scheduler.tasks.find((t) => t.handle === t1)!.cancelled).toBe(true);
     expect(scheduler.active.length).toBe(1);
@@ -826,8 +864,15 @@ describe("final supervisor lifecycle corrections", () => {
     // 6. Fire T2 -> a third fresh start occurs; no update of a dead driver.
     scheduler.fire(t2);
     await Bun.sleep(20);
-    expect(driver.starts.length).toBe(3);
-    expect(driver.updates.length).toBe(0);
+    expect(h.instances.length).toBe(3);
+    const c = h.instances[2] as FakeDriver;
+    expect(c.starts.length).toBe(1);
+    expect(a.updates.length).toBe(0);
+    expect(b.updates.length).toBe(0);
+    for (const instance of [a, b, c]) {
+      expect(instance.starts.length).toBe(1); // retired instances never restarted
+      expect(instance.stopCount).toBeLessThanOrEqual(1); // at most once
+    }
 
     // 8. Callbacks from A and B cannot mutate canonical state or connection state.
     const revision = h.service.revision;
@@ -838,6 +883,42 @@ describe("final supervisor lifecycle corrections", () => {
     callbacksB.onConnectionState("DISCONNECTED");
     expect(h.service.revision).toBe(revision);
     expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
+    h.cleanup();
+  });
+
+  test("confirmed STREAMING cancels a stale reconnect timer from a retired instance", async () => {
+    const scheduler = new ManualTimerScheduler();
+    const h = await harness(() => new FakeDriver(), { maxAttempts: 3, baseDelayMs: 1000 }, scheduler);
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+
+    // A disconnects and schedules T1.
+    const a = h.instances[0] as FakeDriver;
+    a.emitState("DISCONNECTED");
+    expect(scheduler.active.length).toBe(1);
+    const t1 = scheduler.active[0]!.handle;
+
+    // A manual reconciliation starts fresh B while T1 is still pending.
+    await h.supervisor.replaceSubscriptions([{ canonicalId: A, enabled: true }]);
+    expect(h.instances.length).toBe(2);
+    const b = h.instances[1] as FakeDriver;
+    expect(scheduler.active.some((t) => t.handle === t1)).toBe(true);
+
+    // B confirms STREAMING -> the stale timer is cancelled.
+    b.emitState("STREAMING");
+    expect(scheduler.tasks.find((t) => t.handle === t1)!.cancelled).toBe(true);
+    expect(scheduler.active.length).toBe(0);
+
+    // Firing the stale timer cannot trigger a redundant reconciliation.
+    const startsBefore = h.instances.reduce((n, i) => n + (i as FakeDriver).starts.length, 0);
+    const updatesBefore = h.instances.reduce((n, i) => n + (i as FakeDriver).updates.length, 0);
+    scheduler.fire(t1);
+    await Bun.sleep(20);
+    expect(h.instances.length).toBe(2); // no new instance acquired
+    expect(h.instances.reduce((n, i) => n + (i as FakeDriver).starts.length, 0)).toBe(startsBefore);
+    expect(h.instances.reduce((n, i) => n + (i as FakeDriver).updates.length, 0)).toBe(updatesBefore);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
     h.cleanup();
   });
 });
@@ -860,7 +941,7 @@ describe("locked production driver boundary", () => {
   });
 
   test("supervisor with the locked driver reports ERROR without any real connection", async () => {
-    const h = await harness(new LockedUpstoxDriver());
+    const h = await harness(() => new LockedUpstoxDriver());
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
