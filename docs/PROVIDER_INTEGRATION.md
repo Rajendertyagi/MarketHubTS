@@ -1,15 +1,15 @@
 # Provider Integration
 
-> **Status:** Confirmed requirements and target adapter design. M3 readiness research is complete: Upstox and FYERS authentication, app types and published rate limits are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live broker integration is implemented yet; M3 implementation is a separate authorized assignment. Items still unknown are marked **(verify)**.
-> **Last updated:** 2026-11-16
+> **Status:** Confirmed requirements and adapter design. M1–M3 are published on `develop`; M4 Stage B (Upstox V3 streaming via the official SDK) is published. FYERS streaming (Stage C) remains on hold. Authentication, app types and published rate limits for both providers are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live provider connection or real-account authentication has been performed; all provider tests use mocks. Items still unknown are marked **(verify)**.
+> **Last updated:** 2026-11-17
 > **Related:** [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [REFERENCES.md](REFERENCES.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Providers (initial)
 
 | Provider | Role | Status |
 |---|---|---|
-| Upstox | Read-only market data via **Analytics Token**; streaming/historical/option-chain as supported | **Planned** — adapter scaffold only (`packages/broker-upstox`) |
-| FYERS | Read-only market data via V3 **non-trading (data-only) app**; streaming/historical as supported | **Planned** — adapter scaffold only (`packages/broker-fyers`) |
+| Upstox | Read-only market data via **Analytics Token**; streaming/historical/option-chain as supported | **Implemented:** auth adapter (M3) + V3 market-data streaming via official `upstox-js-sdk@2.31.0` (M4 Stage B). Historical/option-chain remain future milestones. |
+| FYERS | Read-only market data via V3 **non-trading (data-only) app**; streaming/historical as supported | **Implemented:** auth adapter (M3). Data Socket streaming (Stage C) studied and planned but **on hold / not implemented**. |
 
 Both must operate **independently and simultaneously** whenever configured. Additional providers may be introduced later without changing MCP or WebUI contracts.
 
@@ -34,7 +34,7 @@ These decisions govern M3 implementation. Full source list in [REFERENCES.md](RE
 - Design for **Standard** limits (Data APIs 5/s, 50/min, 5,000/day; Transaction/User Info 10/s, 200/min, 100,000/day as of 16 Oct 2026). Prime-only capabilities (expired F&O, historical Greeks, 1,000-symbol quotes, 5,000 data-socket symbols, 15 TBT) are not assumed.
 
 **Shared M3 decisions**
-- Bun native `fetch` for REST; no broker SDKs; no new runtime dependencies.
+- Bun native `fetch` for REST; no broker SDKs; no new runtime dependencies. **M4 Stage B exception:** Upstox market-data streaming uses the official `upstox-js-sdk@2.31.0` (pinned) — a deliberate, scoped reversal of the no-SDK decision for that one provider's feed only (see §6). FYERS REST/auth still uses native `fetch`; no FYERS SDK is used.
 - Credentials stored via a portable encrypted store (see AD-021): encrypted in SQLite with one key file in the app folder; no Windows/OS credential store, no plaintext fallback.
 - No hardcoded plan limits; report actual capability and restrictions; unknown entitlements stay unknown.
 - Privileged credential operations are loopback-only; CORS/Origin is not security; no app-level login introduced.
@@ -99,8 +99,8 @@ Each adapter must handle (as applicable and supported):
 | Redirect URI | **Verified:** any redirect URL under developer control is permitted; loopback is acceptable if registered exactly. |
 | Token expiry | **Verified:** daily 6:30 AM; no confirmed refresh endpoint — do not assume renewal. |
 | Rate limits | **Verified:** official notice effective 16 Oct 2026 — Standard Data APIs 5/s, 50/min, 5,000/day; Transaction/User Info 10/s, 200/min, 100,000/day. Prime-only capabilities not assumed. |
-| SDK/Bun | **Resolved for M3:** direct Bun `fetch`; no broker SDKs installed. |
-| Market data / WebSocket | Data socket 100 symbols (Standard), TBT 1 symbol; protocol/fields remain **M4** verification. |
+| SDK/Bun | **M3:** direct Bun `fetch`; no FYERS SDK used. FYERS Data Socket streaming (Stage C) is on hold — no FYERS SDK is installed. |
+| Market data / WebSocket | Data socket 100 symbols (Standard), TBT 1 symbol. Protocol/fields studied in the Stage C preflight; implementation on hold. |
 | Historical / expired F&O | Standard: daily 5 yrs, intraday 1 yr, expired F&O daily 2 yrs; broader access is Prime-only — **M5** entitlement decision. |
 | Quotes/depth/option chain fields | Field availability **(verify)** before M4/M5; never fabricate missing fields. |
 
@@ -111,11 +111,11 @@ Each adapter must handle (as applicable and supported):
 - Privileged credential operations are loopback-only; CORS/Origin is not security; no app-level login introduced.
 - Full backup/restore (AD-014) must include the key file; a database-only copy is not a complete backup. Backup/restore implementation is M9.
 
-## 9. Current implementation status (M3, uncommitted)
+## 9. Current implementation status (M1–M3 + M4 Stage B, published on `develop`)
 
 - `packages/database/src/credentials.ts`: `SqliteCredentialStore` — AES-256-GCM encrypted credentials in `provider_credentials`, 32-byte key file beside the database, per-record random nonce, AAD bound to provider/name, format versioning, fail-closed on missing/corrupt key, explicit reset.
 - `packages/market-core/src/provider.ts`: minimal `ProviderRegistry` with per-provider fault isolation and sanitized errors; `fetchWithTimeout`.
-- `packages/broker-upstox`: Analytics Token adapter validating via `GET /v2/market/status/NSE`; no OAuth/trading endpoints.
+- `packages/broker-upstox`: Analytics Token adapter validating via `GET /v2/market/status/NSE`; no OAuth/trading endpoints. **M4 Stage B:** V3 market-data streaming via official `upstox-js-sdk@2.31.0` (pinned) — SDK used for market-data streaming only; MarketHubTS retains subscription ownership, normalization, freshness and reconnection.
 - `packages/broker-fyers`: V3 non-trading-app OAuth adapter with random single-use state, backend `appIdHash`, loopback callback, daily 06:30 IST expiry, profile validation (PII discarded), logout on removal.
 - `apps/api`: LAN-safe read-only `GET /api/providers/status`; credential-changing routes live on the same app behind one simple local-peer check (no separate management server, no CSRF framework). FYERS callback is loopback-only with single-use state validation.
 - Reliability: bounded timeouts, bounded jittered retry for idempotent REST reads (429 respects `Retry-After`; no delay information means no retry), **no retry of the single-use FYERS code exchange**, atomic credential upserts, empty-replacement rejection, fail-closed key handling, and per-provider fault isolation.
@@ -125,7 +125,7 @@ Each adapter must handle (as applicable and supported):
 - FYERS redirect URI must be loopback and point to `/api/provider/fyers/callback`; mismatched or non-loopback URIs are rejected.
 - WebUI provider panel has functional controls for token/config/secret entry, auth start, validate and remove; status diagnostics remain.
 - `apps/web`: minimal provider status panel; no credentials displayed.
-- No broker SDKs installed; no live data flows or live authentication performed. All provider tests use mocked responses.
+- Broker SDK: official `upstox-js-sdk@2.31.0` is installed for Upstox market-data streaming only (M4 Stage B, scoped exception); no FYERS SDK. No live provider connection or real-account authentication has been performed; all provider tests use mocked responses.
 
 ## 10. Open verification items
 
