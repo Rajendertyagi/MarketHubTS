@@ -76,9 +76,11 @@ async function main() {
   const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
   const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
   // Stage D production boundary: the real Upstox SDK driver is never constructed.
-  const driver = new LockedUpstoxDriver();
+  // A fresh locked driver is created on every acquisition; no provider connection
+  // is ever attempted. Only a separately authorized Stage G change may unlock it.
   supervisor = new StreamSupervisor({
-    service, subscriptions, catalog, driver,
+    service, subscriptions, catalog,
+    createDriver: () => new LockedUpstoxDriver(),
     reconnect: { maxAttempts: policy.reconnectMaxAttempts, baseDelayMs: policy.reconnectBaseDelayMs }
   });
   await supervisor.start();

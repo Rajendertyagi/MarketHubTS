@@ -25,9 +25,10 @@ export interface DriverCallbacks {
 export interface StreamingDriver {
   /** Locked drivers never construct an SDK, open a socket or schedule retries. */
   readonly locked?: boolean;
-  start(subscriptions: DriverSubscription[], callbacks: DriverCallbacks): Promise<void>;
-  updateSubscriptions(subscriptions: DriverSubscription[]): Promise<void>;
-  /** Must be safely repeatable: retirement and a settling operation may both call it. */
+  /** The signal is mandatory; implementations must pass it to the underlying operation. */
+  start(subscriptions: DriverSubscription[], callbacks: DriverCallbacks, signal: AbortSignal): Promise<void>;
+  updateSubscriptions(subscriptions: DriverSubscription[], signal: AbortSignal): Promise<void>;
+  /** Must be safely repeatable; the supervisor calls it at most once per instance. */
   stop(): void;
   getConnectionState(): ProviderConnectionState;
 }
@@ -52,11 +53,13 @@ export class LockedUpstoxDriver implements StreamingDriver {
     return "NOT_STARTED";
   }
 
-  async start(): Promise<void> {
+  async start(
+    _subscriptions?: DriverSubscription[], _callbacks?: DriverCallbacks, _signal?: AbortSignal
+  ): Promise<void> {
     throw new DriverLockedError();
   }
 
-  async updateSubscriptions(): Promise<void> {
+  async updateSubscriptions(_subscriptions?: DriverSubscription[], _signal?: AbortSignal): Promise<void> {
     throw new DriverLockedError();
   }
 
@@ -85,7 +88,7 @@ export class SubscriptionPersistenceError extends Error {
   }
 }
 
-/** Narrow seam for deterministic reconnect-timer control in tests. */
+/** Narrow seam for deterministic timer control in tests. */
 export interface ReconnectTimerScheduler {
   set(fn: () => void, ms: number): ReturnType<typeof setTimeout>;
   clear(handle: ReturnType<typeof setTimeout>): void;
@@ -96,15 +99,57 @@ const defaultReconnectTimerScheduler: ReconnectTimerScheduler = {
   clear: (handle) => clearTimeout(handle)
 };
 
+/**
+ * Supervisor-owned logical outcome. Only a normal successful settle reports
+ * `applied`; every other terminal path reports a distinct non-applied outcome.
+ * Queue release never implies successful application.
+ */
+export type OperationOutcome =
+  | { kind: "applied" }
+  | { kind: "failed"; error: string }
+  | { kind: "timed-out"; error: string }
+  | { kind: "callback-retired"; reason: "DISCONNECTED" | "ERROR" }
+  | { kind: "shutdown" };
+
+type OperationState = "active" | "aborting" | "settled" | "retired";
+
+interface DriverInstance {
+  readonly driver: StreamingDriver;
+  readonly locked: boolean;
+  readonly epoch: number;
+  retired: boolean;
+  callbacksEnabled: boolean;
+  underlyingSettled: boolean;
+  currentOperation: Operation | null;
+}
+
+interface Operation {
+  readonly epoch: number;
+  readonly kind: "start" | "update";
+  readonly controller: AbortController;
+  readonly instance: DriverInstance;
+  readonly logicalCompletion: Promise<OperationOutcome>;
+  readonly resolveLogical: (outcome: OperationOutcome) => void;
+  state: OperationState;
+  timeoutHandle: ReturnType<typeof setTimeout> | null;
+}
+
 export interface StreamSupervisorOptions {
   service: MarketDataService;
   subscriptions: SubscriptionRepository;
   catalog: CatalogRepository;
-  driver: StreamingDriver;
+  /** Factory for a fresh driver instance on every acquisition/restart. */
+  createDriver: () => StreamingDriver;
   provider?: ProviderId;
   reconnect?: { maxAttempts: number; baseDelayMs: number };
   sleep?: (ms: number) => Promise<void>;
   reconnectTimerScheduler?: ReconnectTimerScheduler;
+  /** Timer seam for operation timeouts and bounded quiescence. */
+  timerScheduler?: ReconnectTimerScheduler;
+  operationTimeoutMs?: number;
+  quiescenceMs?: number;
+  /** Deterministic jitter source; delay = base * 2^attempt * (0.5 + random()*0.5). */
+  random?: () => number;
 }
 
 export interface ReplaceSubscriptionsResult {
@@ -116,6 +161,10 @@ export interface ReplaceSubscriptionsResult {
  * Owns desired-subscription reconciliation and runtime streaming state. Kept
  * separate from ProviderRegistry (auth/status only). Writes runtime connection
  * state through the canonical MarketDataService.
+ *
+ * Every driver instance is terminal: once retired it is never restarted or
+ * reused. Every start acquires a fresh factory-created instance, including
+ * ordinary disconnects, errors and failed start/update operations.
  */
 export class StreamSupervisor {
   private readonly provider: ProviderId;
@@ -130,18 +179,24 @@ export class StreamSupervisor {
   private connectionState: ProviderConnectionState = "NOT_STARTED";
   private lastError: string | null = null;
   private driverStarted = false;
-  /** True from just before driver.start() until its promise actually settles. */
-  private startPending = false;
-  /** True from just before updateSubscriptions() until its promise settles. */
-  private updatePending = false;
+  private currentInstance: DriverInstance | null = null;
+  private lockedDriver = false;
+  private readonly operations = new Set<Operation>();
+  private readonly quiescenceWaiters = new Set<() => void>();
   /** Epoch of the active driver instance; incremented on every retirement. */
   private epoch = 0;
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private lastOutcome: OperationOutcome | null = null;
 
   constructor(private readonly opts: StreamSupervisorOptions) {
     this.provider = opts.provider ?? "UPSTOX";
+  }
+
+  /** Diagnostic seam: the most recently resolved logical operation outcome. */
+  getLastOperationOutcome(): OperationOutcome | null {
+    return this.lastOutcome;
   }
 
   /** Load persisted desired state and reconcile once at startup. */
@@ -224,7 +279,6 @@ export class StreamSupervisor {
       const mappings = await this.opts.catalog.listMappingsByCanonicalId(selection.canonicalId);
       const active = mappings.find((m) => m.provider === this.provider && m.status === "ACTIVE");
       if (active) {
-        // Native identifier stays internal — used only for the driver handoff.
         resolutions.push({
           canonicalId: selection.canonicalId, enabled: true, available: true, reason: null
         });
@@ -268,62 +322,280 @@ export class StreamSupervisor {
     // Empty desired set / no eligible mappings: retire any current driver and
     // invalidate its callbacks, then report NOT_STARTED.
     if (driverSubscriptions.length === 0) {
-      this.retireDriver();
+      if (this.currentInstance) this.retireInstance(this.currentInstance, "no-subscriptions");
       this.setConnectionState("NOT_STARTED", null);
       return true;
     }
 
     // A retired/disconnected driver must be replaced with a fresh start, never
     // updated in place (a disconnected adapter's update does not reconnect).
-    if (!this.driverStarted) {
+    if (!this.currentInstance || this.currentInstance.retired || !this.driverStarted) {
       return await this.startDriver(driverSubscriptions);
     }
+    return await this.updateDriver(driverSubscriptions);
+  }
 
-    const updateEpoch = this.epoch;
-    this.updatePending = true;
-    try {
-      await this.opts.driver.updateSubscriptions(driverSubscriptions);
-      if (this.stopped || updateEpoch !== this.epoch) {
-        // Settled after shutdown/retirement: final cleanup, not a success.
-        this.finishPendingUpdate();
-        return false;
-      }
-      this.updatePending = false;
-      return true;
-    } catch (error) {
-      if (this.stopped || updateEpoch !== this.epoch) {
-        // Late rejection: final cleanup only; no state/error/retry mutation.
-        this.finishPendingUpdate();
-        return false;
-      }
-      this.updatePending = false;
-      this.lastError = errorMessage(error);
-      this.setConnectionState("ERROR", this.lastError);
-      this.retireDriver();
-      if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
-      return false;
+  /** Acquire a fresh driver instance from the factory. */
+  private acquireInstance(): DriverInstance {
+    const driver = this.opts.createDriver();
+    const instance: DriverInstance = {
+      driver,
+      locked: driver.locked === true,
+      epoch: this.epoch,
+      retired: false,
+      callbacksEnabled: true,
+      underlyingSettled: false,
+      currentOperation: null
+    };
+    this.currentInstance = instance;
+    this.lockedDriver = instance.locked;
+    this.driverStarted = false;
+    return instance;
+  }
+
+  /** Begin a supervisor-owned logical operation on an instance. */
+  private beginOperation(instance: DriverInstance, kind: "start" | "update"): Operation {
+    const controller = new AbortController();
+    let resolveLogical!: (outcome: OperationOutcome) => void;
+    const logicalCompletion = new Promise<OperationOutcome>((resolve) => { resolveLogical = resolve; });
+    const op: Operation = {
+      epoch: instance.epoch,
+      kind,
+      controller,
+      instance,
+      logicalCompletion,
+      resolveLogical,
+      state: "active",
+      timeoutHandle: null
+    };
+    instance.currentOperation = op;
+    this.operations.add(op);
+    return op;
+  }
+
+  /** Resolve an operation's logical completion exactly once. */
+  private resolveOperation(op: Operation, outcome: OperationOutcome): void {
+    this.clearOperationTimeout(op);
+    op.state = outcome.kind === "applied" ? "settled" : "retired";
+    op.instance.currentOperation = null;
+    this.operations.delete(op);
+    this.lastOutcome = outcome;
+    op.resolveLogical(outcome);
+  }
+
+  private clearOperationTimeout(op: Operation): void {
+    if (op.timeoutHandle) {
+      this.timer.clear(op.timeoutHandle);
+      op.timeoutHandle = null;
     }
   }
 
-  /** Final cleanup for an update that settled after shutdown or retirement. */
-  private finishPendingUpdate(): void {
-    if (this.updatePending) {
-      this.opts.driver.stop();
-      this.updatePending = false;
-    }
+  private get timer(): ReconnectTimerScheduler {
+    return this.opts.timerScheduler ?? defaultReconnectTimerScheduler;
+  }
+
+  private armOperationTimeout(op: Operation): void {
+    const ms = this.opts.operationTimeoutMs ?? 5000;
+    op.timeoutHandle = this.timer.set(() => { void this.onOperationTimeout(op); }, ms);
   }
 
   /**
-   * Retire the current driver instance: invalidate its callback epoch, cancel
-   * any reconnect timer scheduled for the old instance, and stop the driver.
-   * Pending start/update flags are retained so their settle paths perform
-   * final cleanup. Returns the new epoch for reconnect scheduling.
+   * Attach consumers to the raw driver promise. While active, a settle performs
+   * normal handling; while aborting, it only records settlement and wakes the
+   * quiescence waiter; after retirement it is fully inert. Late settle/reject
+   * is always consumed so there is no unhandled rejection.
    */
-  private retireDriver(): number {
+  private attachSettlement(op: Operation, raw: Promise<void>): void {
+    const settle = (kind: "resolve" | "reject", error?: unknown) => {
+      op.instance.underlyingSettled = true;
+      if (op.state === "active") {
+        this.clearOperationTimeout(op);
+        if (kind === "resolve") {
+          this.driverStarted = true;
+          this.lastError = null;
+          this.resolveOperation(op, { kind: "applied" });
+        } else {
+          const message = errorMessage(error);
+          this.lastError = message;
+          this.setConnectionState("ERROR", message);
+          this.retireInstance(op.instance, "failed");
+          this.resolveOperation(op, { kind: "failed", error: message });
+          this.scheduleReconnect(this.epoch, message);
+        }
+      } else if (op.state === "aborting") {
+        this.wakeQuiescence();
+      }
+      // settled/retired: inert.
+    };
+    raw.then(() => settle("resolve"), (error) => settle("reject", error));
+  }
+
+  /** Await bounded quiescence on the underlying driver promise. */
+  private awaitQuiescence(op: Operation): Promise<void> {
+    if (op.instance.underlyingSettled) return Promise.resolve();
+    const ms = this.opts.quiescenceMs ?? 1000;
+    return new Promise<void>((resolve) => {
+      let done = false;
+      let handle: ReturnType<typeof setTimeout> | null = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        if (handle) this.timer.clear(handle);
+        this.quiescenceWaiters.delete(onSettled);
+        resolve();
+      };
+      const onSettled = () => { if (op.instance.underlyingSettled) finish(); };
+      this.quiescenceWaiters.add(onSettled);
+      handle = this.timer.set(finish, ms);
+    });
+  }
+
+  private wakeQuiescence(): void {
+    for (const wake of [...this.quiescenceWaiters]) wake();
+  }
+
+  /**
+   * The single idempotent retirement owner. The only code that calls
+   * instance.stop(); at most once per instance. Returns true if this caller
+   * owned the retirement.
+   */
+  private retireInstance(instance: DriverInstance, reason: string): boolean {
+    if (instance.retired) return false;
+    instance.retired = true;
+    instance.callbacksEnabled = false;
     this.epoch++;
     this.cancelReconnectTimer();
-    this.stopDriverResource();
-    return this.epoch;
+    if (this.currentInstance === instance) {
+      this.currentInstance = null;
+      this.driverStarted = false;
+    }
+    try { instance.driver.stop(); } catch { /* retirement must not throw */ }
+    return true;
+  }
+
+  /** Timeout lifecycle owner: retire, stop once, resolve timed-out, own retry. */
+  private async onOperationTimeout(op: Operation): Promise<void> {
+    if (op.state !== "active") return; // single-flight
+    op.state = "aborting";
+    op.instance.callbacksEnabled = false; // synchronous, before abort
+    const error = `operation timed out after ${this.opts.operationTimeoutMs ?? 5000}ms`;
+    this.lastError = error;
+    this.setConnectionState("ERROR", error);
+    try { op.controller.abort(); } catch { /* abort must not throw */ }
+    await this.awaitQuiescence(op);
+    this.retireInstance(op.instance, "timeout");
+    this.resolveOperation(op, { kind: "timed-out", error });
+    this.scheduleReconnect(this.epoch, error);
+  }
+
+  /** Callback lifecycle owner for a DISCONNECTED/ERROR during a pending op. */
+  private async retireFromCallback(
+    instance: DriverInstance, op: Operation, cause: string, reason: "DISCONNECTED" | "ERROR"
+  ): Promise<void> {
+    instance.callbacksEnabled = false; // synchronous, before abort
+    op.state = "aborting";
+    try { op.controller.abort(); } catch { /* abort must not throw */ }
+    this.clearOperationTimeout(op);
+    await this.awaitQuiescence(op);
+    this.retireInstance(instance, `callback:${reason.toLowerCase()}`);
+    this.resolveOperation(op, { kind: "callback-retired", reason });
+    this.scheduleReconnect(this.epoch, cause);
+  }
+
+  /** Build the callback set for an instance, gated by instance and epoch. */
+  private makeCallbacks(instance: DriverInstance): DriverCallbacks {
+    const epoch = instance.epoch;
+    return {
+      onObservation: (input) => {
+        if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
+        try {
+          this.opts.service.applyProviderUpdate(input);
+        } catch {
+          // Late or invalid observations must not corrupt shared state.
+        }
+      },
+      onConnectionState: (state, error) => {
+        if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
+        try {
+          if (state === "STREAMING") {
+            this.setConnectionState("STREAMING", null);
+            this.reconnectAttempts = 0; // reset only on confirmed STREAMING
+            return;
+          }
+          if (state === "DISCONNECTED" || state === "ERROR") {
+            const cause = state === "ERROR"
+              ? (error ?? "provider error")
+              : (error ?? "provider disconnected");
+            if (state === "ERROR") this.lastError = cause;
+            const op = instance.currentOperation;
+            if (op && op.state === "active") {
+              void this.retireFromCallback(instance, op, cause, state);
+            } else {
+              this.retireInstance(instance, `callback:${state.toLowerCase()}`);
+              this.scheduleReconnect(this.epoch, cause);
+            }
+            return;
+          }
+          this.setConnectionState(state, error ?? null);
+        } catch {
+          // Callback failures are isolated from the driver and the service.
+        }
+      }
+    };
+  }
+
+  /** Returns true only when the driver start completed for the current epoch. */
+  private async startDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
+    let instance: DriverInstance;
+    try {
+      instance = this.acquireInstance();
+    } catch (error) {
+      // Factory failure: no instance acquired, never classified as locked.
+      this.lockedDriver = false;
+      this.lastError = `driver factory failed: ${errorMessage(error)}`;
+      this.setConnectionState("ERROR", this.lastError);
+      this.scheduleReconnect(this.epoch, this.lastError);
+      return false;
+    }
+
+    const op = this.beginOperation(instance, "start");
+    this.setConnectionState("CONNECTING", null);
+    let raw: Promise<void>;
+    try {
+      raw = instance.driver.start(subscriptions, this.makeCallbacks(instance), op.controller.signal);
+    } catch (error) {
+      const message = errorMessage(error);
+      this.lastError = message;
+      this.setConnectionState("ERROR", message);
+      this.retireInstance(instance, "failed");
+      this.resolveOperation(op, { kind: "failed", error: message });
+      this.scheduleReconnect(this.epoch, message);
+      return false;
+    }
+    this.attachSettlement(op, raw);
+    this.armOperationTimeout(op);
+    return await op.logicalCompletion.then((outcome) => outcome.kind === "applied");
+  }
+
+  /** Returns true only when the driver update completed for the current epoch. */
+  private async updateDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
+    const instance = this.currentInstance!;
+    const op = this.beginOperation(instance, "update");
+    let raw: Promise<void>;
+    try {
+      raw = instance.driver.updateSubscriptions(subscriptions, op.controller.signal);
+    } catch (error) {
+      const message = errorMessage(error);
+      this.lastError = message;
+      this.setConnectionState("ERROR", message);
+      this.retireInstance(instance, "failed");
+      this.resolveOperation(op, { kind: "failed", error: message });
+      this.scheduleReconnect(this.epoch, message);
+      return false;
+    }
+    this.attachSettlement(op, raw);
+    this.armOperationTimeout(op);
+    return await op.logicalCompletion.then((outcome) => outcome.kind === "applied");
   }
 
   /** Cancel a pending reconnect timer so it cannot suppress a newer retry. */
@@ -334,92 +606,19 @@ export class StreamSupervisor {
     }
   }
 
-  /**
-   * Stop the driver resource. Does not clear startPending/updatePending: those
-   * flags are retained so in-flight operations can clean up when they settle.
-   */
-  private stopDriverResource(): void {
-    if (this.driverStarted || this.startPending || this.updatePending) {
-      this.opts.driver.stop();
-      this.driverStarted = false;
-    }
-  }
-
-  /** Returns true only when the driver start completed for the current epoch. */
-  private async startDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
-    const epoch = ++this.epoch;
-    this.startPending = true;
-    this.setConnectionState("CONNECTING", null);
-    try {
-      await this.opts.driver.start(subscriptions, {
-        onObservation: (input) => {
-          if (epoch !== this.epoch || this.stopped) return;
-          try {
-            this.opts.service.applyProviderUpdate(input);
-          } catch {
-            // Late or invalid observations must not corrupt shared state.
-          }
-        },
-        onConnectionState: (state, error) => {
-          if (epoch !== this.epoch || this.stopped) return;
-          try {
-            this.setConnectionState(state, error ?? null);
-            if (state === "STREAMING") {
-              this.reconnectAttempts = 0;
-            } else if ((state === "DISCONNECTED" || state === "ERROR") && !this.opts.driver.locked) {
-              // Loss of this driver instance/session: retire it (invalidating
-              // its callbacks) so the bounded retry performs a fresh start.
-              if (state === "ERROR") this.lastError = error ?? "provider error";
-              const newEpoch = this.retireDriver();
-              this.scheduleReconnect(newEpoch);
-            }
-          } catch {
-            // Callback failures are isolated from the driver and the service.
-          }
-        }
-      });
-      if (epoch !== this.epoch || this.stopped) {
-        // Settled after stop/retirement: final cleanup; never mark started.
-        if (this.startPending) {
-          this.opts.driver.stop();
-          this.startPending = false;
-        }
-        return false;
-      }
-      this.startPending = false;
-      this.driverStarted = true;
-      this.lastError = null;
-      return true;
-    } catch (error) {
-      if (epoch !== this.epoch || this.stopped) {
-        // A rejected start may have allocated resources: final cleanup.
-        if (this.startPending) {
-          this.opts.driver.stop();
-          this.startPending = false;
-        }
-        return false;
-      }
-      this.startPending = false;
-      this.lastError = errorMessage(error);
-      this.setConnectionState("ERROR", this.lastError);
-      this.driverStarted = false;
-      // A failed start may have partially allocated resources: stop before retry.
-      this.opts.driver.stop();
-      // Invalidate callbacks from the failed attempt and cancel any stale timer
-      // from a previous instance, then retry with a fresh epoch.
-      this.epoch++;
-      this.cancelReconnectTimer();
-      if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
-      return false;
-    }
-  }
-
-  private scheduleReconnect(epoch: number): void {
-    if (this.reconnectTimer || this.stopped || this.opts.driver.locked) return;
+  private scheduleReconnect(epoch: number, cause: string): void {
+    if (this.reconnectTimer || this.stopped || this.lockedDriver) return;
     const maxAttempts = this.opts.reconnect?.maxAttempts ?? 5;
     const baseDelayMs = this.opts.reconnect?.baseDelayMs ?? 1000;
-    if (this.reconnectAttempts >= maxAttempts) return;
-    const delay = baseDelayMs * 2 ** this.reconnectAttempts;
+    if (this.reconnectAttempts >= maxAttempts) {
+      // Explicit exhaustion: the previous silent return left state unchanged.
+      const message = `retry budget exhausted after ${maxAttempts} attempts: ${cause}`;
+      this.lastError = message;
+      this.setConnectionState("ERROR", message);
+      return;
+    }
+    const jitter = 0.5 + (this.opts.random?.() ?? 0.5) * 0.5;
+    const delay = baseDelayMs * 2 ** this.reconnectAttempts * jitter;
     this.reconnectAttempts++;
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const scheduler = this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler;
@@ -454,10 +653,16 @@ export class StreamSupervisor {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    // retireDriver invalidates callbacks, cancels any pending reconnect timer
-    // and stops the driver; pending operations retain their flags so their
-    // settle paths perform final cleanup.
-    this.retireDriver();
+    for (const op of [...this.operations]) {
+      if (op.state !== "active") continue;
+      op.state = "aborting";
+      op.instance.callbacksEnabled = false; // synchronous, before abort
+      try { op.controller.abort(); } catch { /* abort must not throw */ }
+      this.resolveOperation(op, { kind: "shutdown" });
+    }
+    this.wakeQuiescence();
+    this.cancelReconnectTimer();
+    if (this.currentInstance) this.retireInstance(this.currentInstance, "shutdown");
     this.setConnectionState("NOT_STARTED", null);
   }
 }

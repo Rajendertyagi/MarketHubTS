@@ -31,7 +31,7 @@ class FakeDriver implements StreamingDriver {
   state = "NOT_STARTED";
   failStart = false;
 
-  async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
+  async start(subs: DriverSubscription[], callbacks: DriverCallbacks, _signal: AbortSignal): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
     this.callbackHistory.push(callbacks);
@@ -39,7 +39,7 @@ class FakeDriver implements StreamingDriver {
     this.state = "CONNECTING";
     callbacks.onConnectionState("CONNECTING");
   }
-  async updateSubscriptions(subs: DriverSubscription[]): Promise<void> {
+  async updateSubscriptions(subs: DriverSubscription[], _signal: AbortSignal): Promise<void> {
     this.updates.push(subs.map((s) => ({ ...s })));
   }
   stop(): void { this.stopCount++; this.state = "DISCONNECTED"; }
@@ -72,7 +72,7 @@ class DeferredDriver implements StreamingDriver {
   private resolveUpdate: (() => void) | null = null;
   private rejectUpdate: ((e: Error) => void) | null = null;
 
-  async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
+  async start(subs: DriverSubscription[], callbacks: DriverCallbacks, signal: AbortSignal): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
     this.callbackHistory.push(callbacks);
@@ -81,15 +81,17 @@ class DeferredDriver implements StreamingDriver {
     await new Promise<void>((resolve, reject) => {
       this.resolveStart = resolve;
       this.rejectStart = reject;
+      signal.addEventListener("abort", () => resolve(), { once: true });
     });
   }
-  async updateSubscriptions(subs: DriverSubscription[]): Promise<void> {
+  async updateSubscriptions(subs: DriverSubscription[], signal: AbortSignal): Promise<void> {
     this.updates.push(subs.map((s) => ({ ...s })));
     this.updateCalled = true;
     for (const wake of this.updateWaiters.splice(0)) wake();
     await new Promise<void>((resolve, reject) => {
       this.resolveUpdate = resolve;
       this.rejectUpdate = reject;
+      signal.addEventListener("abort", () => resolve(), { once: true });
     });
   }
   stop(): void { this.stopCount++; }
@@ -112,11 +114,11 @@ class DeferredDriver implements StreamingDriver {
 class AllocatingFailDriver implements StreamingDriver {
   starts = 0;
   stopCount = 0;
-  async start(): Promise<void> {
+  async start(_subs?: DriverSubscription[], _callbacks?: DriverCallbacks, _signal?: AbortSignal): Promise<void> {
     this.starts++;
     throw new Error("start failed after allocation");
   }
-  async updateSubscriptions(): Promise<void> {}
+  async updateSubscriptions(_subs?: DriverSubscription[], _signal?: AbortSignal): Promise<void> {}
   stop(): void { this.stopCount++; }
   getConnectionState() { return "NOT_STARTED"; }
 }
@@ -187,7 +189,7 @@ async function harnessWithCatalog(
   const service = new MarketDataService({
     now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
   });
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), driver, reconnect });
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), createDriver: () => driver, reconnect });
   const seed = async (canonicalId: string, nativeIdentifier: string) => {
     await realCatalog.transaction(async (tx) => {
       await tx.upsertInstrument(canonicalInstrumentSchema.parse({
@@ -243,7 +245,7 @@ async function harness(
   const service = new MarketDataService({
     now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
   });
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, driver, reconnect, reconnectTimerScheduler });
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, createDriver: () => driver, reconnect, reconnectTimerScheduler });
 
   const seed = async (canonicalId: string, nativeIdentifier: string, mappingStatus: "ACTIVE" | "INACTIVE" = "ACTIVE", provider: "UPSTOX" | "FYERS" = "UPSTOX") => {
     await catalog.transaction(async (tx) => {
@@ -401,8 +403,8 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     driver.resolvePendingStart();
     await startPromise;
 
-    // Immediate stop at shutdown plus final cleanup when the start settles.
-    expect(driver.stopCount).toBe(2);
+    // Terminal retirement: the instance is stopped exactly once; late settlement is inert.
+    expect(driver.stopCount).toBe(1);
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
 
@@ -428,7 +430,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     driver.rejectPendingStart();
     await startPromise;
 
-    expect(driver.stopCount).toBe(2); // final cleanup after rejection settles
+    expect(driver.stopCount).toBe(1); // terminal retirement; late rejection is inert
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
     h.cleanup();
@@ -491,7 +493,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     });
     const driver = new FakeDriver();
     const deferred = deferredMappings(realCatalog);
-    const supervisor = new StreamSupervisor({ service, subscriptions, catalog: deferred.catalog, driver });
+    const supervisor = new StreamSupervisor({ service, subscriptions, catalog: deferred.catalog, createDriver: () => driver });
 
     await realCatalog.transaction(async (tx) => {
       for (const [id, key] of [[A, "key-A"], [B, "key-B"]] as const) {
@@ -551,7 +553,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
       }
     } as unknown as CatalogRepository;
     const supervisor = new StreamSupervisor({
-      service, subscriptions, catalog: failingCatalog, driver: new FakeDriver()
+      service, subscriptions, catalog: failingCatalog, createDriver: () => new FakeDriver()
     });
 
     await realCatalog.transaction(async (tx) => {
@@ -736,7 +738,7 @@ describe("final supervisor lifecycle corrections", () => {
     driver.resolvePendingUpdate();
     await replacePromise;
 
-    expect(driver.stopCount).toBe(stopCountBefore + 2); // final cleanup after settlement
+    expect(driver.stopCount).toBe(stopCountBefore + 1); // terminal retirement; late settlement is inert
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
     expect(h.supervisor.getView().runtime.generation).toBe(1); // not advanced
     expect(h.service.revision).toBe(revisionAtStop);
@@ -773,7 +775,7 @@ describe("final supervisor lifecycle corrections", () => {
     await replacePromise;
     await Bun.sleep(30); // surface any incorrect retry
 
-    expect(driver.stopCount).toBe(stopCountBefore + 2); // final cleanup after settlement
+    expect(driver.stopCount).toBe(stopCountBefore + 1); // terminal retirement; late settlement is inert
     expect(driver.starts.length).toBe(1); // no retry
     const view = h.supervisor.getView();
     expect(view.runtime.connectionState).toBe("NOT_STARTED");
@@ -845,10 +847,11 @@ describe("locked production driver boundary", () => {
     const locked = new LockedUpstoxDriver();
     expect(locked.getConnectionState()).toBe("NOT_STARTED");
     let rejected = 0;
-    try { await locked.start([], { onObservation: () => {}, onConnectionState: () => {} }); } catch (e) {
+    const signal = new AbortController().signal;
+    try { await locked.start([], { onObservation: () => {}, onConnectionState: () => {} }, signal); } catch (e) {
       expect(e).toBeInstanceOf(DriverLockedError); rejected++;
     }
-    try { await locked.updateSubscriptions([]); } catch (e) {
+    try { await locked.updateSubscriptions([], signal); } catch (e) {
       expect(e).toBeInstanceOf(DriverLockedError); rejected++;
     }
     expect(() => locked.stop()).not.toThrow();
