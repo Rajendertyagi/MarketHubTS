@@ -1,7 +1,7 @@
 # Provider Integration
 
-> **Status:** Confirmed requirements and adapter design. M1–M3, M4 Stages A/B and **M4 Stages D and E are published on `develop` and accepted** (Stage D final commit `f51e7db`; Stage E commits `ea0cae0`, `00e6830`, `a8f4eef` plus final closeout fixes). FYERS streaming (Stage C) remains on hold. Authentication, app types and published rate limits for both providers are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live provider connection or real-account authentication has been performed; all provider tests use mocks/fake drivers. Items still unknown are marked **(verify)**.
-> **Last updated:** 2026-11-17
+> **Status:** Confirmed requirements and adapter design. M1–M3, M4 Stages A/B and **M4 Stages D and E are published on `develop` and accepted** (Stage D final commit `f51e7db`; Stage E commits `ea0cae0`, `00e6830`, `a8f4eef` plus final closeout fixes). **M4 Stage C (FYERS Data Socket adapter) is implemented on `develop`** — adapter-only; the production driver remains locked. Authentication, app types and published rate limits for both providers are verified from official sources (see [REFERENCES.md](REFERENCES.md)). No live provider connection or real-account authentication has been performed; all provider tests use mocks/fake drivers. Items still unknown are marked **(verify)**.
+> **Last updated:** 2026-11-18
 > **Related:** [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [REFERENCES.md](REFERENCES.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Providers (initial)
@@ -9,7 +9,7 @@
 | Provider | Role | Status |
 |---|---|---|
 | Upstox | Read-only market data via **Analytics Token**; streaming/historical/option-chain as supported | **Implemented:** auth adapter (M3) + V3 market-data streaming via official `upstox-js-sdk@2.31.0` (M4 Stage B). Historical/option-chain remain future milestones. |
-| FYERS | Read-only market data via V3 **non-trading (data-only) app**; streaming/historical as supported | **Implemented:** auth adapter (M3). Data Socket streaming (Stage C) studied and planned but **on hold / not implemented**. |
+| FYERS | Read-only market data via V3 **non-trading (data-only) app**; streaming/historical as supported | **Implemented:** auth adapter (M3) + Data Socket streaming adapter (M4 Stage C, official `fyers-api-v3@2.4.1` pinned). Production driver remains locked; historical remains future. |
 
 Both must operate **independently and simultaneously** whenever configured. Additional providers may be introduced later without changing MCP or WebUI contracts.
 
@@ -34,7 +34,7 @@ These decisions govern M3 implementation. Full source list in [REFERENCES.md](RE
 - Design for **Standard** limits (Data APIs 5/s, 50/min, 5,000/day; Transaction/User Info 10/s, 200/min, 100,000/day as of 16 Oct 2026). Prime-only capabilities (expired F&O, historical Greeks, 1,000-symbol quotes, 5,000 data-socket symbols, 15 TBT) are not assumed.
 
 **Shared M3 decisions**
-- Bun native `fetch` for REST; no broker SDKs; no new runtime dependencies. **M4 Stage B exception:** Upstox market-data streaming uses the official `upstox-js-sdk@2.31.0` (pinned) — a deliberate, scoped reversal of the no-SDK decision for that one provider's feed only (see §6). FYERS REST/auth still uses native `fetch`; no FYERS SDK is used.
+- Bun native `fetch` for REST; no broker SDKs; no new runtime dependencies. **M4 Stage B exception:** Upstox market-data streaming uses the official `upstox-js-sdk@2.31.0` (pinned) — a deliberate, scoped reversal of the no-SDK decision for that one provider's feed only (see §6). **M4 Stage C exception:** FYERS Data Socket streaming uses the official `fyers-api-v3@2.4.1` (pinned) — a second scoped reversal for that one provider's feed only (see §7A). FYERS REST/auth still uses native `fetch`; the SDK is confined to the streaming adapter.
 - Credentials stored via a portable encrypted store (see AD-021): encrypted in SQLite with one key file in the app folder; no Windows/OS credential store, no plaintext fallback.
 - No hardcoded plan limits; report actual capability and restrictions; unknown entitlements stay unknown.
 - Privileged credential operations are loopback-only; CORS/Origin is not security; no app-level login introduced.
@@ -99,10 +99,27 @@ Each adapter must handle (as applicable and supported):
 | Redirect URI | **Verified:** any redirect URL under developer control is permitted; loopback is acceptable if registered exactly. |
 | Token expiry | **Verified:** daily 6:30 AM; no confirmed refresh endpoint — do not assume renewal. |
 | Rate limits | **Verified:** official notice effective 16 Oct 2026 — Standard Data APIs 5/s, 50/min, 5,000/day; Transaction/User Info 10/s, 200/min, 100,000/day. Prime-only capabilities not assumed. |
-| SDK/Bun | **M3:** direct Bun `fetch`; no FYERS SDK used. FYERS Data Socket streaming (Stage C) is on hold — no FYERS SDK is installed. |
+| SDK/Bun | **M3:** direct Bun `fetch` for REST/auth. **M4 Stage C (scoped exception):** official `fyers-api-v3@2.4.1` (pinned) is used for **Data Socket streaming only**; no order/trading operation is introduced. See §7A. |
 | Market data / WebSocket | Data socket 100 symbols (Standard), 5,000 (Prime), per user across all connections; TBT 1/15. Protocol/fields studied in the Stage C preflight; implementation on hold. **Verified 2026-11-17:** price (`sf`) and five-level depth (`dp`) are separate messages/subscriptions; `sf` carries LTP, day OHLC, `prev_close_price`, `vol_traded_today`, `avg_trade_price`, `ch`/`chp`, last-traded fields and L1 bid/ask; index (`if`) explicitly has **no volume or bid/ask**; OI/IV/Greeks are **not** in the Data Socket (REST `include_oi`/`include_greeks` only). `last_traded_time` is documented only as an integer — its unit/precision is **not** stated and must not be inferred from the type (bounded live-validation item). Raw wire protocol is undocumented and only the obfuscated `fyers-api-v3` SDK implements it — a native Bun WebSocket is not viable from documentation alone. Field-level capability matrix and merge/timestamp rules: [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md) §6, §7.1, §9, §12. |
 | Historical / expired F&O | Standard: daily 5 yrs, intraday 1 yr, expired F&O daily 2 yrs; broader access is Prime-only — **M5** entitlement decision. |
 | Quotes/depth/option chain fields | Field availability **(verify)** before M4/M5; never fabricate missing fields. |
+
+## 7A. M4 Stage C — FYERS Data Socket adapter (decision record)
+
+Stage C adds `packages/broker-fyers/src/stream.ts`: a thin, adapter-only wrapper around the official `fyers-api-v3@2.4.1` SDK. It is **structurally compatible** with the supervisor's `StreamingDriver` seam but defines its own interfaces inside `broker-fyers` and imports nothing from `apps/api`. Production wiring and activation remain locked; no live socket, authentication or network call is performed.
+
+**Why the SDK (scoped no-SDK exception).** The raw HSM wire protocol is undocumented and only the obfuscated SDK implements it; a native Bun WebSocket reimplementation would be neither lean nor durable. The exception is confined to this one provider's market-data feed, mirroring the Stage B Upstox exception.
+
+**Verified SDK facts (tarball inspection + runtime probes, 2026-11-18).**
+- `DataSocket.getInstance(token, logPath, false)` — the third argument disables logging; the token is never logged.
+- `autoreconnect()` is **opt-in** and its argument is a retry count (`autoreconnect(false)` would *enable* it). The wrapper never calls it; the supervisor owns retry with a fresh adapter instance.
+- The SDK object is a **process-wide singleton**: `getInstance()` returns the same object after `close()` and even with a different token; there is no reset method. The fresh-instance guarantee applies to the **adapter wrapper**, not the SDK object. The adapter calls `close()` on retirement so the shared socket is released before the next instance connects; only one adapter instance may be active at a time.
+- `on(event, cb)` is **single-slot** (no `removeListener`/`off`); a second registration overwrites the first, and `close()` does not detach. Every new adapter instance therefore re-registers all four events (`connect`/`message`/`error`/`close`); a generation guard makes any callback firing before re-registration inert. No listener accumulation is possible.
+- **Token rotation requires a process restart.** A fresh wrapper cannot guarantee fresh authentication because the singleton does not re-apply credentials. FYERS tokens expire daily at 06:30 IST with no confirmed refresh endpoint; restart (or a process boundary) is a Stage G operational concern, not solvable in-process here.
+
+**Component mapping and protection.** `sf` → quote (LTP, previous close, OHLC, volume, average trade price, change/percent, last-traded fields) plus L1 best bid/ask depth; `dp` → five-level depth only; `if` (index) → reduced quote with no volume or bid/ask. OI/IV/Greeks are absent from the Data Socket and are reported unsupported, never fabricated. `last_traded_time`/`exch_feed_time` units are undocumented: values are stored verbatim with unit `UNKNOWN`, untrusted, and receipt ordering is used until live verification (Stage G). The adapter tracks five-level depth per symbol: once `dp` depth is emitted, later `sf` L1 depth for that symbol is suppressed while quote fields continue. Reset is surgical — protection is cleared only for symbols removed from the subscription set or on full retirement; retained symbols keep it.
+
+**Limits.** No hardcoded symbol cap and no silent truncation: the desired set is submitted as-is. Connection-preventing over-limit rejections are classified as `LIMITED` with a reason (via connection state and capability report), the shared desired state is left unchanged, and entitlements remain `UNKNOWN` until verified.
 
 ## 8. Security and safety
 
@@ -117,7 +134,7 @@ Each adapter must handle (as applicable and supported):
 - `packages/market-core/src/provider.ts`: minimal `ProviderRegistry` with per-provider fault isolation and sanitized errors; `fetchWithTimeout`.
 - `packages/broker-upstox`: Analytics Token adapter validating via `GET /v2/market/status/NSE`; no OAuth/trading endpoints. **M4 Stage B:** V3 market-data streaming via official `upstox-js-sdk@2.31.0` (pinned) — SDK used for market-data streaming only; MarketHubTS retains subscription ownership, normalization, freshness and reconnection.
 - **M4 Stage D locked boundary:** the real Upstox streaming SDK driver is not instantiated in production. The supervisor consumes a provider-agnostic driver seam; production composition uses `LockedUpstoxDriver`, which fails safely on any start/update attempt and never constructs the SDK, opens a socket or schedules retries. Only deterministic fake drivers are used in tests. Real driver construction and connection behavior require a separately authorized, independently reviewed Stage G change.
-- `packages/broker-fyers`: V3 non-trading-app OAuth adapter with random single-use state, backend `appIdHash`, loopback callback, daily 06:30 IST expiry, profile validation (PII discarded), logout on removal.
+- `packages/broker-fyers`: V3 non-trading-app OAuth adapter with random single-use state, backend `appIdHash`, loopback callback, daily 06:30 IST expiry, profile validation (PII discarded), logout on removal. **M4 Stage C:** Data Socket streaming adapter (`src/stream.ts`) with its own structurally compatible driver interfaces, generation guards, all-four-event re-registration, adapter-side depth protection and canonical component updates; production driver remains locked.
 - `apps/api`: LAN-safe read-only `GET /api/providers/status`; credential-changing routes live on the same app behind one simple local-peer check (no separate management server, no CSRF framework). FYERS callback is loopback-only with single-use state validation.
 - Reliability: bounded timeouts, bounded jittered retry for idempotent REST reads (429 respects `Retry-After`; no delay information means no retry), **no retry of the single-use FYERS code exchange**, atomic credential upserts, empty-replacement rejection, fail-closed key handling, and per-provider fault isolation.
 - Durable non-secret settings: `provider_settings` table stores FYERS App ID/redirect URI and Upstox/FYERS expiry metadata; loaded on startup. Secrets remain only in the encrypted `CredentialStore`.
@@ -126,8 +143,8 @@ Each adapter must handle (as applicable and supported):
 - FYERS redirect URI must be loopback and point to `/api/provider/fyers/callback`; mismatched or non-loopback URIs are rejected.
 - WebUI provider panel has functional controls for token/config/secret entry, auth start, validate and remove; status diagnostics remain.
 - `apps/web`: minimal provider status panel; no credentials displayed.
-- Broker SDK: official `upstox-js-sdk@2.31.0` is installed for Upstox market-data streaming only (M4 Stage B, scoped exception); no FYERS SDK. No live provider connection or real-account authentication has been performed; all provider tests use mocked responses.
+- Broker SDKs: official `upstox-js-sdk@2.31.0` (M4 Stage B) and `fyers-api-v3@2.4.1` (M4 Stage C) are installed for market-data streaming only (scoped exceptions); neither is used for orders/trading. No live provider connection or real-account authentication has been performed; all provider tests use mocked responses.
 
 ## 10. Open verification items
 
-See [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md) and [REFERENCES.md](REFERENCES.md) for remaining gaps: actual account entitlements, Analytics Token generation on the account, exact provider field availability, FYERS Data Socket protocol and field delivery (Stage C, currently on hold), and historical/expired entitlements (M5).
+See [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md) and [REFERENCES.md](REFERENCES.md) for remaining gaps: actual account entitlements, Analytics Token generation on the account, exact provider field availability, FYERS Data Socket field delivery and timestamp units (adapter implemented in Stage C; live verification is a Stage G gate), SDK execution under Bun (Stage G smoke test), token rotation via process restart, and historical/expired entitlements (M5).

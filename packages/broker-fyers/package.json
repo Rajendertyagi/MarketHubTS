@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@markethub/contracts": "workspace:*",
-    "@markethub/market-core": "workspace:*"
+    "@markethub/market-core": "workspace:*",
+    "fyers-api-v3": "2.4.1"
   },
   "devDependencies": {
     "typescript": "7.0.2"
