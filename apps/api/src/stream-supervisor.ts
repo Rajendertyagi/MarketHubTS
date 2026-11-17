@@ -27,7 +27,7 @@ export interface StreamingDriver {
   readonly locked?: boolean;
   start(subscriptions: DriverSubscription[], callbacks: DriverCallbacks): Promise<void>;
   updateSubscriptions(subscriptions: DriverSubscription[]): Promise<void>;
-  /** Must be safely repeatable: shutdown and a settling start may both call it. */
+  /** Must be safely repeatable: retirement and a settling operation may both call it. */
   stop(): void;
   getConnectionState(): ProviderConnectionState;
 }
@@ -120,6 +120,9 @@ export class StreamSupervisor {
   private driverStarted = false;
   /** True from just before driver.start() until its promise actually settles. */
   private startPending = false;
+  /** True from just before updateSubscriptions() until its promise settles. */
+  private updatePending = false;
+  /** Epoch of the active driver instance; incremented on every retirement. */
   private epoch = 0;
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -250,37 +253,71 @@ export class StreamSupervisor {
       }
     }
 
-    // Empty desired set is valid: stop any stream and report NOT_STARTED.
+    // Empty desired set / no eligible mappings: retire any current driver and
+    // invalidate its callbacks, then report NOT_STARTED.
     if (driverSubscriptions.length === 0) {
-      this.stopDriverResource();
+      this.retireDriver();
       this.setConnectionState("NOT_STARTED", null);
       return true;
     }
 
+    // A retired/disconnected driver must be replaced with a fresh start, never
+    // updated in place (a disconnected adapter's update does not reconnect).
     if (!this.driverStarted) {
       return await this.startDriver(driverSubscriptions);
     }
+
+    const updateEpoch = this.epoch;
+    this.updatePending = true;
     try {
       await this.opts.driver.updateSubscriptions(driverSubscriptions);
+      if (this.stopped || updateEpoch !== this.epoch) {
+        // Settled after shutdown/retirement: final cleanup, not a success.
+        this.finishPendingUpdate();
+        return false;
+      }
+      this.updatePending = false;
       return true;
     } catch (error) {
-      // A pending update rejecting after shutdown must not overwrite
-      // NOT_STARTED, schedule a retry, or mutate canonical state.
-      if (this.stopped) return false;
+      if (this.stopped || updateEpoch !== this.epoch) {
+        // Late rejection: final cleanup only; no state/error/retry mutation.
+        this.finishPendingUpdate();
+        return false;
+      }
+      this.updatePending = false;
       this.lastError = errorMessage(error);
       this.setConnectionState("ERROR", this.lastError);
-      this.stopDriverResource();
+      this.retireDriver();
       if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
       return false;
     }
   }
 
+  /** Final cleanup for an update that settled after shutdown or retirement. */
+  private finishPendingUpdate(): void {
+    if (this.updatePending) {
+      this.opts.driver.stop();
+      this.updatePending = false;
+    }
+  }
+
   /**
-   * Stop the driver resource. Does not clear startPending: a start promise may
-   * still be in flight and needs a final cleanup when it settles.
+   * Retire the current driver instance: invalidate its callback epoch and stop
+   * it. Pending start/update flags are retained so their settle paths perform
+   * final cleanup. Returns the new epoch for reconnect scheduling.
+   */
+  private retireDriver(): number {
+    this.epoch++;
+    this.stopDriverResource();
+    return this.epoch;
+  }
+
+  /**
+   * Stop the driver resource. Does not clear startPending/updatePending: those
+   * flags are retained so in-flight operations can clean up when they settle.
    */
   private stopDriverResource(): void {
-    if (this.driverStarted || this.startPending) {
+    if (this.driverStarted || this.startPending || this.updatePending) {
       this.opts.driver.stop();
       this.driverStarted = false;
     }
@@ -308,7 +345,11 @@ export class StreamSupervisor {
             if (state === "STREAMING") {
               this.reconnectAttempts = 0;
             } else if ((state === "DISCONNECTED" || state === "ERROR") && !this.opts.driver.locked) {
-              this.scheduleReconnect(epoch);
+              // Loss of this driver instance/session: retire it (invalidating
+              // its callbacks) so the bounded retry performs a fresh start.
+              if (state === "ERROR") this.lastError = error ?? "provider error";
+              const newEpoch = this.retireDriver();
+              this.scheduleReconnect(newEpoch);
             }
           } catch {
             // Callback failures are isolated from the driver and the service.
@@ -316,7 +357,7 @@ export class StreamSupervisor {
         }
       });
       if (epoch !== this.epoch || this.stopped) {
-        // Settled after stop/supersede: final cleanup now that it settled.
+        // Settled after stop/retirement: final cleanup; never mark started.
         if (this.startPending) {
           this.opts.driver.stop();
           this.startPending = false;
@@ -342,8 +383,9 @@ export class StreamSupervisor {
       this.driverStarted = false;
       // A failed start may have partially allocated resources: stop before retry.
       this.opts.driver.stop();
-      // Locked drivers never schedule connection retries.
-      if (!this.opts.driver.locked) this.scheduleReconnect(epoch);
+      // Invalidate callbacks from the failed attempt, then retry with a fresh epoch.
+      this.epoch++;
+      if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
       return false;
     }
   }
@@ -387,13 +429,13 @@ export class StreamSupervisor {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.epoch++;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    // Immediate stop; startPending is retained until the start promise settles.
-    this.stopDriverResource();
+    // Invalidate callbacks and stop immediately; pending operations retain
+    // their flags so their settle paths perform final cleanup.
+    this.retireDriver();
     this.setConnectionState("NOT_STARTED", null);
   }
 }

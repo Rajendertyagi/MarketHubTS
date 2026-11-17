@@ -26,12 +26,15 @@ class FakeDriver implements StreamingDriver {
   updates: DriverSubscription[][] = [];
   stopCount = 0;
   callbacks: DriverCallbacks | null = null;
+  /** All callback sets handed out, one per start(), so old instances can be replayed. */
+  callbackHistory: DriverCallbacks[] = [];
   state = "NOT_STARTED";
   failStart = false;
 
   async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
+    this.callbackHistory.push(callbacks);
     if (this.failStart) throw new Error("start failed");
     this.state = "CONNECTING";
     callbacks.onConnectionState("CONNECTING");
@@ -63,13 +66,16 @@ class DeferredDriver implements StreamingDriver {
   private readonly startWaiters: Array<() => void> = [];
   private resolveStart: (() => void) | null = null;
   private rejectStart: ((e: Error) => void) | null = null;
+  callbackHistory: DriverCallbacks[] = [];
   private updateCalled = false;
   private readonly updateWaiters: Array<() => void> = [];
+  private resolveUpdate: (() => void) | null = null;
   private rejectUpdate: ((e: Error) => void) | null = null;
 
   async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
+    this.callbackHistory.push(callbacks);
     this.startCalled = true;
     for (const wake of this.startWaiters.splice(0)) wake();
     await new Promise<void>((resolve, reject) => {
@@ -81,7 +87,10 @@ class DeferredDriver implements StreamingDriver {
     this.updates.push(subs.map((s) => ({ ...s })));
     this.updateCalled = true;
     for (const wake of this.updateWaiters.splice(0)) wake();
-    await new Promise<void>((_resolve, reject) => { this.rejectUpdate = reject; });
+    await new Promise<void>((resolve, reject) => {
+      this.resolveUpdate = resolve;
+      this.rejectUpdate = reject;
+    });
   }
   stop(): void { this.stopCount++; }
   getConnectionState() { return "NOT_STARTED"; }
@@ -95,6 +104,7 @@ class DeferredDriver implements StreamingDriver {
   }
   resolvePendingStart(): void { this.resolveStart?.(); }
   rejectPendingStart(error = new Error("start failed")): void { this.rejectStart?.(error); }
+  resolvePendingUpdate(): void { this.resolveUpdate?.(); }
   rejectPendingUpdate(error = new Error("update failed")): void { this.rejectUpdate?.(error); }
 }
 
@@ -585,6 +595,170 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     expect(view.generation).toBe(2);
     expect(view.runtime.generation).toBe(2); // advanced after successful retry
     expect(view.runtime.lastError).toBeNull();
+    h.cleanup();
+  });
+});
+
+describe("final supervisor lifecycle corrections", () => {
+  test("DISCONNECTED retires the driver and retries with a fresh start", async () => {
+    const driver = new FakeDriver();
+    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+
+    expect(driver.starts.length).toBe(1);
+    expect(driver.updates.length).toBe(0);
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+    const oldCallbacks = driver.callbackHistory[0]!;
+    const stopCountBefore = driver.stopCount;
+
+    // Simulate the driver losing its session.
+    driver.emitState("DISCONNECTED");
+    expect(driver.stopCount).toBe(stopCountBefore + 1); // old driver retired immediately
+
+    // Bounded retry must perform a fresh start, not update the dead driver.
+    await Bun.sleep(50);
+    expect(driver.starts.length).toBe(2);
+    expect(driver.updates.length).toBe(0);
+
+    // New driver instance reaches STREAMING.
+    driver.emitState("STREAMING");
+    const view = h.supervisor.getView();
+    expect(view.runtime.connectionState).toBe("STREAMING");
+    expect(view.runtime.generation).toBe(1);
+
+    // Callbacks retained by the old driver cannot mutate canonical state or
+    // the new driver's connection state.
+    const revision = h.service.revision;
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("ERROR", "late error");
+    expect(h.service.revision).toBe(revision);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+    h.cleanup();
+  });
+
+  test("ERROR retires the driver and retries with a fresh start", async () => {
+    const driver = new FakeDriver();
+    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+    const oldCallbacks = driver.callbackHistory[0]!;
+
+    driver.emitState("ERROR", "stream failed");
+    expect(h.supervisor.getView().runtime.lastError).toContain("stream failed"); // recorded immediately
+    await Bun.sleep(50);
+    expect(driver.starts.length).toBe(2);
+    expect(driver.updates.length).toBe(0);
+
+    driver.emitState("STREAMING");
+    expect(h.supervisor.getView().runtime.lastError).toBeNull(); // cleared on successful restart
+    const revision = h.service.revision;
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("DISCONNECTED");
+    expect(h.service.revision).toBe(revision);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+    h.cleanup();
+  });
+
+  test("empty desired set retires the driver and invalidates its callbacks", async () => {
+    const driver = new FakeDriver();
+    const h = await harness(driver);
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+    const oldCallbacks = driver.callbackHistory[0]!;
+    const stopCountBefore = driver.stopCount;
+
+    await h.supervisor.replaceSubscriptions([]); // no eligible mappings / empty set
+    expect(driver.stopCount).toBe(stopCountBefore + 1);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+
+    const revision = h.service.revision;
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("STREAMING");
+    expect(h.service.revision).toBe(revision);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    h.cleanup();
+  });
+
+  test("pending update resolving after stop cleans up again without advancing applied generation", async () => {
+    const driver = new DeferredDriver();
+    const h = await harness(driver);
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = h.supervisor.start();
+    await driver.waitForStartCalled();
+    driver.resolvePendingStart();
+    await startPromise;
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+
+    const replacePromise = h.supervisor.replaceSubscriptions([
+      { canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }
+    ]);
+    await driver.waitForUpdateCalled();
+    const stopCountBefore = driver.stopCount;
+
+    h.supervisor.stop();
+    expect(driver.stopCount).toBe(stopCountBefore + 1); // immediate stop
+
+    const revisionAtStop = h.service.revision;
+    driver.resolvePendingUpdate();
+    await replacePromise;
+
+    expect(driver.stopCount).toBe(stopCountBefore + 2); // final cleanup after settlement
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    expect(h.supervisor.getView().runtime.generation).toBe(1); // not advanced
+    expect(h.service.revision).toBe(revisionAtStop);
+
+    const oldCallbacks = driver.callbackHistory[0]!;
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("STREAMING");
+    expect(h.service.revision).toBe(revisionAtStop);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
+    h.cleanup();
+  });
+
+  test("pending update rejecting after stop cleans up again with no retry or state overwrite", async () => {
+    const driver = new DeferredDriver();
+    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = h.supervisor.start();
+    await driver.waitForStartCalled();
+    driver.resolvePendingStart();
+    await startPromise;
+
+    const replacePromise = h.supervisor.replaceSubscriptions([
+      { canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }
+    ]);
+    await driver.waitForUpdateCalled();
+    const stopCountBefore = driver.stopCount;
+
+    h.supervisor.stop();
+    const revisionAtStop = h.service.revision;
+    driver.rejectPendingUpdate(new Error("late update failure"));
+    await replacePromise;
+    await Bun.sleep(30); // surface any incorrect retry
+
+    expect(driver.stopCount).toBe(stopCountBefore + 2); // final cleanup after settlement
+    expect(driver.starts.length).toBe(1); // no retry
+    const view = h.supervisor.getView();
+    expect(view.runtime.connectionState).toBe("NOT_STARTED");
+    expect(view.runtime.lastError).toBeNull(); // no new runtime error after shutdown
+    expect(view.runtime.generation).toBe(1); // not advanced
+    expect(h.service.revision).toBe(revisionAtStop);
+
+    const oldCallbacks = driver.callbackHistory[0]!;
+    oldCallbacks.onObservation(observation(A, 999));
+    oldCallbacks.onConnectionState("ERROR", "late error");
+    expect(h.service.revision).toBe(revisionAtStop);
+    expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
     h.cleanup();
   });
 });
