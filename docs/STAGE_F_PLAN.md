@@ -58,16 +58,14 @@ The supervisor must not couple its serialized reconciliation queue to the raw dr
 type OperationOutcome =
   | { kind: "applied" }                    // only normal successful completion
   | { kind: "failed"; error: string }      // normal rejection
-  | { kind: "timed-out"; error: string }
-  | { kind: "aborted"; reason: string }
-  | { kind: "quarantined"; error: string }
+  | { kind: "timed-out"; error: string }   // timeout — both quiescence branches (including quarantine)
   | { kind: "callback-retired"; reason: "DISCONNECTED" | "ERROR" }
   | { kind: "shutdown" };
 ```
 
 - Each operation owns `logicalCompletion: Promise<OperationOutcome>` with a supervisor-held resolver. `applySelections` / `startDriver` await `logicalCompletion`, **not** the raw driver promise, so the queue can be released independently of driver settlement.
-- **Outcome ownership:** only a normal successful settle while the op is `active` resolves `{ kind: "applied" }`. Every other terminal path resolves its specific non-applied outcome: timeout → `timed-out`, abort → `aborted`, quarantine → `quarantined`, callback retirement → `callback-retired`, shutdown → `shutdown`, normal rejection → `failed`.
-- **`appliedGeneration` advances only when `outcome.kind === "applied"`** in `enqueueReconcile`. Queue release never implies successful application. Timeout, abort, quarantine, callback-triggered retirement and shutdown cannot advance `appliedGeneration`.
+- **Outcome ownership — exactly one outcome and one retirement/retry owner per terminal path:** only a normal successful settle while the op is `active` resolves `{ kind: "applied" }`. Every other terminal path resolves exactly one non-applied outcome: normal rejection → `failed`; timeout (both quiescence branches, including quarantine) → `timed-out`; callback retirement → `callback-retired`; shutdown → `shutdown`. `abort()` and quarantine are internal steps of a lifecycle owner, not distinct outcomes — they are always subsumed by the owning path's outcome (`timed-out`, `callback-retired`, or `shutdown`). There are no `aborted` or `quarantined` outcome variants.
+- **`appliedGeneration` advances only when `outcome.kind === "applied"`** in `enqueueReconcile`. Queue release never implies successful application. Every non-applied outcome (`failed`, `timed-out`, `callback-retired`, `shutdown`) cannot advance `appliedGeneration`.
 - **Normal completion:** driver settles while `active` → run normal success/failure handling → resolve the corresponding outcome.
 - **Late settlement consumption:** attach `then`/`catch` handlers to the original driver promise at operation start. These consume late resolve/reject so there is **no unhandled rejection**, and perform **no** state, callback, retry, `appliedGeneration`, or replacement-instance mutation. They may record `underlyingSettled` on the retired instance for diagnostics only.
 - **Tests:** the unresolved-old-operation test and shutdown tests assert the resolved outcome kind and that `appliedGeneration` did not advance.
@@ -77,9 +75,9 @@ type OperationOutcome =
 Both timeout branches retire the instance — there is no branch that merely records settlement and leaves the instance alive:
 
 - **Timeout (op `active`):** synchronously (1) set `state = "aborting"`, (2) close the instance callback gate (`callbacksEnabled = false`), (3) set connection state `ERROR` with a timeout-specific `lastError`, (4) call `controller.abort()` (catch synchronous throws), (5) await bounded quiescence on the driver promise.
-- **Branch A — driver settles during quiescence:** consume the settlement (record `underlyingSettled`, no normal handling), then call the idempotent retirement owner `retireInstance(instance, "timeout")` → `stop()` exactly once, then resolve `logicalCompletion` with `{ kind: "timed-out", error }`.
-- **Branch B — driver still pending at quiescence expiry:** call `retireInstance(instance, "timeout")` → `stop()` exactly once, quarantine (fresh instance for the next attempt), then resolve `logicalCompletion` with `{ kind: "timed-out", error }`.
-- **In both branches:** the instance is permanently retired and **never reused**; `stop()` executes at most once (idempotent owner); late settlement remains inert; the timeout handler owns exactly one retirement and one retry decision.
+- **Branch A — driver settles during quiescence:** the settlement consumer records `underlyingSettled` and signals the quiescence waiter only — it performs no normal handling, no application-state mutation, and does not own retirement. The timeout lifecycle owner (awaiting quiescence) then calls the idempotent retirement owner `retireInstance(instance, "timeout")` → `stop()` exactly once, then resolves `logicalCompletion` with `{ kind: "timed-out", error }`.
+- **Branch B — driver still pending at quiescence expiry:** the timeout lifecycle owner calls `retireInstance(instance, "timeout")` → `stop()` exactly once, quarantines the instance (fresh instance for the next attempt), then resolves `logicalCompletion` with `{ kind: "timed-out", error }`. Quarantine is an internal step of the timeout path, not a distinct outcome.
+- **In both branches:** the instance is permanently retired and **never reused**; `stop()` executes at most once (idempotent owner); late settlement remains inert; the timeout lifecycle owner is the single owner of retirement, `stop()` and the one retry decision — the settlement consumer never owns retirement or `stop()`.
 - **Test:** deterministic late-resolution and late-rejection during quiescence assert exactly one retirement, one `stop()`, one retry decision, and no premature `appliedGeneration` advancement in both branches.
 
 ## 6. Callback-triggered retirement while an operation is pending (correction 2)
@@ -88,7 +86,7 @@ When the current instance emits DISCONNECTED or ERROR while a start/update opera
 
 1. **Close callback authority** on the instance (`callbacksEnabled = false`) so no further callbacks from it are honored.
 2. **Abort the active operation** via its `AbortController.signal` (catch synchronous throws).
-3. **Run the bounded quiescence/retirement path:** await quiescence within the bounded window; call `retireInstance(instance, "callback:disconnected"|"callback:error")` → `stop()` exactly once; the instance is permanently retired and never reused.
+3. **Run the bounded quiescence/retirement path:** await quiescence within the bounded window. If the underlying promise settles during quiescence, the settlement consumer records `underlyingSettled` and signals the quiescence waiter only — no normal handling, no application-state mutation, and no retirement ownership. The callback lifecycle owner then calls `retireInstance(instance, "callback:disconnected"|"callback:error")` → `stop()` exactly once; the instance is permanently retired and never reused.
 4. **Resolve supervisor logical completion** with `{ kind: "callback-retired", reason }` so the serialized reconciliation queue is released immediately — it does **not** wait for the original operation timeout.
 5. **The callback path owns the single retry decision** (schedule one bounded reconnect with a fresh factory instance).
 6. **The operation timeout handler cannot duplicate:** the op is no longer `active` (state `aborting`/`retired`), so its timeout is a no-op; the idempotent retirement owner prevents a second `stop()`; the retry decision is already owned by the callback path.
@@ -156,13 +154,13 @@ active -> aborting -> retired
 ```
 - **Begin:** create op `{ epoch, kind, controller, state: "active", logicalCompletion, settledSignal, instance }`; set epoch-tagged pending marker; arm operation timeout; pass `controller.signal` to the driver operation; attach late-settlement consumers (§4).
 - **Normal settle (active):** clear timeout; if still current marker and not stopped, run normal success/failure handling; set `settled`; resolve `logicalCompletion` with `applied` or `failed`.
-- **Timeout (active):** §5 — both branches retire, stop once, resolve `timed-out`.
-- **Callback retirement while pending:** §6 — close gate, abort, quiesce, retire, resolve `callback-retired`, callback owns retry.
-- **Settle during quiescence (aborting):** only record `settled` and signal the quiescence waiter — no normal handling, no `appliedGeneration`/`lastError`/`connectionState` change, no success marking, no `stop()`.
+- **Timeout (active):** §5 — the timeout lifecycle owner is the single owner of retirement, `stop()` and the retry decision; both quiescence branches retire, stop once, and resolve `timed-out`.
+- **Callback retirement while pending:** §6 — the callback lifecycle owner is the single owner of retirement, `stop()` and the retry decision; close gate, abort, quiesce, retire, resolve `callback-retired`.
+- **Settle during quiescence (aborting):** the settlement consumer records `underlyingSettled` and signals the quiescence waiter only — no normal handling, no `appliedGeneration`/`lastError`/`connectionState` change, no success marking, and no retirement or `stop()` by the consumer. Retirement and `stop()` are owned exclusively by the lifecycle owner: the timeout path (§5) or the callback-retirement path (§6), each of which calls `retireInstance()` → `stop()` exactly once before resolving `logicalCompletion`.
 - **Late settle after `retired`:** may update `underlyingSettled` only; cannot change operation state, transition terminal `retired`, or affect the replacement.
 - **Single-flight:** a second timeout or callback retirement for the same op is a no-op (state no longer `active`).
 
-**Invariants:** exactly one `stop()` per instance; exactly one retirement/retry decision per timed-out or callback-retired op; `appliedGeneration` advances only on `outcome.kind === "applied"`; no normal handling or connection-state mutation after `aborting`; no `Promise.race()`, `stop()`, epoch invalidation or callback gate claimed to cancel the underlying promise; a retired instance is never reused; the serialized queue is released via `logicalCompletion` regardless of driver settlement.
+**Invariants:** exactly one `stop()` per instance, owned by a single lifecycle owner (§5 timeout or §6 callback retirement); exactly one retirement/retry decision per timed-out or callback-retired op; the settlement consumer never owns retirement or `stop()`; `appliedGeneration` advances only on `outcome.kind === "applied"`; no normal handling or connection-state mutation after `aborting`; no `Promise.race()`, `stop()`, epoch invalidation or callback gate claimed to cancel the underlying promise; a retired instance is never reused; the serialized queue is released via `logicalCompletion` regardless of driver settlement.
 
 **Field changes:** replace boolean `startPending` / `updatePending` with typed op objects; add `currentDriver: StreamingDriver | null`; add `quiescenceWaiters: Set<() => void>`; add instance-level `retired` / `underlyingSettled` / `callbacksEnabled` tracking (no `reusable` state). `driverStarted` resets on every fresh instance acquisition.
 
@@ -252,7 +250,7 @@ Wrapper awaits (`enqueueReconcile()`, `applySelections()`, `startDriver()` calls
 ## 18. Acceptance criteria
 
 - Internal `StreamingDriver.start(subscriptions, callbacks, signal)` and `updateSubscriptions(subscriptions, signal)` have mandatory signals passed to the underlying operation; locked driver, all existing fakes in `tests/market/supervisor.test.ts`, and all new fakes updated; cancellation guarantee = abort stops work and settles, else quarantine after bounded quiescence.
-- **Typed logical-completion outcome; only normal successful completion reports `applied`; timeout, abort, quarantine, callback-triggered retirement and shutdown resolve non-applied outcomes and cannot advance `appliedGeneration`; queue release never implies successful application; unresolved-operation and shutdown tests assert outcome kind and unchanged `appliedGeneration`.**
+- **Typed logical-completion outcome with exactly one outcome and one retirement/retry owner per terminal path; only normal successful completion reports `applied`; timeout (both quiescence branches, including quarantine) → `timed-out`, callback-triggered retirement → `callback-retired`, shutdown → `shutdown`, normal rejection → `failed` — all non-applied and unable to advance `appliedGeneration`; `abort()` and quarantine are internal steps, not distinct outcomes (no `aborted`/`quarantined` variants); queue release never implies successful application; unresolved-operation and shutdown tests assert outcome kind and unchanged `appliedGeneration`.**
 - **Every timeout permanently retires its instance in both branches (settles during quiescence, or pending at expiry): consume settlement if present, call the idempotent retirement owner, stop exactly once, resolve `timed-out`, never reuse; late settlement inert; at-most-once stop.**
 - **Callback-triggered retirement while an operation is pending: close callback authority, abort via signal, bounded quiescence/retirement, resolve `callback-retired` so the queue is released, callback path owns the single retry decision, timeout handler cannot duplicate retry or double-stop; behavior preserved when no operation pending; deterministic DISCONNECTED/ERROR tests including a promise unresolved until after replacement starts.**
 - Terminal instance retirement: no `stopped/reusable` state; any `stop()` permanently retires; every start acquires a fresh factory instance; applied consistently to disconnect, failed start/update cleanup, timeout, callback retirement and shutdown; idempotent stop ownership, at-most-once stop per instance; test factories updated with behavior/assertions preserved.
