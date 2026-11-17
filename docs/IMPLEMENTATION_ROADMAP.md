@@ -135,7 +135,7 @@
 | B | Upstox V3 streaming adapter on pinned `upstox-js-sdk@2.31.0`; SDK used for market-data streaming only; lifecycle/decoder corrections | **Published** (`084969e`, `e02c64e`, `81d2900`, `9a31a8b`, `ff23b53`, `b731823`) |
 | D | Provider-ready live-data backend vertical slice: service notifications, subscription persistence + durable generation, bounded realtime hub, REST/SSE, minimal supervisor, locked production driver boundary | **Published on `develop` and accepted** (final commit `f51e7db`) |
 | E | WebUI streaming selections and live-data experience, incl. EventSource close/fetch/reconnect and `refresh` client behavior | **Published on `develop` and accepted** (`ea0cae0` initial, `00e6830` named SSE / manual retry / review fixes, `a8f4eef` initial-sync and retry-cancellation corrections, plus final closeout fixes) |
-| F | Deep reconnect/recovery/concurrency/resource hardening; race/fault injection, sustained-load/soak tests | Pending |
+| F | Deep reconnect/recovery/concurrency/resource hardening; race/fault injection, sustained-load/soak tests | **Published on `develop`** (`bf1044b`, `21c92c7`, `06b644c`, `35b5d2e`); pending independent review before merge into `main` |
 | C | FYERS Data Socket adapter, after D/E/F prove the first provider path | On hold / pending |
 | G | First live provider verification, separately authorized after the single-pass gate | Pending |
 
