@@ -6,9 +6,10 @@ import { loadConfig, resetConfigCache } from "../../packages/config/src/index";
 import { defaultMigrationsFolder, openDatabase, runMigrations } from "../../packages/database/src/index";
 import {
   emptyProviderStatus, providerStatusMapSchema,
-  type ProviderAdapter, type ProviderId, type ProviderStatus
+  type CredentialStore, type ProviderAdapter, type ProviderConfig, type ProviderId, type ProviderStatus
 } from "../../packages/contracts/src/index";
 import { MarketDataService, ProviderRegistry } from "../../packages/market-core/src/index";
+import type { UpstoxAdapter } from "../../packages/broker-upstox/src/index";
 import { createApp } from "../../apps/api/src/app";
 import { createLogger } from "../../apps/api/src/lib/logger";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
@@ -21,7 +22,7 @@ class FakeAdapter implements ProviderAdapter {
   async remove(): Promise<void> {}
 }
 
-function makeDeps() {
+function makeDeps(opts: { withManagement?: boolean } = {}) {
   resetConfigCache();
   const dir = mkdtempSync(join(tmpdir(), "markethub-pstatus-"));
   const dbPath = join(dir, "test.sqlite");
@@ -42,9 +43,25 @@ function makeDeps() {
     session: () => "OPEN"
   });
 
-  const app = createApp({ config, db, logger, startedAt: Date.now(), providerRegistry: registry, service });
+  // Fake Upstox adapter returns a deliberately stale streamingState; the route
+  // must override it with the canonical service state. No network is contacted.
+  const upstox = opts.withManagement ? {
+    setToken: async (): Promise<ProviderStatus> => ({
+      ...emptyProviderStatus("UPSTOX", true),
+      authState: "AUTHENTICATED",
+      streamingState: "NOT_STARTED"
+    })
+  } as unknown as UpstoxAdapter : undefined;
+  const credentials = opts.withManagement ? {} as CredentialStore : undefined;
+  const providerConfig = opts.withManagement ? { enabled: true } as ProviderConfig : undefined;
+
+  const app = createApp({
+    config, db, logger, startedAt: Date.now(), providerRegistry: registry, service,
+    upstox, credentials, providerConfig
+  });
+  const localEnv = { requestIP: () => ({ address: "127.0.0.1" }) };
   const cleanup = () => { closeDatabaseHandle(db); removeTempDir(dir); };
-  return { app, service, cleanup };
+  return { app, service, cleanup, localEnv };
 }
 
 describe("GET /api/providers/status composition", () => {
@@ -81,6 +98,35 @@ describe("GET /api/providers/status composition", () => {
       expect(json.providers.UPSTOX.authState).toBe("AUTHENTICATED");
       expect(json.providers.UPSTOX.streamingState).toBe("DISCONNECTED");
       expect(json.providers.FYERS.streamingState).toBe("NOT_STARTED");
+    } finally { h.cleanup(); }
+  });
+
+  test("POST /api/provider/:id/validate reports canonical streaming state", async () => {
+    const h = makeDeps();
+    try {
+      h.service.setProviderConnection("UPSTOX", "STREAMING");
+      const res = await h.app.request("/api/provider/UPSTOX/validate", { method: "POST" }, h.localEnv);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.streamingState).toBe("STREAMING");
+      expect(json.authState).toBe("AUTHENTICATED"); // auth ownership preserved
+    } finally { h.cleanup(); }
+  });
+
+  test("POST /api/provider/upstox/token reports canonical streaming state", async () => {
+    const h = makeDeps({ withManagement: true });
+    try {
+      h.service.setProviderConnection("UPSTOX", "STREAMING");
+      const res = await h.app.request("/api/provider/upstox/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: "fake-token" })
+      }, h.localEnv);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      // Fake adapter returned NOT_STARTED; the route must report the canonical STREAMING.
+      expect(json.streamingState).toBe("STREAMING");
+      expect(json.authState).toBe("AUTHENTICATED");
     } finally { h.cleanup(); }
   });
 });

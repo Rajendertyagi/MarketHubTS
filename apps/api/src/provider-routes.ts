@@ -23,17 +23,24 @@ export interface ProviderRouteDependencies {
   service?: MarketDataService;
 }
 
-/** Compose auth status (registry-owned) with runtime streaming state (service-owned). */
+/**
+ * Compose one ProviderStatus with the authoritative runtime streaming state
+ * from the canonical service. Auth fields stay owned by adapters/registry.
+ */
+function withRuntimeStreamingState(deps: ProviderRouteDependencies, status: ProviderStatus): ProviderStatus {
+  return {
+    ...status,
+    streamingState: deps.service?.getConnectionStatus(status.id)?.state ?? "NOT_STARTED"
+  };
+}
+
+/** Compose the full provider status map with runtime streaming state. */
 function composeProviderStatuses(deps: ProviderRouteDependencies) {
   const auth = deps.providerRegistry?.getStatuses() ?? null;
   if (!auth) return null;
-  const withRuntime = (status: ProviderStatus): ProviderStatus => ({
-    ...status,
-    streamingState: deps.service?.getConnectionStatus(status.id)?.state ?? "NOT_STARTED"
-  });
   return providerStatusMapSchema.parse({
-    UPSTOX: withRuntime(auth.UPSTOX),
-    FYERS: withRuntime(auth.FYERS)
+    UPSTOX: withRuntimeStreamingState(deps, auth.UPSTOX),
+    FYERS: withRuntimeStreamingState(deps, auth.FYERS)
   });
 }
 
@@ -71,7 +78,8 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "A non-empty token is required" }), 400);
       }
       try {
-        return c.json(await deps.upstox!.setToken(body.token, typeof body.expiresAt === "string" ? body.expiresAt : undefined));
+        const status = await deps.upstox!.setToken(body.token, typeof body.expiresAt === "string" ? body.expiresAt : undefined);
+        return c.json(withRuntimeStreamingState(deps, status));
       } catch (error) {
         return c.json(apiErrorSchema.parse({ error: "credential_error", message: error instanceof Error ? error.message : String(error) }), 400);
       }
@@ -134,7 +142,8 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       if (id !== "UPSTOX" && id !== "FYERS") {
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Unknown provider" }), 400);
       }
-      return c.json(await deps.providerRegistry!.validate(id));
+      const status = await deps.providerRegistry!.validate(id);
+      return c.json(withRuntimeStreamingState(deps, status));
     });
 
     app.post("/api/provider/:id/remove", async (c) => {

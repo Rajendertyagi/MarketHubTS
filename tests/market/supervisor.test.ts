@@ -53,30 +53,62 @@ function observation(canonicalId: string, ltp: number): NormalizeObservationInpu
   };
 }
 
-/** Driver whose start() stays pending until explicitly resolved. */
+/** Driver whose start()/updateSubscriptions() stay pending until explicitly settled. */
 class DeferredDriver implements StreamingDriver {
   starts: DriverSubscription[][] = [];
+  updates: DriverSubscription[][] = [];
   stopCount = 0;
   callbacks: DriverCallbacks | null = null;
   private startCalled = false;
   private readonly startWaiters: Array<() => void> = [];
   private resolveStart: (() => void) | null = null;
+  private rejectStart: ((e: Error) => void) | null = null;
+  private updateCalled = false;
+  private readonly updateWaiters: Array<() => void> = [];
+  private rejectUpdate: ((e: Error) => void) | null = null;
 
   async start(subs: DriverSubscription[], callbacks: DriverCallbacks): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
     this.startCalled = true;
     for (const wake of this.startWaiters.splice(0)) wake();
-    await new Promise<void>((resolve) => { this.resolveStart = resolve; });
+    await new Promise<void>((resolve, reject) => {
+      this.resolveStart = resolve;
+      this.rejectStart = reject;
+    });
   }
-  async updateSubscriptions(): Promise<void> {}
+  async updateSubscriptions(subs: DriverSubscription[]): Promise<void> {
+    this.updates.push(subs.map((s) => ({ ...s })));
+    this.updateCalled = true;
+    for (const wake of this.updateWaiters.splice(0)) wake();
+    await new Promise<void>((_resolve, reject) => { this.rejectUpdate = reject; });
+  }
   stop(): void { this.stopCount++; }
   getConnectionState() { return "NOT_STARTED"; }
   waitForStartCalled(): Promise<void> {
     if (this.startCalled) return Promise.resolve();
     return new Promise((resolve) => this.startWaiters.push(resolve));
   }
+  waitForUpdateCalled(): Promise<void> {
+    if (this.updateCalled) return Promise.resolve();
+    return new Promise((resolve) => this.updateWaiters.push(resolve));
+  }
   resolvePendingStart(): void { this.resolveStart?.(); }
+  rejectPendingStart(error = new Error("start failed")): void { this.rejectStart?.(error); }
+  rejectPendingUpdate(error = new Error("update failed")): void { this.rejectUpdate?.(error); }
+}
+
+/** Driver whose start() allocates a resource then rejects. */
+class AllocatingFailDriver implements StreamingDriver {
+  starts = 0;
+  stopCount = 0;
+  async start(): Promise<void> {
+    this.starts++;
+    throw new Error("start failed after allocation");
+  }
+  async updateSubscriptions(): Promise<void> {}
+  stop(): void { this.stopCount++; }
+  getConnectionState() { return "NOT_STARTED"; }
 }
 
 /** Catalog that can hold mapping resolution pending for a deterministic race. */
@@ -109,12 +141,60 @@ function deferredMappings(inner: CatalogRepository) {
   };
 }
 
+/** Catalog whose mapping resolution can be toggled to fail deterministically. */
+function toggleableMappings(inner: CatalogRepository) {
+  let fail = false;
+  const catalog = {
+    async getInstrumentByCanonicalId(canonicalId: string) {
+      return inner.getInstrumentByCanonicalId(canonicalId);
+    },
+    async listMappingsByCanonicalId(canonicalId: string): Promise<ProviderInstrumentMapping[]> {
+      if (fail) throw new Error("mapping resolution failed");
+      return inner.listMappingsByCanonicalId(canonicalId);
+    }
+  } as unknown as CatalogRepository;
+  return { catalog, setFail: (value: boolean) => { fail = value; } };
+}
+
 async function waitForGeneration(repo: SqliteSubscriptionRepository, generation: number): Promise<void> {
   for (let i = 0; i < 100; i++) {
     if ((await repo.load()).generation >= generation) return;
     await Bun.sleep(1);
   }
   throw new Error(`generation ${generation} was not committed`);
+}
+
+async function harnessWithCatalog(
+  catalogFactory: (real: CatalogRepository) => CatalogRepository,
+  driver: StreamingDriver = new FakeDriver(),
+  reconnect?: { maxAttempts: number; baseDelayMs: number }
+) {
+  const dir = mkdtemp(join(tmpdir(), "markethub-sup2-"));
+  const handle = openDatabase({ dbPath: join(dir, "sup.sqlite") });
+  runMigrations(handle.db, defaultMigrationsFolder);
+  const realCatalog = new SqliteCatalogRepository(handle.db, handle.sqlite);
+  const subscriptions = new SqliteSubscriptionRepository(handle.db, handle.sqlite);
+  const service = new MarketDataService({
+    now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
+  });
+  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), driver, reconnect });
+  const seed = async (canonicalId: string, nativeIdentifier: string) => {
+    await realCatalog.transaction(async (tx) => {
+      await tx.upsertInstrument(canonicalInstrumentSchema.parse({
+        canonicalId, identityKey: `key:${canonicalId}`, exchange: "NSE", segment: "INDEX",
+        marketType: "INDEX", instrumentCategory: "INDEX", canonicalSymbol: canonicalId, displayName: canonicalId
+      }));
+      await tx.upsertMapping(providerInstrumentMappingSchema.parse({
+        provider: "UPSTOX", nativeIdentifier, canonicalId, status: "ACTIVE"
+      }));
+    });
+  };
+  const cleanup = () => {
+    supervisor.stop();
+    closeDatabaseHandle(handle);
+    removeTempDir(dir);
+  };
+  return { subscriptions, service, supervisor, driver, seed, cleanup };
 }
 
 async function harness(driver: StreamingDriver = new FakeDriver(), reconnect?: { maxAttempts: number; baseDelayMs: number }) {
@@ -163,6 +243,7 @@ describe("StreamSupervisor", () => {
 
     const view = h.supervisor.getView();
     expect(view.generation).toBe(1);
+    expect(view.runtime.generation).toBe(1); // successful reconciliation applied gen 1
     expect(view.runtime.resolutions.find((r) => r.canonicalId === B)!.available).toBe(false);
     expect(view.runtime.resolutions.find((r) => r.canonicalId === B)!.reason).toBe("NO_ACTIVE_UPSTOX_MAPPING");
     // Desired selections are tracked even when their mapping is unavailable.
@@ -283,8 +364,8 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     driver.resolvePendingStart();
     await startPromise;
 
-    // A start resolving after stop must not leave a running driver or mutate state.
-    expect(driver.stopCount).toBe(1);
+    // Immediate stop at shutdown plus final cleanup when the start settles.
+    expect(driver.stopCount).toBe(2);
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
 
@@ -292,6 +373,73 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     driver.callbacks!.onObservation(observation(A, 100));
     driver.callbacks!.onConnectionState("STREAMING");
     expect(h.service.revision).toBe(revisionAtStop);
+    h.cleanup();
+  });
+
+  test("stop then rejection of a pending start performs final cleanup", async () => {
+    const driver = new DeferredDriver();
+    const h = await harness(driver);
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = h.supervisor.start();
+    await driver.waitForStartCalled();
+    h.supervisor.stop();
+    expect(driver.stopCount).toBe(1); // immediate stop while pending
+
+    const revisionAtStop = h.service.revision;
+    driver.rejectPendingStart();
+    await startPromise;
+
+    expect(driver.stopCount).toBe(2); // final cleanup after rejection settles
+    expect(h.service.revision).toBe(revisionAtStop);
+    expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
+    h.cleanup();
+  });
+
+  test("a current start failure cleans up before retrying", async () => {
+    const driver = new AllocatingFailDriver();
+    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+    await h.supervisor.start();
+
+    // First failed start already cleaned up its partial allocation.
+    expect(driver.starts).toBe(1);
+    expect(driver.stopCount).toBe(1);
+    await Bun.sleep(50);
+    expect(driver.starts).toBe(2); // one bounded retry
+    expect(driver.stopCount).toBe(2); // cleanup after each failed start
+    h.cleanup();
+  });
+
+  test("a pending update rejection after stop leaves NOT_STARTED with no retry", async () => {
+    const driver = new DeferredDriver();
+    const h = await harness(driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+
+    const startPromise = h.supervisor.start();
+    await driver.waitForStartCalled();
+    driver.resolvePendingStart();
+    await startPromise; // driver is now started
+    expect(driver.starts.length).toBe(1);
+
+    const replacePromise = h.supervisor.replaceSubscriptions([
+      { canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }
+    ]);
+    await driver.waitForUpdateCalled();
+    expect(driver.updates.length).toBe(1);
+
+    h.supervisor.stop();
+    const revisionAtStop = h.service.revision;
+    driver.rejectPendingUpdate();
+    await replacePromise;
+
+    expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
+    expect(driver.starts.length).toBe(1); // no retry scheduled
+    expect(h.service.revision).toBe(revisionAtStop); // no late canonical mutation
     h.cleanup();
   });
 
@@ -387,6 +535,58 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     closeDatabaseHandle(handle);
     removeTempDir(dir);
   });
+
+  test("desired generation advances while applied generation stays on reconciliation failure", async () => {
+    let toggle!: ReturnType<typeof toggleableMappings>;
+    const h = await harnessWithCatalog((real) => {
+      toggle = toggleableMappings(real);
+      return toggle.catalog;
+    });
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]); // gen 1
+    await h.supervisor.start(); // gen 1 applies successfully
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+
+    toggle.setFail(true);
+    await h.supervisor.replaceSubscriptions([{ canonicalId: B, enabled: true }]); // gen 2 fails
+    const view = h.supervisor.getView();
+    expect(view.generation).toBe(2); // desired committed
+    expect(view.runtime.generation).toBe(1); // applied unchanged
+    expect(view.runtime.lastError).toContain("mapping resolution failed");
+    expect(view.selections).toEqual([{ canonicalId: B, enabled: true }]); // not hidden
+    h.cleanup();
+  });
+
+  test("applied generation advances after a successful retry of the same generation", async () => {
+    let toggle!: ReturnType<typeof toggleableMappings>;
+    const driver = new FakeDriver();
+    const h = await harnessWithCatalog((real) => {
+      toggle = toggleableMappings(real);
+      return toggle.catalog;
+    }, driver, { maxAttempts: 1, baseDelayMs: 1 });
+    await h.seed(A, "key-A");
+    await h.seed(B, "key-B");
+    await h.subscriptions.replace([{ canonicalId: A, enabled: true }]); // gen 1
+    await h.supervisor.start();
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+
+    toggle.setFail(true);
+    await h.supervisor.replaceSubscriptions([{ canonicalId: B, enabled: true }]); // gen 2 fails
+    expect(h.supervisor.getView().runtime.generation).toBe(1);
+
+    toggle.setFail(false);
+    // A driver-reported disconnect triggers a bounded reconnect that reconciles
+    // the latest committed generation (2) without a new PUT.
+    driver.emitState("DISCONNECTED");
+    await Bun.sleep(50);
+
+    const view = h.supervisor.getView();
+    expect(view.generation).toBe(2);
+    expect(view.runtime.generation).toBe(2); // advanced after successful retry
+    expect(view.runtime.lastError).toBeNull();
+    h.cleanup();
+  });
 });
 
 describe("locked production driver boundary", () => {
@@ -410,7 +610,10 @@ describe("locked production driver boundary", () => {
     await h.seed(A, "key-A");
     await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
     await h.supervisor.start();
-    const runtime = h.supervisor.getView().runtime;
+    const view = h.supervisor.getView();
+    expect(view.generation).toBe(1); // desired generation loaded at startup
+    expect(view.runtime.generation).toBe(0); // no successful reconciliation yet
+    const runtime = view.runtime;
     expect(runtime.connectionState).toBe("ERROR");
     expect(runtime.lastError).toContain("locked");
     // No retry is scheduled: state stays ERROR after a wait.

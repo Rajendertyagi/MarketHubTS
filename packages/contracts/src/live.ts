@@ -219,6 +219,7 @@ export const subscriptionResolutionSchema = z.object({
 export type SubscriptionResolution = z.infer<typeof subscriptionResolutionSchema>;
 
 export const subscriptionRuntimeStatusSchema = z.object({
+  /** Last generation whose runtime application succeeded; may lag the desired generation. */
   generation: z.number().int().nonnegative(),
   connectionState: providerConnectionStateSchema,
   resolutions: z.array(subscriptionResolutionSchema),
@@ -227,8 +228,11 @@ export const subscriptionRuntimeStatusSchema = z.object({
 export type SubscriptionRuntimeStatus = z.infer<typeof subscriptionRuntimeStatusSchema>;
 
 export const subscriptionStateViewSchema = z.object({
+  /** Persisted desired selections (visible immediately after commit). */
   selections: z.array(subscriptionSelectionSchema),
+  /** Desired generation: latest committed generation from persistence. */
   generation: z.number().int().nonnegative(),
+  /** Runtime status, including the separately tracked applied generation. */
   runtime: subscriptionRuntimeStatusSchema
 });
 export type SubscriptionStateView = z.infer<typeof subscriptionStateViewSchema>;

@@ -27,6 +27,7 @@ export interface StreamingDriver {
   readonly locked?: boolean;
   start(subscriptions: DriverSubscription[], callbacks: DriverCallbacks): Promise<void>;
   updateSubscriptions(subscriptions: DriverSubscription[]): Promise<void>;
+  /** Must be safely repeatable: shutdown and a settling start may both call it. */
   stop(): void;
   getConnectionState(): ProviderConnectionState;
 }
@@ -60,7 +61,7 @@ export class LockedUpstoxDriver implements StreamingDriver {
   }
 
   stop(): void {
-    // No SDK instance, socket or timer exists — nothing to release.
+    // No SDK instance, socket or timer exists — nothing to release. Idempotent.
   }
 }
 
@@ -108,13 +109,16 @@ export class StreamSupervisor {
   private readonly provider: ProviderId;
   private readonly trackedIds = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
+  /** Latest committed (desired) generation from persistence. */
   private generation = 0;
+  /** Last generation whose runtime application completed successfully. */
+  private appliedGeneration = 0;
   private selections: SubscriptionSelection[] = [];
   private resolutions: SubscriptionResolution[] = [];
   private connectionState: ProviderConnectionState = "NOT_STARTED";
   private lastError: string | null = null;
   private driverStarted = false;
-  /** True from just before driver.start() until it settles or is cleaned up. */
+  /** True from just before driver.start() until its promise actually settles. */
   private startPending = false;
   private epoch = 0;
   private stopped = false;
@@ -171,7 +175,8 @@ export class StreamSupervisor {
   /**
    * Serialized reconciliation. A reconciliation for an older generation is
    * skipped; post-commit runtime failures are recorded in lastError rather
-   * than thrown, so committed desired state is never hidden.
+   * than thrown, so committed desired state is never hidden. The applied
+   * generation advances only after a successful application of that generation.
    */
   private enqueueReconcile(expectedGeneration: number): Promise<void> {
     const run = async () => {
@@ -179,7 +184,10 @@ export class StreamSupervisor {
       try {
         const state = await this.opts.subscriptions.load();
         if (state.generation < expectedGeneration) return;
-        await this.applySelections(state.selections, state.generation);
+        const applied = await this.applySelections(state.selections, state.generation);
+        if (applied && state.generation > this.appliedGeneration) {
+          this.appliedGeneration = state.generation;
+        }
       } catch (error) {
         this.lastError = errorMessage(error);
       }
@@ -189,8 +197,9 @@ export class StreamSupervisor {
     return queued;
   }
 
-  private async applySelections(selections: SubscriptionSelection[], generation: number): Promise<void> {
-    if (this.stopped) return;
+  /** Returns true only when this generation's runtime state was fully applied. */
+  private async applySelections(selections: SubscriptionSelection[], generation: number): Promise<boolean> {
+    if (this.stopped) return false;
     const enabled = selections.filter((s) => s.enabled);
 
     // Phase 1: resolve mappings (async). No canonical service or driver mutation.
@@ -221,7 +230,7 @@ export class StreamSupervisor {
     // Phase 2: generation guard after all async resolution. A concurrent PUT
     // that committed a newer generation invalidates this reconciliation.
     const latest = await this.opts.subscriptions.load();
-    if (this.stopped || latest.generation !== generation) return;
+    if (this.stopped || latest.generation !== generation) return false;
 
     // Phase 3: apply runtime state. No await occurs before the mutations below
     // except the driver calls, which begin synchronously.
@@ -245,33 +254,40 @@ export class StreamSupervisor {
     if (driverSubscriptions.length === 0) {
       this.stopDriverResource();
       this.setConnectionState("NOT_STARTED", null);
-      return;
+      return true;
     }
 
     if (!this.driverStarted) {
-      await this.startDriver(driverSubscriptions);
-    } else {
-      try {
-        await this.opts.driver.updateSubscriptions(driverSubscriptions);
-      } catch (error) {
-        this.lastError = errorMessage(error);
-        this.setConnectionState("ERROR", this.lastError);
-        this.stopDriverResource();
-        if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
-      }
+      return await this.startDriver(driverSubscriptions);
+    }
+    try {
+      await this.opts.driver.updateSubscriptions(driverSubscriptions);
+      return true;
+    } catch (error) {
+      // A pending update rejecting after shutdown must not overwrite
+      // NOT_STARTED, schedule a retry, or mutate canonical state.
+      if (this.stopped) return false;
+      this.lastError = errorMessage(error);
+      this.setConnectionState("ERROR", this.lastError);
+      this.stopDriverResource();
+      if (!this.opts.driver.locked) this.scheduleReconnect(this.epoch);
+      return false;
     }
   }
 
-  /** Stop the driver whether it is fully started or still starting. */
+  /**
+   * Stop the driver resource. Does not clear startPending: a start promise may
+   * still be in flight and needs a final cleanup when it settles.
+   */
   private stopDriverResource(): void {
     if (this.driverStarted || this.startPending) {
       this.opts.driver.stop();
       this.driverStarted = false;
-      this.startPending = false;
     }
   }
 
-  private async startDriver(subscriptions: DriverSubscription[]): Promise<void> {
+  /** Returns true only when the driver start completed for the current epoch. */
+  private async startDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
     const epoch = ++this.epoch;
     this.startPending = true;
     this.setConnectionState("CONNECTING", null);
@@ -300,31 +316,35 @@ export class StreamSupervisor {
         }
       });
       if (epoch !== this.epoch || this.stopped) {
-        // Resolved after stop/supersede: clean up any resource it created.
+        // Settled after stop/supersede: final cleanup now that it settled.
         if (this.startPending) {
           this.opts.driver.stop();
           this.startPending = false;
         }
-        return;
+        return false;
       }
       this.startPending = false;
       this.driverStarted = true;
       this.lastError = null;
+      return true;
     } catch (error) {
       if (epoch !== this.epoch || this.stopped) {
-        // Even a failed start may have allocated resources before rejecting.
+        // A rejected start may have allocated resources: final cleanup.
         if (this.startPending) {
           this.opts.driver.stop();
           this.startPending = false;
         }
-        return;
+        return false;
       }
       this.startPending = false;
       this.lastError = errorMessage(error);
       this.setConnectionState("ERROR", this.lastError);
       this.driverStarted = false;
+      // A failed start may have partially allocated resources: stop before retry.
+      this.opts.driver.stop();
       // Locked drivers never schedule connection retries.
       if (!this.opts.driver.locked) this.scheduleReconnect(epoch);
+      return false;
     }
   }
 
@@ -352,9 +372,11 @@ export class StreamSupervisor {
   getView(): SubscriptionStateView {
     return {
       selections: this.selections.map((s) => ({ ...s })),
+      // Desired (committed) generation — visible immediately after persistence.
       generation: this.generation,
       runtime: {
-        generation: this.generation,
+        // Last generation whose runtime application actually succeeded.
+        generation: this.appliedGeneration,
         connectionState: this.connectionState,
         resolutions: this.resolutions.map((r) => ({ ...r })),
         lastError: this.lastError
@@ -370,7 +392,7 @@ export class StreamSupervisor {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    // Covers a driver whose start() is still pending as well as a started one.
+    // Immediate stop; startPending is retained until the start promise settles.
     this.stopDriverResource();
     this.setConnectionState("NOT_STARTED", null);
   }
