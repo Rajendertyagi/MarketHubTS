@@ -2,7 +2,7 @@
 
 > **Status:** Milestones 1–3, M4 Stages A/B, and **M4 Stages D and E are accepted**. **M4 Stage F is implemented, has passed independent code review, and was integrated into `main` by an authorized fast-forward to `865d86f`, which synchronized `main` and `develop` at that commit.** Stage D delivers the provider-ready backend, Stage E delivers the WebUI live-data experience, and Stage F hardens reconnect/recovery/concurrency/resource paths — but none constitutes a functioning live-market-data connection: the production Upstox driver remains deliberately locked, no real provider socket or live feed has been tested, and no historical or option-chain data exists. Stages C and G remain outstanding.
 > **Last updated:** 2026-11-17
-> **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
+> **Related:** [README.md](../README.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md) (proposed target design, AD-024 — pending review/approval), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)
 
 ## 1. Summary
 
@@ -140,6 +140,7 @@ All results above are **local verification** from this working tree. No GitHub A
 
 - M1–M3, M4 Stages A/B/D/E and Stage F are published and, following the authorized fast-forward to `865d86f`, included in `main`. Stage D and Stage E are accepted; Stage F is implemented, published and has passed independent code review, and was integrated into `main` under explicit authorization.
 - The canonical catalog and live pipeline are now consumed by WebUI live views; MCP market surfaces remain unwired and no real provider data is loaded.
+- A durable multi-provider streaming architecture (shared subscription coordinator, independent provider runtimes, canonical data-component model, provider-neutral capability contracts) is **proposed** in [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md) / AD-024, pending independent review and product-owner approval. It is a design reference only: it does not change implementation status, authorize Stage C/G, or unlock the production driver.
 - Current NSE index F&O eligibility, BSE contract details, and provider-native identifier/field mappings require verification from current official sources before live integration.
 - Production start requires a prior build (`bun run build` then `bun run start`).
 - `project-status.json` remains out-of-scope if it reappears.

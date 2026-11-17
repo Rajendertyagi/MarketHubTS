@@ -136,6 +136,10 @@ The catalog is shared by: Dashboard, Market data, Watchlists, Charts, Options, F
 - **Derived technical indicators** (EMA, SMA, RSI, MACD, etc.) are permitted only as **separately labelled derived indicators**, never confused with provider-supplied raw data.
 - New provider fields must not require consumers to change workflows or require a new MCP tool for every individual field (design for extensible attributed data).
 
+### 4.3 Live-data component requirements (proposed — AD-024, pending approval)
+
+Live market data must be represented as **independently updated components** per canonical instrument — quote/price, market depth, derivatives metrics (OI/IV/Greeks), index data, and extended provider-native fields — each carrying its own provider, value, source timestamp (+ unit and meaning), receipt timestamp, freshness, availability and provenance. This is required because providers deliver **partial messages**: FYERS sends price (`sf`) and five-level depth (`dp`) as separate messages/subscriptions, and Upstox full mode combines fields that other modes omit. The current `LiveStateStore` stores one whole observation per provider, so a depth-only message would erase a prior price update from the same provider. Components must be updated only by messages that actually contain them, and source selection must be **per component** (a fresh Upstox quote and a fresh FYERS depth may coexist with independent attribution) — never a single atomic snapshot that mixes providers or fabricates missing fields. See [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md) §9. This is a proposed design, not implemented behavior.
+
 ## 5. Instrument/data domains (target coverage)
 
 | Domain | Examples / notes |

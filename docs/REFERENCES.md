@@ -155,6 +155,43 @@ Official sources: [TS 7.0 announcement](https://devblogs.microsoft.com/typescrip
 - **Verification (final, 2026-11-17):** `bun run typecheck` pass (all 12 workspaces), `bun test` pass (301 tests, 0 fail, 1162 expect() calls, 26 files), focused web tests pass (45 tests, 0 fail, 159 expect() calls, 3 files), focused Stage D tests pass (69 tests, 0 fail, 270 expect() calls, 6 files), focused supervisor tests pass (24 tests, 0 fail, 121 expect() calls), `bun run build` pass, `git diff --check` pass — agent-reported local verification, not GitHub CI evidence. Catalog, subscription and provider tests use isolated temporary databases and mocked/fake drivers; Stage E SSE/fetch tests use deterministic fakes; no real provider data loaded, no live authentication, no real socket or network call in Stages D or E.
 - Dependency evidence (verified 2026-11-15): `@modelcontextprotocol/server@2.4.0` declared/resolved and imported in `apps/mcp-server`; `@modelcontextprotocol/client` not declared in manifests, not resolved in `bun.lock`, and not imported in source.
 
+## 10A. Multi-provider streaming architecture research (accessed 2026-11-17)
+
+Additional official sources reviewed for [MULTI_PROVIDER_STREAMING_ARCHITECTURE.md](MULTI_PROVIDER_STREAMING_ARCHITECTURE.md). These extend §2–§6; detailed findings and capability matrix are in that document.
+
+**Upstox (V3 feed, verified 2026-11-17):**
+| Source | URL | Verified notes |
+|---|---|---|
+| Market Data Feed V3 | https://upstox.com/developer/api-documentation/v3/get-market-data-feed/ | 302 redirect auth flow; `market_info` first, snapshot second, then `live_feed`; binary frames; ping/pong; limits LTPC 5000/2000, Greeks 3000/2000, Full 2000/1500, D30 50/1500 (Plus); 2 connections/user (5 Plus). |
+| Feed Authorize V3 | https://upstox.com/developer/api-documentation/get-market-data-feed-authorize-v3 | Manual `authorized_redirect_uri` path; `code` is single-use. |
+| Public V3 proto | https://assets.upstox.com/feed/market-data-feed/v3/MarketDataFeed.proto | `Feed` oneof ltpc/fullFeed/firstLevelWithGreeks; `Type` initial_feed=0/live_feed=1/market_info=2; IV is a separate field, not inside `OptionGreeks`; `full_d5` wire name vs docs `full`. |
+| Streamer functions | https://upstox.com/developer/api-documentation/streamer-function | SDK API surface; `change_mode` documented (SDK 2.31.0 defect verified from source: sends `sub`). |
+| SDK source (v2.31.0) | https://github.com/upstox/upstox-nodejs | `autoReconnect` defaults on; `changeMode()` defect; async protobuf readiness; defensive payload decoding. |
+| Historical Candle V3 | https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/ | Candle `[ts,open,high,low,close,volume,open_interest]`; no static IP under Analytics Token. |
+
+**FYERS (V3 Data Socket, verified 2026-11-17):**
+| Source | URL | Verified notes |
+|---|---|---|
+| Data Socket overview | https://fyers.in/api-docs/v3/api/websockets/data-socket/overview/ | Message types cn/sub/sf/if/dp/unsub; 100/5,000 symbols per user across connections; over-limit → no connection; one instance at a time. |
+| Symbol update | https://fyers.in/api-docs/v3/api/websockets/data-socket/data-socket-symbol-update/ | `sf`: LTP, day OHLC, volume, best bid/ask, ltq/ltt; no separate current-day close field. |
+| Indices update | https://fyers.in/api-docs/v3/api/websockets/data-socket/data-socket-indices-update/ | `if`: LTP/OHLC/change; no volume or bid/ask; sample values are strings. |
+| Depth update | https://fyers.in/api-docs/v3/api/websockets/data-socket/data-socket-depth-update/ | `dp`: five-level bid/ask price/size/order; no price fields; separate subscription. |
+| Connect/subscribe | https://fyers.in/api-docs/v3/api/websockets/data-socket/overview/data-socket-connect-and-subscribe/ | Subscribe from on-connect callback; token `appid:accesstoken`. |
+| Unsubscribe/connection | https://fyers.in/api-docs/v3/api/websockets/data-socket/overview/data-socket-unsubscribe-and-connection-management/ | `unsub` confirmation `code:200`, `s:"ok"`; update = unsubscribe then resubscribe. |
+| Advanced configuration | https://fyers.in/api-docs/v3/api/websockets/data-socket/overview/advanced-configuration/ | `setQueueProcessInterval` 1–2000 ms; Node constructor form. |
+| Plans and limits | https://fyers.in/api-docs/v3/getting-started/plans-and-limits/ | Data Socket 100/5,000; TBT 1/15. |
+| Authentication | https://fyers.in/api-docs/v3/api/authentication/ | Tokens expire daily 06:30; error codes -8/-15/-16/-17. |
+| `fyers-api-v3` npm | https://www.npmjs.com/package/fyers-api-v3 | v2.4.1; `DataSocket.getInstance`; `autoReconnect(count)`; `engines node>=14`; obfuscated; deps ws/axios/protobufjs. |
+
+**NSE / BSE / SEBI (verified 2026-11-17; see §4 for full list):**
+- NSE list of underlyings: https://www.nseindia.com/products-services/equity-derivatives-list-underlyings-information — exactly six index F&O underlyings; discontinued products listed.
+- NSE contract specifications: https://www.nseindia.com/products-services/equity-derivatives-contract-specifications — FUTIDX/OPTIDX/FUTSTK/OPTSTK, expiry `DD-MMM-YYYY`, CE/PE, strike intervals.
+- NSE F&O consolidated circular (mirror): lot-size review 6-monthly; `fo_mktlots.csv`; contract value ₹15–20 lakh.
+- NSE circular FAOP68589: https://nsearchives.nseindia.com/content/circulars/FAOP68589.pdf — NSE Tuesday expiry from 1 Sep 2025; last Tuesday monthly.
+- NSE circular FAOP67135: https://nsearchives.nseindia.com/content/circulars/FAOP67135.pdf — monthly tick-size review.
+- SEBI circular 2025/76: https://www.sebi.gov.in/legal/circulars/may-2025/final-settlement-day-expiry-day-for-equity-derivatives-contracts_94189.html — one expiry weekday per exchange (Tue/Thu), one weekly benchmark option, min one-month tenor; PDF body not directly parseable (provisions corroborated via NSE implementing circular and official-adjacent reproductions).
+- BSE contract specification: https://www.bseindia.com/static/markets/derivatives/derireports/contractindex — SENSEX futures/options, European style, asset code BSX.
+
 ## 11. Limitations of this reference pass
 
 - Some official sites (exchange portals, vendor docs) are dynamic or may restrict automated access; detailed endpoint/field/limit verification must be completed during implementation using current official documentation and authorized test access.
