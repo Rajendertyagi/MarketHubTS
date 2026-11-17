@@ -110,6 +110,21 @@ describe("pure reducer", () => {
     };
     expect(applyDataEvent(makeSnapshot(0), event)).toEqual({ kind: "invalidation-required" });
   });
+
+  test("provider-connection-changed ordering: invalid, duplicate, gap, then invalidation", () => {
+    const providerEvent = (revision: number): LiveChangeEvent => ({
+      type: "provider-connection-changed", revision, provider: "UPSTOX",
+      status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
+      requiresSnapshotRefresh: true
+    });
+    const unsafe = { ...providerEvent(1), revision: Number.MAX_SAFE_INTEGER + 1 } as LiveChangeEvent;
+    expect(applyDataEvent(makeSnapshot(0), unsafe).kind).toBe("invalid");
+    // Duplicate/stale revision is ignored before invalidation is considered.
+    expect(applyDataEvent(makeSnapshot(3), providerEvent(2)).kind).toBe("duplicate");
+    expect(applyDataEvent(makeSnapshot(3), providerEvent(3)).kind).toBe("duplicate");
+    expect(applyDataEvent(makeSnapshot(3), providerEvent(5)).kind).toBe("gap");
+    expect(applyDataEvent(makeSnapshot(3), providerEvent(4)).kind).toBe("invalidation-required");
+  });
 });
 
 describe("canonical display-model projection", () => {

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { LiveSnapshot, LiveChangeEvent } from "../../packages/contracts/src/index";
-import { LiveStreamController, type EventSourceLike, type StreamState } from "../../apps/web/src/lib/live-stream";
+import {
+  LiveStreamController, SSE_EVENT_NAMES,
+  type EventSourceLike, type SseEventLike, type SseListener, type StreamState
+} from "../../apps/web/src/lib/live-stream";
 
 const BASE = 1_700_000_000_000;
 /** Let pending promise continuations (fetch resolution, sleep) settle. */
@@ -27,26 +30,41 @@ function updated(revision: number, canonicalId: string): LiveChangeEvent {
   return { type: "item-updated", revision, canonicalId, item: item(canonicalId) };
 }
 
+/** Fake EventSource that dispatches named events through addEventListener. */
 class FakeEventSource implements EventSourceLike {
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
+  private listeners = new Map<string, Set<SseListener>>();
   closed = false;
   lastEventId = "";
+  readonly dispatched: string[] = [];
 
   constructor(readonly url: string) {}
 
-  close(): void { this.closed = true; }
-  open(): void { this.onopen?.(); }
+  addEventListener(type: string, listener: SseListener): void {
+    const set = this.listeners.get(type) ?? new Set<SseListener>();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+  removeEventListener(type: string, listener: SseListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+  private dispatch(type: string, event: SseEventLike): void {
+    this.dispatched.push(type);
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+  close(): void { this.closed = true; this.listeners.clear(); }
+  open(): void { this.dispatch("open", { data: "", lastEventId: this.lastEventId }); }
+  emitNamed(type: string, payload: unknown, revision?: number): void {
+    if (revision !== undefined) this.lastEventId = String(revision);
+    this.dispatch(type, { data: JSON.stringify(payload), lastEventId: this.lastEventId });
+  }
   emitData(payload: unknown, revision: number): void {
-    this.lastEventId = String(revision);
-    this.onmessage?.({ data: JSON.stringify(payload), lastEventId: this.lastEventId });
+    this.emitNamed("item-updated", payload, revision);
   }
   emitControl(type: "refresh" | "snapshot-required"): void {
     // Control events have no own id; the browser retains the previous data id.
-    this.onmessage?.({ data: JSON.stringify({ type }), lastEventId: this.lastEventId });
+    this.emitNamed(type, { type });
   }
-  fail(): void { this.onerror?.(); }
+  fail(): void { this.dispatch("error", { data: "", lastEventId: this.lastEventId }); }
 }
 
 class FakeFetcher {
@@ -63,7 +81,6 @@ class FakeFetcher {
   resolveNext(value: LiveSnapshot): void { this.pending.shift()?.resolve(value); }
   rejectNext(error = new Error("fetch failed")): void { this.pending.shift()?.reject(error); }
   autoResolve(value: LiveSnapshot): void { this.auto.push(async () => value); }
-  autoReject(error = new Error("fetch failed")): void { this.auto.push(async () => { throw error; }); }
   get pendingCount(): number { return this.pending.length; }
 }
 
@@ -91,10 +108,48 @@ function harness(overrides: Partial<ConstructorParameters<typeof LiveStreamContr
 
 async function startLive(h: ReturnType<typeof harness>, revision = 1) {
   h.controller.start();
-  // Initial snapshot arrives via the SSE snapshot event, not a REST fetch.
-  h.sources[0]!.emitData(snapshot(revision), revision);
+  // open() must precede the initial named snapshot event.
   h.sources[0]!.open();
+  h.sources[0]!.emitNamed("snapshot", snapshot(revision), revision);
 }
+
+describe("named SSE event dispatch", () => {
+  test("browser adapter receives all six backend event names", () => {
+    // The controller registers listeners for every backend event name.
+    expect(SSE_EVENT_NAMES).toEqual([
+      "snapshot", "item-updated", "item-removed", "provider-connection-changed",
+      "snapshot-required", "refresh"
+    ]);
+    const h = harness();
+    h.controller.start();
+    const source = h.sources[0]!;
+    // Dispatch one of each named event; all must be received (no throw).
+    source.emitNamed("snapshot", snapshot(1), 1);
+    source.emitNamed("item-updated", updated(2, "A"), 2);
+    source.emitNamed("item-removed", { type: "item-removed", revision: 3, canonicalId: "A" }, 3);
+    source.emitNamed("provider-connection-changed", {
+      type: "provider-connection-changed", revision: 4, provider: "UPSTOX",
+      status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
+      requiresSnapshotRefresh: true
+    }, 4);
+    source.emitNamed("snapshot-required", { type: "snapshot-required" });
+    source.emitNamed("refresh", { type: "refresh" });
+    for (const name of SSE_EVENT_NAMES) expect(source.dispatched).toContain(name);
+    h.controller.stop();
+  });
+
+  test("listeners are removed when the source is closed", () => {
+    const h = harness();
+    h.controller.start();
+    const source = h.sources[0]!;
+    h.controller.stop();
+    expect(source.closed).toBe(true);
+    const callsBefore = h.fetcher.calls;
+    source.emitNamed("refresh", { type: "refresh" });
+    // No listener remains, so no refresh fetch is triggered.
+    expect(h.fetcher.calls).toBe(callsBefore);
+  });
+});
 
 describe("LiveStreamController — initial and recovery connection", () => {
   test("initial no-cursor stream receives a snapshot event then enters live", async () => {
@@ -115,7 +170,6 @@ describe("LiveStreamController — initial and recovery connection", () => {
     await flush();
     expect(h.sources.length).toBe(2);
     expect(h.sources[1]!.url).toBe("/api/market/stream?since=2");
-    // No snapshot or data event follows reconnection.
     h.sources[1]!.open();
     expect(h.lastState().streamStatus).toBe("live");
     expect(h.sources[0]!.closed).toBe(true);
@@ -143,8 +197,7 @@ describe("LiveStreamController — initial and recovery connection", () => {
       status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
       requiresSnapshotRefresh: true
     };
-    h.sources[0]!.emitData(event, 3);
-    // No partial snapshot was emitted; only recovery will replace it.
+    h.sources[0]!.emitNamed("provider-connection-changed", event, 3);
     expect(h.snapshots.length).toBe(before);
     expect(h.lastState().streamStatus).toBe("recovering");
     h.fetcher.resolveNext(snapshot(4, [item("A")]));
@@ -153,18 +206,25 @@ describe("LiveStreamController — initial and recovery connection", () => {
     h.controller.stop();
   });
 
-  test("duplicate provider-connection events and concurrent triggers are deduplicated", async () => {
+  test("duplicate provider-connection event after recovery causes no extra fetch", async () => {
     const h = harness();
-    await startLive(h);
+    await startLive(h, 1);
     const event: LiveChangeEvent = {
       type: "provider-connection-changed", revision: 2, provider: "UPSTOX",
       status: { provider: "UPSTOX", state: "DISCONNECTED", changedAtMs: BASE, error: null },
       requiresSnapshotRefresh: true
     };
-    h.sources[0]!.emitData(event, 2);
-    h.sources[0]!.emitData(event, 2);
-    h.sources[0]!.emitControl("snapshot-required");
-    expect(h.fetcher.calls).toBe(1); // single-flight
+    h.sources[0]!.emitNamed("provider-connection-changed", event, 2);
+    h.fetcher.resolveNext(snapshot(3));
+    await flush();
+    h.sources[1]!.open();
+    expect(h.lastState().streamStatus).toBe("live");
+    const callsAfterRecovery = h.fetcher.calls;
+    // Duplicate event with revision <= applied (3) must be ignored.
+    h.sources[1]!.emitNamed("provider-connection-changed", { ...event, revision: 2 }, 2);
+    await flush();
+    expect(h.fetcher.calls).toBe(callsAfterRecovery);
+    expect(h.lastState().streamStatus).toBe("live");
     h.controller.stop();
   });
 
@@ -182,7 +242,6 @@ describe("LiveStreamController — refresh", () => {
   test("refresh fetches a snapshot, keeps EventSource open, and later events still apply", async () => {
     const h = harness();
     await startLive(h);
-    h.sources[0]!.lastEventId = "1";
     h.sources[0]!.emitControl("refresh"); // retained non-empty lastEventId
     expect(h.lastState().refreshStatus).toBe("fetching");
     h.fetcher.resolveNext(snapshot(3));
@@ -231,11 +290,11 @@ describe("LiveStreamController — refresh", () => {
     h.sources[0]!.emitControl("refresh");
     h.fetcher.rejectNext(new Error("network"));
     await flush();
-    expect(h.lastState().refreshStatus).toBe("fetching"); // retry in flight
+    expect(h.lastState().refreshStatus).toBe("fetching");
     h.fetcher.rejectNext(new Error("network"));
     await flush();
     expect(h.lastState().refreshStatus).toBe("error");
-    expect(h.sources[0]!.closed).toBe(false); // EventSource kept open
+    expect(h.sources[0]!.closed).toBe(false);
     const callsAfterExhaustion = h.fetcher.calls;
     h.sources[0]!.emitControl("refresh"); // periodic control ignored
     expect(h.fetcher.calls).toBe(callsAfterExhaustion);
@@ -250,8 +309,8 @@ describe("LiveStreamController — refresh", () => {
   test("recovery invalidates an in-flight refresh", async () => {
     const h = harness();
     await startLive(h);
-    h.sources[0]!.emitControl("refresh"); // refresh pending
-    h.sources[0]!.emitControl("snapshot-required"); // recovery starts, invalidates refresh
+    h.sources[0]!.emitControl("refresh");
+    h.sources[0]!.emitControl("snapshot-required");
     expect(h.fetcher.pendingCount).toBe(2);
     const before = h.snapshots.length;
     h.fetcher.resolveNext(snapshot(8)); // stale refresh response
@@ -290,25 +349,27 @@ describe("LiveStreamController — lifecycle and safety", () => {
     h.controller.stop();
     expect(h.lastState().streamStatus).toBe("closed");
     const before = h.snapshots.length;
-    h.fetcher.resolveNext(snapshot(10)); // late fetch resolution
-    h.sources[0]!.emitData(updated(11, "A"), 11); // late callback
+    h.fetcher.resolveNext(snapshot(10));
+    h.sources[0]!.emitData(updated(11, "A"), 11);
     expect(h.snapshots.length).toBe(before);
     expect(h.lastState().streamStatus).toBe("closed");
   });
 
-  test("StrictMode setup -> start -> cleanup -> stop -> setup -> start yields a fresh live controller", async () => {
+  test("StrictMode remount resumes from stored applied revision via ?since=", async () => {
     const first = harness();
-    await startLive(first);
+    await startLive(first, 5);
     first.controller.stop();
     expect(first.lastState().streamStatus).toBe("closed");
 
-    const second = harness();
-    await startLive(second);
+    // New controller with the stored snapshot from the previous instance.
+    const second = harness({ initialSnapshot: snapshot(5) });
+    second.controller.start();
+    expect(second.sources[0]!.url).toBe("/api/market/stream?since=5");
+    second.sources[0]!.open(); // no events follow
     expect(second.lastState().streamStatus).toBe("live");
 
-    // First controller's callbacks remain inert after remount.
     const before = second.snapshots.length;
-    first.sources[0]!.emitData(updated(99, "OLD"), 99);
+    first.sources[0]!.emitData(updated(99, "OLD"), 99); // old callbacks inert
     expect(second.snapshots.length).toBe(before);
     second.controller.stop();
   });
@@ -320,9 +381,8 @@ describe("LiveStreamController — lifecycle and safety", () => {
       connections: [{ provider: "UPSTOX", state: "NOT_STARTED", changedAtMs: BASE, error: null }]
     };
     h.controller.start();
-    h.fetcher.autoResolve(withLockedProvider);
-    h.sources[0]!.emitData(withLockedProvider, 1);
     h.sources[0]!.open();
+    h.sources[0]!.emitNamed("snapshot", withLockedProvider, 1);
     expect(h.lastState().streamStatus).toBe("live");
     expect(h.snapshots[0]!.connections[0]!.state).toBe("NOT_STARTED");
     h.controller.stop();

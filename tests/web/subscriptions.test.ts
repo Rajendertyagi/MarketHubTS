@@ -38,7 +38,7 @@ describe("subscription client", () => {
 
   test("GET rejects an invalid payload", async () => {
     fakeFetch(() => ({ status: 200, body: { generation: "bad" } }));
-    expect(fetchSubscriptions()).rejects.toBeDefined();
+    await expect(fetchSubscriptions()).rejects.toBeDefined();
   });
 
   test("PUT success returns the view and exposes post-commit runtime error separately", async () => {
@@ -120,7 +120,7 @@ describe("subscription client", () => {
     expect(secondResult.view?.generation).toBe(2);
   });
 
-  test("manual canonical-ID entry rejects empty IDs at the request schema", () => {
-    expect(() => replaceSubscriptions([{ canonicalId: "", enabled: true }])).toThrow();
+  test("manual canonical-ID entry rejects empty IDs at the request schema", async () => {
+    await expect(replaceSubscriptions([{ canonicalId: "", enabled: true }])).rejects.toBeDefined();
   });
 });

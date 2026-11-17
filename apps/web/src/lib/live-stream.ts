@@ -1,13 +1,33 @@
 import type { LiveSnapshot } from "@markethub/contracts";
 import { applyDataEvent, isSafeRevision, parseSseMessage } from "./live";
 
-/** Minimal EventSource surface so tests can supply a deterministic fake. */
+/** Event payload shape delivered to named SSE listeners. */
+export interface SseEventLike {
+  data: string;
+  lastEventId: string;
+}
+export type SseListener = (event: SseEventLike) => void;
+
+/**
+ * Minimal EventSource surface so tests can supply a deterministic fake.
+ * Named events are dispatched through addEventListener, matching the browser
+ * EventSource API and the backend's named SSE events.
+ */
 export interface EventSourceLike {
-  onopen: (() => void) | null;
-  onmessage: ((event: { data: string; lastEventId: string }) => void) | null;
-  onerror: (() => void) | null;
+  addEventListener(type: string, listener: SseListener): void;
+  removeEventListener(type: string, listener: SseListener): void;
   close(): void;
 }
+
+/** All named SSE events emitted by the Stage D backend. */
+export const SSE_EVENT_NAMES = [
+  "snapshot",
+  "item-updated",
+  "item-removed",
+  "provider-connection-changed",
+  "snapshot-required",
+  "refresh"
+] as const;
 
 export type StreamStatus = "idle" | "connecting" | "live" | "recovering" | "error" | "closed";
 export type RefreshStatus = "idle" | "fetching" | "stale" | "error";
@@ -22,6 +42,8 @@ export interface StreamState {
 
 export interface LiveStreamControllerOptions {
   createEventSource: (url: string) => EventSourceLike;
+  /** Stored snapshot from a previous instance (StrictMode remount) — resume via ?since=. */
+  initialSnapshot?: LiveSnapshot;
   fetchSnapshot: () => Promise<LiveSnapshot>;
   sleep: (ms: number) => Promise<void>;
   onSnapshot: (snapshot: LiveSnapshot) => void;
@@ -39,8 +61,9 @@ function errorMessage(error: unknown): string {
 
 /**
  * Owns one SSE transport lifecycle. A fresh instance is created per React
- * effect lifecycle; stop() is terminal for that instance. All callbacks from
- * a superseded EventSource are inert via streamGeneration checks.
+ * effect lifecycle; stop() is terminal for that instance. All listeners from
+ * a superseded EventSource are removed and their callbacks are inert via
+ * streamGeneration checks.
  */
 export class LiveStreamController {
   private readonly maxRecoveryAttempts: number;
@@ -54,6 +77,7 @@ export class LiveStreamController {
   private recoveryGeneration = 0;
   private refreshGeneration = 0;
   private eventSource: EventSourceLike | null = null;
+  private sourceListeners: Array<[string, SseListener]> = [];
   private recovering = false;
   private refreshExhausted = false;
 
@@ -75,7 +99,16 @@ export class LiveStreamController {
   /** Open the initial no-cursor stream. Idempotent. */
   start(): void {
     if (this.stopped || this.streamStatus !== "idle") return;
-    this.openStream(null);
+    const stored = this.opts.initialSnapshot;
+    if (stored && isSafeRevision(stored.revision)) {
+      // Resume from the stored applied revision; a ?since= stream may send no
+      // snapshot event, and onopen is sufficient to enter live.
+      this.snapshot = stored;
+      this.appliedRevision = stored.revision;
+      this.openStream(stored.revision);
+    } else {
+      this.openStream(null);
+    }
   }
 
   /** Terminal for this instance: invalidate all callbacks and cancel work. */
@@ -97,7 +130,7 @@ export class LiveStreamController {
     this.triggerRecovery("manual retry");
   }
 
-  /** Manual retry after refresh retry exhaustion. */
+  /** Manual retry after refresh retry exhaustion (fetch-only, no stream restart). */
   retryRefresh(): void {
     if (this.stopped || this.recovering) return;
     this.refreshExhausted = false;
@@ -122,9 +155,10 @@ export class LiveStreamController {
     const current = this.eventSource;
     this.eventSource = null;
     if (current) {
-      current.onopen = null;
-      current.onmessage = null;
-      current.onerror = null;
+      for (const [type, listener] of this.sourceListeners) {
+        try { current.removeEventListener(type, listener); } catch { /* already closed */ }
+      }
+      this.sourceListeners = [];
       try { current.close(); } catch { /* already closed */ }
     }
   }
@@ -141,23 +175,30 @@ export class LiveStreamController {
     const source = this.opts.createEventSource(url);
     this.eventSource = source;
 
-    source.onopen = () => {
+    const add = (type: string, listener: SseListener) => {
+      source.addEventListener(type, listener);
+      this.sourceListeners.push([type, listener]);
+    };
+
+    add("open", () => {
       if (generation !== this.streamGeneration || this.stopped) return;
       // After a validated REST recovery snapshot, onopen alone is sufficient
       // to enter live — a ?since= stream may send no snapshot event at all.
       this.setStatus("live");
-    };
-    source.onmessage = (message) => {
-      if (generation !== this.streamGeneration || this.stopped) return;
-      this.handleMessage(message);
-    };
-    source.onerror = () => {
+    });
+    add("error", () => {
       if (generation !== this.streamGeneration || this.stopped) return;
       this.triggerRecovery("SSE transport error");
-    };
+    });
+    for (const name of SSE_EVENT_NAMES) {
+      add(name, (event) => {
+        if (generation !== this.streamGeneration || this.stopped) return;
+        this.handleMessage(event);
+      });
+    }
   }
 
-  private handleMessage(message: { data: string; lastEventId: string }): void {
+  private handleMessage(message: SseEventLike): void {
     const parsed = parseSseMessage(message.lastEventId, message.data);
     if (parsed.kind === "invalid") {
       this.triggerRecovery(`invalid SSE message: ${parsed.reason}`);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { parseSnapshot, projectDisplayModel, type DisplayItem } from "../lib/live";
 import { LiveStreamController } from "../lib/live-stream";
 import { useLiveStore } from "../store/live-store";
@@ -30,15 +30,31 @@ function ItemRow({ item }: { item: DisplayItem }) {
         <Field label="High" value={item.high} />
         <Field label="Low" value={item.low} />
         <Field label="Volume" value={item.volume} />
-        <Field label="Freshness" value={item.freshness} />
-        <Field label="Provider" value={item.provider} />
-        <Field label="Reason" value={item.reason} />
+        <Field label="Selection mode" value={item.mode} />
+        <Field label="Selection freshness" value={item.freshness} />
+        <Field label="Selection reason" value={item.reason} />
+        <Field label="Selected provider" value={item.provider} />
+        <Field label="Observation provider" value={item.observationProvider} />
+        <Field label="Observation freshness" value={item.observationFreshness} />
+        <Field label="Availability" value={item.availability} />
         <Field label="Age basis" value={item.ageBasis} />
         <Field label="Timestamp trusted" value={item.timestampTrusted === undefined ? undefined : String(item.timestampTrusted)} />
+        <Field label="Normalized provider timestamp (ms)" value={item.normalizedProviderTimestampMs} />
+        <Field label="Raw provider timestamp" value={item.rawProviderTimestamp} />
+        <Field label="Provider timestamp unit" value={item.providerTimestampUnit} />
+        <Field label="Provider timestamp meaning" value={item.providerTimestampMeaning} />
+        <Field label="Received at (ms)" value={item.receivedAtMs} />
+        <Field label="Provider sequence" value={item.providerSequence} />
+        <Field label="Provenance source" value={item.provenance?.source} />
+        <Field label="Provenance provider" value={item.provenance?.provider} />
         <Field label="Source observed at" value={item.provenance?.sourceObservedAt} />
-        <Field label="Received at" value={item.provenance?.receivedAt} />
-        <Field label="Source" value={item.provenance?.source} />
+        <Field label="Provenance received at" value={item.provenance?.receivedAt} />
+        <Field label="Synced at" value={item.provenance?.syncedAt} />
         <Field label="Source version" value={item.provenance?.sourceVersion} />
+        <Field label="Effective from" value={item.provenance?.effectiveFrom} />
+        <Field label="Effective to" value={item.provenance?.effectiveTo} />
+        <Field label="Notes" value={item.provenance?.notes} />
+        <Field label="Item updated at (ms)" value={item.updatedAtMs} />
       </dl>
     </li>
   );
@@ -48,19 +64,36 @@ export function LivePanel() {
   const snapshot = useLiveStore((s) => s.snapshot);
   const stream = useLiveStore((s) => s.stream);
   const model = useMemo(() => (snapshot ? projectDisplayModel(snapshot) : null), [snapshot]);
+  const controllerRef = useRef<LiveStreamController | null>(null);
 
   // A fresh terminal-per-instance controller per effect lifecycle. StrictMode
   // remounts create a new controller; the Zustand store persists across them.
   useEffect(() => {
+    const storedSnapshot = useLiveStore.getState().snapshot;
     const controller = new LiveStreamController({
+      ...(storedSnapshot ? { initialSnapshot: storedSnapshot } : {}),
       createEventSource: (url) => {
         const source = new EventSource(url);
+        const handlers = new Map<(event: { data: string; lastEventId: string }) => void, EventListener>();
         return {
-          set onopen(handler: (() => void) | null) { source.onopen = handler ? () => handler() : null; },
-          set onmessage(handler: ((event: { data: string; lastEventId: string }) => void) | null) {
-            source.onmessage = handler ? (event) => handler({ data: event.data, lastEventId: event.lastEventId }) : null;
+          addEventListener: (type, listener) => {
+            const handler = (event: Event) => {
+              const message = event as MessageEvent;
+              listener({
+                data: typeof message.data === "string" ? message.data : "",
+                lastEventId: typeof message.lastEventId === "string" ? message.lastEventId : ""
+              });
+            };
+            handlers.set(listener, handler);
+            source.addEventListener(type, handler);
           },
-          set onerror(handler: (() => void) | null) { source.onerror = handler ? () => handler() : null; },
+          removeEventListener: (type, listener) => {
+            const handler = handlers.get(listener);
+            if (handler) {
+              source.removeEventListener(type, handler);
+              handlers.delete(listener);
+            }
+          },
           close: () => source.close()
         };
       },
@@ -73,13 +106,18 @@ export function LivePanel() {
       onSnapshot: (next) => useLiveStore.getState().setSnapshot(next),
       onState: (next) => useLiveStore.getState().setStream(next)
     });
+    controllerRef.current = controller;
     controller.start();
-    return () => controller.stop();
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
   }, []);
 
   const transportTone = toneForState(
     stream.streamStatus === "live" ? "ok" : stream.streamStatus === "error" ? "error" : "unknown"
   );
+  const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800";
 
   return (
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -100,6 +138,9 @@ export function LivePanel() {
         <div className="mb-3 rounded-lg border border-rose-800/60 bg-rose-950/30 p-3 text-sm text-rose-100" role="alert">
           <p className="font-medium">Live stream unavailable</p>
           <p className="mt-1 text-xs text-rose-200/80">{stream.lastError ?? "Unknown error"}</p>
+          <button type="button" className={`${button} mt-2`} onClick={() => controllerRef.current?.retry()}>
+            Retry stream
+          </button>
         </div>
       )}
       {stream.refreshStatus === "stale" && (
@@ -108,9 +149,12 @@ export function LivePanel() {
         </p>
       )}
       {stream.refreshStatus === "error" && (
-        <p className="mb-3 text-xs text-rose-300" role="status">
-          Snapshot refresh failed: {stream.refreshError ?? "Unknown error"}. Periodic refresh is paused until manual retry.
-        </p>
+        <div className="mb-3 rounded-lg border border-rose-800/50 bg-rose-950/20 p-3 text-xs text-rose-200" role="status">
+          <p>Snapshot refresh failed: {stream.refreshError ?? "Unknown error"}. Periodic refresh is paused until manual retry.</p>
+          <button type="button" className={`${button} mt-2`} onClick={() => controllerRef.current?.retryRefresh()}>
+            Retry refresh
+          </button>
+        </div>
       )}
 
       {!model && (

@@ -111,9 +111,11 @@ export type ApplyResult =
  */
 export function applyDataEvent(snapshot: LiveSnapshot, event: LiveChangeEvent): ApplyResult {
   if (!isSafeRevision(event.revision)) return { kind: "invalid", reason: "unsafe-revision" };
-  if (event.type === "provider-connection-changed") return { kind: "invalidation-required" };
+  // Ordering matters: a duplicate or stale provider-connection event must be
+  // ignored before it can trigger a full snapshot invalidation.
   if (event.revision <= snapshot.revision) return { kind: "duplicate" };
   if (event.revision > snapshot.revision + 1) return { kind: "gap" };
+  if (event.type === "provider-connection-changed") return { kind: "invalidation-required" };
 
   let items = snapshot.items;
   if (event.type === "item-updated") {
@@ -155,6 +157,8 @@ export interface DisplayItem {
   freshness: LiveFreshnessState;
   reason: string;
   provider: ProviderId | null;
+  observationProvider?: ProviderId;
+  observationFreshness?: LiveFreshnessState;
   ageBasis?: ObservationAgeBasis;
   timestampTrusted?: boolean;
   normalizedProviderTimestampMs?: number | null;
@@ -206,6 +210,8 @@ export function projectDisplayModel(snapshot: LiveSnapshot): DisplayModel {
         if (value.volume !== undefined) projected.volume = value.volume;
       }
       if (observation) {
+        projected.observationProvider = observation.provider;
+        projected.observationFreshness = observation.freshness;
         projected.ageBasis = observation.ageBasis;
         projected.timestampTrusted = observation.timestampTrusted;
         projected.normalizedProviderTimestampMs = observation.normalizedProviderTimestampMs;
