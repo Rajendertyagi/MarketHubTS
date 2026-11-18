@@ -488,7 +488,7 @@ export class StreamSupervisor {
           this.setConnectionState("ERROR", this.lastError ?? message);
           this.retireInstance(op.instance, "failed");
           this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
-          if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
+          this.scheduleGenerationRetry(op.generation, message);
         }
       } else if (op.state === "aborting") {
         this.wakeQuiescence();
@@ -561,7 +561,7 @@ export class StreamSupervisor {
     if (op.state !== "aborting" || this.stopped) return;
     this.retireInstance(op.instance, "timeout");
     this.resolveOperation(op, { kind: "timed-out", error });
-    this.scheduleReconnect(this.epoch, error);
+    this.scheduleGenerationRetry(op.generation, error);
   }
 
   /** Callback lifecycle owner for a DISCONNECTED/ERROR during a pending op. */
@@ -577,7 +577,7 @@ export class StreamSupervisor {
     if (op.state !== "aborting" || this.stopped) return;
     this.retireInstance(instance, `callback:${reason.toLowerCase()}`);
     this.resolveOperation(op, { kind: "callback-retired", reason });
-    this.scheduleReconnect(this.epoch, cause);
+    this.scheduleGenerationRetry(op.generation, cause);
   }
 
   /**
@@ -689,7 +689,7 @@ export class StreamSupervisor {
       this.lockedDriver = false;
       this.lastError = `driver factory failed: ${errorMessage(error)}`;
       this.setConnectionState("ERROR", this.lastError);
-      this.scheduleReconnect(this.epoch, this.lastError);
+      this.scheduleGenerationRetry(generation, this.lastError);
       return false;
     }
 
@@ -704,7 +704,7 @@ export class StreamSupervisor {
       this.setConnectionState("ERROR", this.lastError ?? message);
       this.retireInstance(instance, "failed");
       this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
-      if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
+      this.scheduleGenerationRetry(generation, message);
       return false;
     }
     this.attachSettlement(op, raw);
@@ -725,7 +725,7 @@ export class StreamSupervisor {
       this.setConnectionState("ERROR", this.lastError ?? message);
       this.retireInstance(instance, "failed");
       this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
-      if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
+      this.scheduleGenerationRetry(generation, message);
       return false;
     }
     this.attachSettlement(op, raw);
@@ -739,6 +739,19 @@ export class StreamSupervisor {
       (this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler).clear(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  /**
+   * Schedule a retry only for a failure belonging to the current desired
+   * generation. A stale operation's failure must not schedule a retry: the
+   * newer generation's queued reconciliation owns recovery, and a retry could
+   * otherwise acquire a second driver while the newer start is still pending
+   * (driverStarted stays false until the driver confirms start).
+   */
+  private scheduleGenerationRetry(generation: number, cause: string): void {
+    if (generation !== this.generation) return;
+    if (this.isCurrentGenerationTerminal()) return;
+    this.scheduleReconnect(this.epoch, cause);
   }
 
   private scheduleReconnect(epoch: number, cause: string): void {

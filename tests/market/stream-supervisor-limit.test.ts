@@ -282,6 +282,50 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
     } finally { h.cleanup(); }
   });
 
+  test("stale-generation terminal failure schedules no retry that can overlap the newer start", async () => {
+    const h = await harness();
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+
+      // gen1 starts a deferred driver (its start is still pending).
+      h.driverConfig.deferredStart = true;
+      const gen1 = await h.subscriptions.replace([{ canonicalId: A, enabled: true }]);
+      const apply1 = h.supervisor.applyDesiredState([{ canonicalId: A, enabled: true }], gen1);
+      for (let i = 0; i < 100 && !h.instances[0]?.deferredArmed; i++) await Bun.sleep(1);
+      const driver1 = h.instances[0]!;
+      expect(driver1.deferredArmed).toBe(true);
+
+      // gen2 is committed while gen1 is still connecting. Its reconciliation is
+      // queued behind gen1's in-flight operation.
+      const gen2 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      const apply2 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen2);
+      h.driverConfig.failOn = "none"; // gen2's fresh driver will succeed (still deferred)
+
+      // gen1 fails terminally. The failure belongs to gen1, so it must NOT
+      // schedule a retry: gen2's queued reconciliation owns recovery.
+      driver1.failDeferredLimit();
+      for (let i = 0; i < 100 && !h.instances[1]?.deferredArmed; i++) await Bun.sleep(1);
+      expect(h.instances.length).toBe(2); // gen2's driver is the only new instance
+
+      // No stale retry timer from gen1 may exist. Fire anything present anyway
+      // to prove that even a manually-triggered stale timer cannot create a
+      // third driver while gen2's start is still pending.
+      expect(h.timers.active.length).toBe(0);
+      for (const task of [...h.timers.active]) task.fn();
+      expect(h.instances.length).toBe(2); // no overlapping start / third driver
+
+      // gen2 eventually connects successfully.
+      h.instances[1]!.resolveDeferred();
+      await Promise.all([apply1, apply2]);
+      const view = h.supervisor.getView();
+      expect(view.runtime.connectionState).toBe("STREAMING");
+      expect(view.runtime.generation).toBe(2);
+      expect(view.runtime.capabilities).toBeUndefined();
+      expect(h.instances.length).toBe(2);
+    } finally { h.cleanup(); }
+  });
+
   test("a terminal failure landing between enqueue and run blocks the queued same-generation run", async () => {
     const h = await harness();
     try {
