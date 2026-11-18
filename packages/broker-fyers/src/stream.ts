@@ -193,7 +193,7 @@ function sfQuoteUpdate(msg: DecodedMessage, canonicalId: string, receivedAtMs: n
   };
 }
 
-/** Index (`if`) quote: LTP/OHLC/change only — no volume, no bid/ask. */
+/** Index (`if`) quote: LTP/OHLC/change only — no volume, no bid/ask, no last-traded time. */
 function ifQuoteUpdate(msg: DecodedMessage, canonicalId: string, receivedAtMs: number): ComponentUpdate | null {
   const set: Partial<Record<QuoteField, FieldUpdate>> = {};
   const ltp = finiteNumber(msg.ltp); // mapper: iv -> ltp
@@ -213,8 +213,9 @@ function ifQuoteUpdate(msg: DecodedMessage, canonicalId: string, receivedAtMs: n
   if (change !== undefined) set.change = field(change, receivedAtMs);
   const changePercent = finiteNumber(msg.chp);
   if (changePercent !== undefined) set.changePercent = field(changePercent, receivedAtMs);
-  const feedTime = unverifiedTimestamp(msg.exch_feed_time, "FYERS exch_feed_time (unit unverified)");
-  if (feedTime) set.lastTradedTime = field(feedTime, receivedAtMs, feedTime);
+  // `if` does not carry a last-traded time. `exch_feed_time` is an exchange-feed
+  // timestamp, not a documented last-traded timestamp, so it must never be
+  // mapped to the canonical lastTradedTime field.
   if (Object.keys(set).length === 0) return null;
   return {
     provider: "FYERS", canonicalId, component: "quote", set,

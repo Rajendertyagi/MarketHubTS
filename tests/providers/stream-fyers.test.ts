@@ -325,7 +325,7 @@ describe("Stage C — component mapping", () => {
     expect(levels[0]!.askPrice).toBe(100.6);
   });
 
-  test("if maps to a reduced quote with no volume and no depth", async () => {
+  test("if maps to a reduced quote with no volume, no depth and no last-traded time", async () => {
     const h = await connected([quoteSub(NIFTY_CANONICAL, NIFTY)]);
     h.streamer.emit("message", {
       type: "if", symbol: NIFTY, ltp: 25000, prev_close_price: 24900,
@@ -334,9 +334,22 @@ describe("Stage C — component mapping", () => {
     });
     const quote = quoteUpdates(h.updates)[0]!;
     expect(quote.set.ltp?.value).toBe(25000);
+    expect(quote.set.previousClose?.value).toBe(24900);
+    expect(quote.set.open?.value).toBe(24950);
+    expect(quote.set.high?.value).toBe(25100);
+    expect(quote.set.low?.value).toBe(24900);
+    expect(quote.set.change?.value).toBe(100);
+    expect(quote.set.changePercent?.value).toBe(0.4);
+    // exch_feed_time is not a documented last-traded timestamp for `if`.
+    expect(quote.set.lastTradedTime).toBeUndefined();
     expect(quote.set.volume).toBeUndefined();
     expect(quote.set.bidPrice).toBeUndefined();
     expect(depthUpdates(h.updates).length).toBe(0);
+    // Observation-level timestamp metadata remains verbatim, untrusted and UNKNOWN.
+    expect(h.observations.length).toBe(1);
+    expect(h.observations[0]!.rawProviderTimestamp).toBe(1700000000);
+    expect(h.observations[0]!.providerTimestampUnit).toBe("UNKNOWN"); // untrusted downstream
+    expect(h.observations[0]!.providerTimestampMeaning).toContain("unverified");
   });
 
   test("dp maps to five-level depth with levelCount 5 and complete snapshot", async () => {
@@ -431,6 +444,7 @@ describe("Stage C — component mapping", () => {
     const h = await connected();
     h.streamer.emit("message", sf({ last_traded_time: 1700000000 }));
     const quote = quoteUpdates(h.updates)[0]!;
+    expect(quote.set.lastTradedTime).toBeDefined(); // sf still maps last_traded_time
     const ts = quote.set.lastTradedTime?.sourceTimestamp;
     expect(ts?.raw).toBe(1700000000);
     expect(ts?.unit).toBe("UNKNOWN");
