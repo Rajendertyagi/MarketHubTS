@@ -813,7 +813,17 @@ export class StreamSupervisor {
     // Terminal failures (e.g. LIMITED) are non-retryable: never schedule an
     // automatic reconnect for a generation blocked by a typed terminal failure.
     if (this.isCurrentGenerationTerminal()) return;
-    if (this.reconnectTimer || this.stopped || this.lockedDriver) return;
+    if (this.stopped || this.lockedDriver) return;
+    const existing = this.reconnectTimer;
+    if (existing) {
+      // A retry for the same generation and epoch is already pending: retain
+      // it, never create a duplicate timer.
+      if (existing.generation === generation && existing.epoch === epoch) return;
+      // An obsolete timer (different generation or epoch) occupies the slot.
+      // Invalidate and cancel it so this newer retry can be scheduled; its late
+      // callback will fail the token check and remain completely inert.
+      this.cancelReconnectTimer();
+    }
     const maxAttempts = this.opts.reconnect?.maxAttempts ?? 5;
     const baseDelayMs = this.opts.reconnect?.baseDelayMs ?? 1000;
     if (this.reconnectAttempts >= maxAttempts) {

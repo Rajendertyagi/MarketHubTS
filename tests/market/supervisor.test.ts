@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalInstrumentSchema, providerInstrumentMappingSchema,
-  type FreshnessPolicy, type NormalizeObservationInput, type ProviderInstrumentMapping
+  type FreshnessPolicy, type ProviderConnectionState, type ProviderInstrumentMapping
 } from "../../packages/contracts/src/index";
 import { openDatabase, runMigrations, defaultMigrationsFolder, SqliteCatalogRepository, SqliteSubscriptionRepository } from "../../packages/database/src/index";
-import { MarketDataService, type CatalogRepository } from "../../packages/market-core/src/index";
+import { MarketDataService, type CatalogRepository, type NormalizeObservationInput } from "../../packages/market-core/src/index";
 import {
   DriverLockedError, LockedUpstoxDriver, StreamSupervisor,
   type DriverCallbacks, type DriverSubscription, type ReconnectTimerScheduler, type StreamingDriver
@@ -28,7 +28,7 @@ class FakeDriver implements StreamingDriver {
   callbacks: DriverCallbacks | null = null;
   /** All callback sets handed out, one per start(), so old instances can be replayed. */
   callbackHistory: DriverCallbacks[] = [];
-  state = "NOT_STARTED";
+  state: ProviderConnectionState = "NOT_STARTED";
   failStart = false;
 
   async start(subs: DriverSubscription[], callbacks: DriverCallbacks, _signal: AbortSignal): Promise<void> {
@@ -43,9 +43,9 @@ class FakeDriver implements StreamingDriver {
     this.updates.push(subs.map((s) => ({ ...s })));
   }
   stop(): void { this.stopCount++; this.state = "DISCONNECTED"; }
-  getConnectionState() { return this.state; }
+  getConnectionState(): ProviderConnectionState { return this.state; }
   emitObservation(input: NormalizeObservationInput): void { this.callbacks?.onObservation(input); }
-  emitState(state: any, error?: string): void { this.state = state; this.callbacks?.onConnectionState(state, error); }
+  emitState(state: ProviderConnectionState, error?: string): void { this.state = state; this.callbacks?.onConnectionState(state, error); }
 }
 
 function observation(canonicalId: string, ltp: number): NormalizeObservationInput {
@@ -95,7 +95,7 @@ class DeferredDriver implements StreamingDriver {
     });
   }
   stop(): void { this.stopCount++; }
-  getConnectionState() { return "NOT_STARTED"; }
+  getConnectionState(): ProviderConnectionState { return "NOT_STARTED"; }
   waitForStartCalled(): Promise<void> {
     if (this.startCalled) return Promise.resolve();
     return new Promise((resolve) => this.startWaiters.push(resolve));
@@ -120,7 +120,7 @@ class AllocatingFailDriver implements StreamingDriver {
   }
   async updateSubscriptions(_subs: DriverSubscription[], _signal: AbortSignal): Promise<void> {}
   stop(): void { this.stopCount++; }
-  getConnectionState() { return "NOT_STARTED"; }
+  getConnectionState(): ProviderConnectionState { return "NOT_STARTED"; }
 }
 
 /** Catalog that can hold mapping resolution pending for a deterministic race. */
@@ -195,7 +195,10 @@ async function harnessWithCatalog(
     instances.push(instance);
     return instance;
   };
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog: catalogFactory(realCatalog), createDriver: trackedCreate, reconnect });
+  const supervisor = new StreamSupervisor({
+    service, subscriptions, catalog: catalogFactory(realCatalog), createDriver: trackedCreate,
+    ...(reconnect !== undefined ? { reconnect } : {})
+  });
   const seed = async (canonicalId: string, nativeIdentifier: string) => {
     await realCatalog.transaction(async (tx) => {
       await tx.upsertInstrument(canonicalInstrumentSchema.parse({
@@ -229,8 +232,8 @@ class ManualTimerScheduler implements ReconnectTimerScheduler {
     const task = this.tasks.find((t) => t.handle === (handle as unknown as number));
     if (task) task.cancelled = true;
   }
-  fire(handle: ReturnType<typeof setTimeout>): void {
-    const task = this.tasks.find((t) => t.handle === (handle as unknown as number));
+  fire(handle: number): void {
+    const task = this.tasks.find((t) => t.handle === handle);
     if (task && !task.cancelled) task.fn();
   }
   get active() {
@@ -257,7 +260,11 @@ async function harness(
     instances.push(instance);
     return instance;
   };
-  const supervisor = new StreamSupervisor({ service, subscriptions, catalog, createDriver: trackedCreate, reconnect, reconnectTimerScheduler });
+  const supervisor = new StreamSupervisor({
+    service, subscriptions, catalog, createDriver: trackedCreate,
+    ...(reconnect !== undefined ? { reconnect } : {}),
+    ...(reconnectTimerScheduler !== undefined ? { reconnectTimerScheduler } : {})
+  });
 
   const seed = async (canonicalId: string, nativeIdentifier: string, mappingStatus: "ACTIVE" | "INACTIVE" = "ACTIVE", provider: "UPSTOX" | "FYERS" = "UPSTOX") => {
     await catalog.transaction(async (tx) => {
@@ -920,6 +927,66 @@ describe("final supervisor lifecycle corrections", () => {
     expect(h.instances.reduce((n, i) => n + (i as FakeDriver).updates.length, 0)).toBe(updatesBefore);
     expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
     h.cleanup();
+  });
+
+  test("a stale generation timer cannot suppress a newer generation factory-failure retry", async () => {
+    const scheduler = new ManualTimerScheduler();
+    let failNextCreate = false;
+    const h = await harness(
+      () => {
+        if (failNextCreate) {
+          failNextCreate = false;
+          throw new Error("factory failed for generation 2");
+        }
+        return new FakeDriver();
+      },
+      { maxAttempts: 3, baseDelayMs: 1000 },
+      scheduler
+    );
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.subscriptions.replace([{ canonicalId: A, enabled: true }]); // gen 1
+      await h.supervisor.start();
+
+      // gen 1 connects, then disconnects -> T1 scheduled for gen 1.
+      const a = h.instances[0] as FakeDriver;
+      a.emitState("STREAMING");
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      a.emitState("DISCONNECTED");
+      expect(scheduler.active.length).toBe(1);
+      const t1 = scheduler.active[0]!;
+      const t1Handle = t1.handle;
+
+      // gen 2 is committed through the standalone flow; its factory failure
+      // must schedule T2 despite T1 still occupying the timer slot.
+      failNextCreate = true;
+      await h.supervisor.replaceSubscriptions([{ canonicalId: B, enabled: true }]);
+
+      // T1 was obsolete (gen 1) and must have been replaced by T2 (gen 2).
+      expect(scheduler.active.length).toBe(1);
+      const t2 = scheduler.active[0]!;
+      expect(t2.handle).not.toBe(t1Handle);
+      expect(scheduler.tasks.find((t) => t.handle === t1Handle)!.cancelled).toBe(true);
+
+      // T1's late callback must be completely inert: it cannot clear or modify T2.
+      const startsBefore = h.instances.reduce((n, i) => n + (i as FakeDriver).starts.length, 0);
+      t1.fn();
+      await Bun.sleep(0);
+      expect(scheduler.active.length).toBe(1);
+      expect(scheduler.active[0]!.handle).toBe(t2.handle);
+      expect(h.instances.reduce((n, i) => n + (i as FakeDriver).starts.length, 0)).toBe(startsBefore);
+
+      // Fire T2 -> gen 2 recovers with a fresh driver; applied generation advances.
+      scheduler.fire(t2.handle);
+      await Bun.sleep(20);
+      expect(h.instances.length).toBe(2); // A + B (the failed factory created none)
+      const b = h.instances[1] as FakeDriver;
+      b.emitState("STREAMING");
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      expect(h.supervisor.getView().generation).toBe(2);
+      expect(h.supervisor.getView().runtime.generation).toBe(2);
+    } finally { h.cleanup(); }
   });
 });
 
