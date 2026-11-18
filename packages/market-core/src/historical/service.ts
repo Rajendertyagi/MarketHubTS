@@ -108,12 +108,17 @@ export class HistoricalCandleService {
     for (const provider of providers) {
       // Authoritative UNAVAILABLE notes are permanent: do not retry the same
       // provider for a range it already reported as permanently unavailable
-      // (no config/entitlement-change signal exists in M5). Alternate providers
-      // are still tried, and an existing note is retained.
+      // (no config/entitlement-change signal exists in M5). Skip only when a
+      // note FULLY covers the request — a partial overlap must not suppress
+      // the fetchable remainder. Alternate providers are still tried, and an
+      // existing note is retained.
       const existingNotes = this.options.candles.getRangeNotes(
         request.canonicalId, request.interval, request.fromMs, request.toMs
       );
-      if (existingNotes.some((n) => n.kind === "UNAVAILABLE" && n.provider === provider.id)) continue;
+      if (existingNotes.some((n) =>
+        n.kind === "UNAVAILABLE" && n.provider === provider.id &&
+        n.rangeStartMs <= request.fromMs && n.rangeEndMs >= request.toMs
+      )) continue;
 
       providersTried.push(provider.id);
       try {

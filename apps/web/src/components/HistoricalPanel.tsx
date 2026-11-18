@@ -226,14 +226,14 @@ export function HistoricalPanel() {
             <input aria-label="Candle max age days" type="number" min="1" className={`${input} mt-1 w-32`}
               value={retention?.classes.CANDLE?.maxAgeDays ?? ""}
               onChange={(e) => {
-                const days = Number(e.target.value);
-                setRetention((prev) => ({
-                  version: 1,
-                  classes: {
-                    ...(prev?.classes ?? {}),
-                    ...(Number.isInteger(days) && days > 0 ? { CANDLE: { maxAgeDays: days } } : {})
-                  }
-                }));
+                const raw = e.target.value.trim();
+                const days = Number(raw);
+                setRetention((prev) => {
+                  const classes = { ...(prev?.classes ?? {}) };
+                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.CANDLE = { maxAgeDays: days };
+                  else delete classes.CANDLE; // clearing the input removes the limit
+                  return { version: 1, classes };
+                });
               }} />
           </label>
           <label className="text-xs text-slate-300">
@@ -241,14 +241,14 @@ export function HistoricalPanel() {
             <input aria-label="Snapshot max age days" type="number" min="1" className={`${input} mt-1 w-32`}
               value={retention?.classes.SNAPSHOT?.maxAgeDays ?? ""}
               onChange={(e) => {
-                const days = Number(e.target.value);
-                setRetention((prev) => ({
-                  version: 1,
-                  classes: {
-                    ...(prev?.classes ?? {}),
-                    ...(Number.isInteger(days) && days > 0 ? { SNAPSHOT: { maxAgeDays: days } } : {})
-                  }
-                }));
+                const raw = e.target.value.trim();
+                const days = Number(raw);
+                setRetention((prev) => {
+                  const classes = { ...(prev?.classes ?? {}) };
+                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.SNAPSHOT = { maxAgeDays: days };
+                  else delete classes.SNAPSHOT; // clearing the input removes the limit
+                  return { version: 1, classes };
+                });
               }} />
           </label>
           <button type="button" className={button} onClick={() => void saveRetentionSettings()}>Save retention</button>

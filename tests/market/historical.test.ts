@@ -135,6 +135,24 @@ describe("HistoricalCandleService", () => {
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 
+  test("a partial-range UNAVAILABLE note does not suppress the fetchable remainder", async () => {
+    const p = new FakeProvider("UPSTOX", [candle(Date.parse("2026-01-20T00:00:00Z"), 110)]);
+    const h = harness([p]);
+    try {
+      // Note covers only Jan 1-5; the request spans Jan 1-31, so the provider
+      // must still be attempted for the fetchable remainder.
+      h.candles.addRangeNote({
+        canonicalId: CANON, interval: "1D", provider: "UPSTOX",
+        rangeStartMs: Date.parse("2026-01-01T00:00:00Z"), kind: "UNAVAILABLE",
+        rangeEndMs: Date.parse("2026-01-05T00:00:00Z"), reasonCode: "NO_DATA",
+        reasonJson: "{}", requestedAtMs: 1, updatedAtMs: 1
+      });
+      const result = await h.service.fetchOnDemand(request());
+      expect(result.providersTried).toEqual(["UPSTOX"]);
+      expect(p.calls.length).toBe(1);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
   test("a provider with an existing permanent UNAVAILABLE note is not retried", async () => {
     const a = new FakeProvider("UPSTOX", [], "ENTITLEMENT denied");
     const b = new FakeProvider("FYERS", [candle(Date.parse("2026-01-05T00:00:00Z"), 105, "FYERS")]);

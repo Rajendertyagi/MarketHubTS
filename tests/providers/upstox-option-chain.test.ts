@@ -74,6 +74,36 @@ describe("UpstoxOptionChainAdapter", () => {
     await expect(adapter.fetchOptionChain(request())).rejects.toThrow("MALFORMED_200");
   });
 
+  test("cooldown state transitions are consistent (no stale unknownReset/notBeforeMs)", async () => {
+    let currentNow = NOW;
+    let retryAfter: string | null = null;
+    const adapter = new UpstoxOptionChainAdapter({
+      token: "t", now: () => currentNow,
+      fetchImpl: async () => new Response("{}", {
+        status: 429,
+        ...(retryAfter !== null ? { headers: { "retry-after": retryAfter } } : {})
+      })
+    });
+
+    // Unknown reset: advisory marker set, no timed block.
+    await expect(adapter.fetchOptionChain(request())).rejects.toThrow("TRANSIENT_THROTTLE_429");
+    expect(adapter.getCooldown().unknownReset).toBe(true);
+    expect(adapter.getCooldown().notBeforeMs).toBeNull();
+
+    // Later trustworthy Retry-After: timed block set, stale advisory cleared.
+    retryAfter = "5";
+    await expect(adapter.fetchOptionChain(request())).rejects.toThrow("TRANSIENT_THROTTLE_429");
+    expect(adapter.getCooldown().unknownReset).toBe(false);
+    expect(adapter.getCooldown().notBeforeMs).toBe(NOW + 5000);
+
+    // Later unknown reset again (after the known block expires): stale timed block cleared.
+    currentNow = NOW + 6000;
+    retryAfter = null;
+    await expect(adapter.fetchOptionChain(request())).rejects.toThrow("TRANSIENT_THROTTLE_429");
+    expect(adapter.getCooldown().unknownReset).toBe(true);
+    expect(adapter.getCooldown().notBeforeMs).toBeNull();
+  });
+
   test("per-API cooldown does not leak across adapter instances", async () => {
     const a = new UpstoxOptionChainAdapter({
       token: "t", now: () => NOW,

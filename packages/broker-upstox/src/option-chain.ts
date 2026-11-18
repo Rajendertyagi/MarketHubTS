@@ -53,8 +53,13 @@ export class UpstoxOptionChainAdapter implements OptionChainProvider {
     );
     if (response.status === 429 || response.status === 503) {
       const delay = parseRetryAfter(response.headers.get("retry-after"), this.now());
-      if (delay !== null && delay > 0) this.cooldown.notBeforeMs = this.now() + delay;
-      else this.cooldown.unknownReset = true;
+      if (delay !== null && delay > 0) {
+        this.cooldown.notBeforeMs = this.now() + delay;
+        this.cooldown.unknownReset = false; // trustworthy reset supersedes stale advisory marker
+      } else {
+        this.cooldown.notBeforeMs = null; // unknown reset clears any stale timed block
+        this.cooldown.unknownReset = true;
+      }
       this.cooldown.reason = sanitizeError(`Upstox option chain ${response.status} throttle`);
       throw new Error(`TRANSIENT_THROTTLE_${response.status}`);
     }
