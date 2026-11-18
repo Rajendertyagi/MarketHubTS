@@ -38,7 +38,7 @@
 | Item | Why provisional | What must be verified |
 |---|---|---|
 | Vela charting | Candidate selected, not proven in-product | React/provider API, features (indicators/drawings/multi-chart/workspace persistence), performance/memory, licensing/attribution, Bun/Vite compatibility |
-| Upstox/FYERS SDK usage on Bun | Resolved for M3: direct Bun `fetch` REST, no broker SDKs. M4 Stage B scoped exception: pinned `upstox-js-sdk@2.31.0` for Upstox market-data streaming only | Live feed protocols/field mappings verified for Upstox in Stage B; FYERS feed remains Stage C |
+| Upstox/FYERS SDK usage on Bun | Resolved for M3: direct Bun `fetch` REST, no broker SDKs. M4 Stage B scoped exception: pinned `upstox-js-sdk@2.31.0` for Upstox market-data streaming only; M4 Stage C scoped exception: pinned `fyers-api-v3@2.4.1` for FYERS Data Socket streaming only | Live feed protocols/field mappings verified for Upstox in Stage B and FYERS in Stage C (adapter-only); SDK-on-Bun execution and live field delivery remain Stage G verification |
 | Secure credential storage | Resolved by AD-021 (portable encrypted SQLite + local key file) | M9 must design encrypted export/import and clean-install restore drills; no OS key dependency |
 | MCP 2026-07-28 transport/event details | Spec evolved; implementation details matter | Exact Streamable HTTP/SSE subscription semantics, multi-client behavior, SDK APIs, legacy compatibility needs |
 | Non-broker market-wide sources | Availability/terms vary | Official/usable sources for VIX, breadth, sectors, FII/DII, participant OI, reports/bhavcopies, calendars/status |

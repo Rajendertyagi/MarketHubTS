@@ -8,9 +8,9 @@
 - App must continue working with either provider alone, or with neither (using locally available/non-broker data).
 - Provider-specific logic stays inside adapters; additional providers must not require MCP/WebUI contract changes.
 
-## Current implementation (M3 + M4 Stages A/B/D, published)
+## Current implementation (M3 + M4 Stages A/B/C/D, published)
 - `packages/broker-upstox`: Analytics Token REST validation adapter and Upstox V3 SDK streaming adapter (`upstox-js-sdk@2.31.0`, pinned) for market-data streaming only.
-- `packages/broker-fyers`: V3 non-trading-app OAuth adapter with loopback callback. Data Socket streaming (Stage C) is studied but on hold.
+- `packages/broker-fyers`: V3 non-trading-app OAuth adapter with loopback callback and a Data Socket streaming adapter (M4 Stage C, official `fyers-api-v3@2.4.1` pinned) for market-data streaming only. Production driver remains locked.
 - Encrypted SQLite credential store with portable key file; independent provider registry; loopback-only privileged management API; LAN-safe read-only status.
 - M4 Stage D adds canonical live normalization/freshness/source selection, bounded in-memory state, subscription persistence, a realtime hub, REST/SSE market endpoints and a supervisor. Production uses a locked/disabled driver: no real SDK construction, socket or provider connection is attempted. No live authentication or real market data flows.
 

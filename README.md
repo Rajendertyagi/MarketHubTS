@@ -26,10 +26,10 @@ Not an automated trading platform, not an AI trading recommendation/prediction/s
 - **MCP (`apps/mcp-server`):** stdio `markethub_health` tool preserved (uses local API health contract).
 - **Workflows:** Windows-compatible `bun run dev`, `bun run build`, `bun run start` (single local instance serving API + built WebUI in production).
 - **Market domain (`packages/contracts`, `packages/market-core`):** canonical instrument identity/catalog with transactional sync; canonical live contracts, observation normalization, session-aware freshness, deterministic source selection, and bounded in-memory live state with change notifications.
-- **Providers (`packages/broker-upstox`, `packages/broker-fyers`):** portable encrypted credential store, independent Upstox/FYERS auth adapters, and an Upstox V3 SDK streaming adapter (market-data streaming only). FYERS Data Socket streaming is on hold.
+- **Providers (`packages/broker-upstox`, `packages/broker-fyers`):** portable encrypted credential store, independent Upstox/FYERS auth adapters, an Upstox V3 SDK streaming adapter, and a FYERS Data Socket streaming adapter (M4 Stage C, official `fyers-api-v3@2.4.1`) — both market-data streaming only. Production drivers remain locked.
 - **Live backend (`packages/realtime`, `apps/api`):** bounded realtime hub, subscription persistence with durable generation, supervisor, and REST/SSE market endpoints (`/api/market/snapshot`, `/api/market/stream`, `/api/market/subscriptions`). Production uses a locked driver: no SDK construction, socket or provider connection.
-- **Tests:** 352 tests passing (69 focused Stage D, 55 focused web, 50 focused Stage F), typecheck/build passing. No real network or live provider connection in tests. Figures are the verified local snapshot in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) §3.9; they are not GitHub CI evidence.
-- Placeholder package remains: `analytics`. FYERS streaming (Stage C) and live verification (Stage G) are pending; WebUI live views (Stage E) and reconnect/recovery hardening (Stage F) are implemented.
+- **Tests:** 423 tests passing (39 focused Stage C), typecheck/build passing. No real network or live provider connection in tests. Figures are the verified local snapshot in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) §3.9; they are not GitHub CI evidence.
+- Placeholder package remains: `analytics`. The FYERS streaming adapter (Stage C) is implemented; live verification (Stage G) is pending; WebUI live views (Stage E) and reconnect/recovery hardening (Stage F) are implemented.
 
 ## Prerequisites
 
