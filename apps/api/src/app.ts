@@ -14,11 +14,16 @@ import {
   type CheckState,
   type ReadinessStatus
 } from "@markethub/contracts";
-import { checkDatabase, type DatabaseHandle } from "@markethub/database";
+import {
+  AppSettings, CandleRepository, SnapshotRepository, checkDatabase, type DatabaseHandle
+} from "@markethub/database";
 import { nowIso } from "@markethub/shared";
 import type { AppConfig } from "@markethub/config";
 import type { CredentialStore, ProviderConfig, ProviderId } from "@markethub/contracts";
-import type { MarketDataService, ProviderRegistry } from "@markethub/market-core";
+import {
+  HistoricalCandleService, OptionChainSnapshotService,
+  type MarketDataService, type ProviderRegistry
+} from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
@@ -42,6 +47,12 @@ export interface AppDependencies {
   hub?: LiveEventHub;
   supervisor?: StreamSupervisor;
   coordinator?: SubscriptionCoordinator;
+  /** M5 seams — optional overrides for tests; defaults are built from deps.db. */
+  appSettings?: AppSettings;
+  candleRepo?: CandleRepository;
+  snapshotRepo?: SnapshotRepository;
+  historicalService?: HistoricalCandleService;
+  snapshotService?: OptionChainSnapshotService;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -75,6 +86,8 @@ function buildReadiness(deps: AppDependencies): ReadinessStatus {
 import { isLoopbackHost, isPrivateLanIpv4 } from "./lib/net";
 import { registerProviderRoutes } from "./provider-routes";
 import { registerMarketRoutes } from "./market-routes";
+import { registerHistoricalRoutes } from "./historical-routes";
+import { registerSnapshotRoutes } from "./snapshot-routes";
 export function isAllowedCorsOrigin(origin: string, config: Pick<AppConfig, "lan" | "port" | "webPort">): boolean {
   if (!origin) return false;
   const allowed = new Set<string>([
@@ -150,6 +163,24 @@ export function createApp(deps: AppDependencies) {
 
 
   registerProviderRoutes(app, deps);
+
+  // M5 canonical historical/snapshot services. No live providers are wired in
+  // M5 (Phase 4B/Stage G); empty provider lists keep on-demand operations
+  // honest. All consumers (API/WebUI) share these services and repositories.
+  const appSettings = deps.appSettings ?? new AppSettings(deps.db.db);
+  const candleRepo = deps.candleRepo ?? new CandleRepository(deps.db.db, deps.db.sqlite);
+  const snapshotRepo = deps.snapshotRepo ?? new SnapshotRepository(deps.db.db, deps.db.sqlite);
+  const historicalService = deps.historicalService ?? new HistoricalCandleService({
+    candles: candleRepo, settings: appSettings, providers: []
+  });
+  const snapshotService = deps.snapshotService ?? new OptionChainSnapshotService({
+    snapshots: snapshotRepo, settings: appSettings, providers: []
+  });
+  registerHistoricalRoutes(app, {
+    service: historicalService, candles: candleRepo, snapshots: snapshotRepo, settings: appSettings
+  });
+  registerSnapshotRoutes(app, { service: snapshotService, snapshots: snapshotRepo });
+
   if (deps.service && deps.hub && (deps.supervisor || deps.coordinator)) {
     registerMarketRoutes(app, {
       service: deps.service,

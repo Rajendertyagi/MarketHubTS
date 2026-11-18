@@ -1,0 +1,179 @@
+import type {
+  CandleGap, CandleRangeNote, CandleRangeRequest, DataUnavailableReport,
+  HistoricalCandle, HistoricalSyncConfig, ProviderId, RetentionSettings,
+  UnavailableReasonCode
+} from "@markethub/contracts";
+import { assessGaps } from "./gaps";
+
+/** Structural seams — market-core never imports the database package. */
+export interface CandleStore {
+  getCandles(canonicalId: string, interval: HistoricalCandle["interval"], fromMs: number, toMs: number): HistoricalCandle[];
+  getCoveredTimestamps(canonicalId: string, interval: HistoricalCandle["interval"], fromMs: number, toMs: number): number[];
+  getRangeNotes(canonicalId: string, interval: HistoricalCandle["interval"], fromMs: number, toMs: number): CandleRangeNote[];
+  upsertCandles(candles: HistoricalCandle[], options?: { refresh?: boolean }): { conflicts: number };
+  addRangeNote(note: CandleRangeNote): void;
+}
+
+export interface RetentionReader {
+  getRetention(): { valid: boolean; settings: RetentionSettings | null; error: string | null };
+}
+
+/** Outcome of a provider fetch: candles plus an explicit no-data signal. */
+export interface HistoricalFetchOutcome {
+  candles: HistoricalCandle[];
+  /** Explicit provider `no_data` for the requested range — authoritative, permanent. */
+  noData?: boolean;
+}
+
+/** Provider seam implemented by broker adapters; no apps/api imports. */
+export interface HistoricalProvider {
+  readonly id: ProviderId;
+  fetchCandles(request: CandleRangeRequest): Promise<HistoricalFetchOutcome>;
+}
+
+export interface HistoricalServiceOptions {
+  candles: CandleStore;
+  settings: RetentionReader;
+  providers: HistoricalProvider[];
+  now?: () => number;
+}
+
+export interface HistoricalFetchResult {
+  candles: HistoricalCandle[];
+  gaps: CandleGap[];
+  unavailable: DataUnavailableReport[];
+  conflicts: number;
+  providersTried: ProviderId[];
+}
+
+export interface RetentionCleanupResult {
+  ran: boolean;
+  reason: string | null;
+  candlesDeleted: number;
+  snapshotsDeleted: number;
+}
+
+export class HistoricalCandleService {
+  private readonly now: () => number;
+  constructor(private readonly options: HistoricalServiceOptions) {
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  getCached(request: CandleRangeRequest): HistoricalCandle[] {
+    return this.options.candles.getCandles(request.canonicalId, request.interval, request.fromMs, request.toMs);
+  }
+
+  getCoverage(request: CandleRangeRequest): CandleGap[] {
+    const covered = this.options.candles.getCoveredTimestamps(request.canonicalId, request.interval, request.fromMs, request.toMs);
+    const notes = this.options.candles.getRangeNotes(request.canonicalId, request.interval, request.fromMs, request.toMs);
+    return assessGaps(request, covered, notes);
+  }
+
+  /**
+   * On-demand retrieval. Takes an explicit request and NEVER reads or writes
+   * historical_sync_configs. Successful candles may be cached; provider
+   * restrictions are reported, never fabricated into candles.
+   */
+  async fetchOnDemand(request: CandleRangeRequest): Promise<HistoricalFetchResult> {
+    const providers = this.selectProviders(request);
+    const providersTried: ProviderId[] = [];
+    const unavailable: DataUnavailableReport[] = [];
+    let allCandles: HistoricalCandle[] = [];
+    let conflicts = 0;
+
+    for (const provider of providers) {
+      providersTried.push(provider.id);
+      try {
+        const outcome = await provider.fetchCandles(request);
+        if (outcome.candles.length > 0) {
+          const result = this.options.candles.upsertCandles(outcome.candles);
+          conflicts += result.conflicts;
+          allCandles = allCandles.concat(outcome.candles);
+        }
+        if (outcome.noData) {
+          // Explicit provider no_data is authoritative and permanent: record an
+          // attributed UNAVAILABLE note, never fabricate candles, and allow an
+          // alternate provider to fill the range.
+          const report: DataUnavailableReport = {
+            canonicalId: request.canonicalId, interval: request.interval,
+            fromMs: request.fromMs, toMs: request.toMs, provider: provider.id,
+            reasonCode: "NO_DATA", detail: "provider returned no_data for the requested range"
+          };
+          unavailable.push(report);
+          this.options.candles.addRangeNote(this.toNote(request, provider.id, "NO_DATA", report.detail));
+        }
+      } catch (error) {
+        const report = this.toUnavailable(request, provider.id, error);
+        if (report) {
+          unavailable.push(report);
+          // Only permanent/request-specific reasons become authoritative notes.
+          // REQUEST_ERROR (e.g. generic 422 invalid input) and transient
+          // throttles are reported but never negatively cached.
+          if (report.reasonCode !== "REQUEST_ERROR") {
+            this.options.candles.addRangeNote(this.toNote(request, provider.id, report.reasonCode, report.detail));
+          }
+        }
+        // Try the next configured provider for this range (alternate fill).
+      }
+    }
+
+    const gaps = this.getCoverage(request);
+    return { candles: allCandles, gaps, unavailable, conflicts, providersTried };
+  }
+
+  /** User-configured synchronization reads the saved config; on-demand does not. */
+  async runSync(config: HistoricalSyncConfig): Promise<HistoricalFetchResult> {
+    if (!config.enabled) {
+      return { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] };
+    }
+    let fromMs = this.now() - 30 * 24 * 60 * 60 * 1000;
+    let toMs = this.now();
+    if (config.dateRangeJson) {
+      try {
+        const parsed = JSON.parse(config.dateRangeJson) as { from?: string; to?: string };
+        if (parsed.from) fromMs = Date.parse(parsed.from);
+        if (parsed.to) toMs = Date.parse(parsed.to);
+      } catch {
+        // Invalid saved range: fall back to a bounded default, never an unbounded query.
+      }
+    }
+    const request: CandleRangeRequest = { canonicalId: config.canonicalId, interval: config.interval, fromMs, toMs };
+    return this.fetchOnDemand(request);
+  }
+
+  private selectProviders(request: CandleRangeRequest): HistoricalProvider[] {
+    const all = this.options.providers;
+    if (request.provider) {
+      const preferred = all.filter((p) => p.id === request.provider);
+      return preferred.length ? preferred.concat(all.filter((p) => p.id !== request.provider)) : all;
+    }
+    return all; // caller-supplied order; no hardcoded priority
+  }
+
+  private toUnavailable(request: CandleRangeRequest, provider: ProviderId, error: unknown): DataUnavailableReport {
+    const raw = error instanceof Error ? error.message : String(error);
+    const code = raw.toUpperCase();
+    let reasonCode: DataUnavailableReport["reasonCode"];
+    if (code.includes("ENTITLEMENT") || code.includes("403") || code.includes("PLUS")) reasonCode = "ENTITLEMENT";
+    else if (code.includes("DATE_LIMIT") || code.includes("RANGE") || code.includes("INTERVAL")) reasonCode = "DATE_LIMIT";
+    else if (code.includes("NO_DATA")) reasonCode = "NO_DATA";
+    else reasonCode = "REQUEST_ERROR"; // reported, never persisted as a permanent note
+    return {
+      canonicalId: request.canonicalId, interval: request.interval,
+      fromMs: request.fromMs, toMs: request.toMs, provider, reasonCode,
+      detail: raw.slice(0, 300)
+    };
+  }
+
+  private toNote(
+    request: CandleRangeRequest, provider: ProviderId, reasonCode: UnavailableReasonCode, detail: string
+  ): CandleRangeNote {
+    const now = new Date(this.now()).toISOString();
+    return {
+      canonicalId: request.canonicalId, interval: request.interval, provider,
+      rangeStartMs: request.fromMs, kind: "UNAVAILABLE", rangeEndMs: request.toMs,
+      reasonCode, reasonJson: JSON.stringify({ detail }),
+      requestedAtMs: this.now(), updatedAtMs: this.now()
+    };
+  }
+}

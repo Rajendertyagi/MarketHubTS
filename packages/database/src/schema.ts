@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const appMeta = sqliteTable("app_meta", {
   key: text("key").primaryKey(),
@@ -264,6 +264,116 @@ export const streamingSubscriptions = sqliteTable(
 
 export type StreamingSubscriptionRow = typeof streamingSubscriptions.$inferSelect;
 export type NewStreamingSubscriptionRow = typeof streamingSubscriptions.$inferInsert;
+
+// --- M5 historical candles and option-chain snapshots ---
+// No FK to catalog: history survives catalog sync, expiry and provider removal.
+
+export const historicalCandles = sqliteTable(
+  "historical_candles",
+  {
+    canonicalId: text("canonical_id").notNull(),
+    interval: text("interval").notNull(),
+    tsMs: integer("ts_ms").notNull(),
+    open: real("open").notNull(),
+    high: real("high").notNull(),
+    low: real("low").notNull(),
+    close: real("close").notNull(),
+    volume: integer("volume"),
+    oi: integer("oi"),
+    provider: text("provider").notNull(),
+    provenanceJson: text("provenance_json").notNull(),
+    receivedAt: text("received_at").notNull()
+  },
+  (t) => [
+    primaryKey({ columns: [t.canonicalId, t.interval, t.tsMs] }),
+    index("historical_candles_provider_idx").on(t.provider)
+  ]
+);
+
+export const candleRangeNotes = sqliteTable(
+  "candle_range_notes",
+  {
+    canonicalId: text("canonical_id").notNull(),
+    interval: text("interval").notNull(),
+    provider: text("provider").notNull(),
+    rangeStartMs: integer("range_start_ms").notNull(),
+    kind: text("kind").notNull(), // UNAVAILABLE | CONFLICT
+    rangeEndMs: integer("range_end_ms").notNull(),
+    reasonCode: text("reason_code"), // ENTITLEMENT | DATE_LIMIT | NO_DATA (UNAVAILABLE only)
+    reasonJson: text("reason_json").notNull(), // sanitized detail / competing values
+    requestedAt: text("requested_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => [
+    primaryKey({ columns: [t.canonicalId, t.interval, t.provider, t.rangeStartMs, t.kind] })
+  ]
+);
+
+export const historicalSyncConfigs = sqliteTable(
+  "historical_sync_configs",
+  {
+    id: text("id").primaryKey(),
+    canonicalId: text("canonical_id").notNull(),
+    interval: text("interval").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    dateRangeJson: text("date_range_json"),
+    scheduleJson: text("schedule_json"),
+    providerPolicyJson: text("provider_policy_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => [
+    uniqueIndex("historical_sync_configs_instrument_uq").on(t.canonicalId, t.interval),
+    index("historical_sync_configs_enabled_idx").on(t.enabled)
+  ]
+);
+
+export const optionChainCaptureConfigs = sqliteTable(
+  "option_chain_capture_configs",
+  {
+    id: text("id").primaryKey(),
+    underlyingCanonicalId: text("underlying_canonical_id").notNull(),
+    expiryDate: text("expiry_date").notNull(),
+    strikeRangeJson: text("strike_range_json"), // null = all available strikes
+    captureEnabled: integer("capture_enabled", { mode: "boolean" }).notNull().default(true),
+    captureMode: text("capture_mode").notNull(), // MANUAL | SCHEDULED | BOTH
+    scheduleJson: text("schedule_json"),
+    streamingEnabled: integer("streaming_enabled", { mode: "boolean" }).notNull().default(false),
+    provider: text("provider").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => [
+    index("option_chain_capture_configs_underlying_idx").on(t.underlyingCanonicalId, t.expiryDate)
+  ]
+);
+
+export const optionChainSnapshots = sqliteTable(
+  "option_chain_snapshots",
+  {
+    id: text("id").primaryKey(),
+    // Nullable FK: deleting a capture config preserves its snapshots (ON DELETE SET NULL).
+    configId: text("config_id").references(() => optionChainCaptureConfigs.id, { onDelete: "set null" }),
+    capturedAt: text("captured_at").notNull(),
+    provider: text("provider").notNull(),
+    envelopeJson: text("envelope_json").notNull(),
+    provenanceJson: text("provenance_json").notNull()
+  },
+  (t) => [
+    index("option_chain_snapshots_config_captured_idx").on(t.configId, t.capturedAt)
+  ]
+);
+
+export type HistoricalCandleRow = typeof historicalCandles.$inferSelect;
+export type NewHistoricalCandleRow = typeof historicalCandles.$inferInsert;
+export type CandleRangeNoteRow = typeof candleRangeNotes.$inferSelect;
+export type NewCandleRangeNoteRow = typeof candleRangeNotes.$inferInsert;
+export type HistoricalSyncConfigRow = typeof historicalSyncConfigs.$inferSelect;
+export type NewHistoricalSyncConfigRow = typeof historicalSyncConfigs.$inferInsert;
+export type OptionChainCaptureConfigRow = typeof optionChainCaptureConfigs.$inferSelect;
+export type NewOptionChainCaptureConfigRow = typeof optionChainCaptureConfigs.$inferInsert;
+export type OptionChainSnapshotRow = typeof optionChainSnapshots.$inferSelect;
+export type NewOptionChainSnapshotRow = typeof optionChainSnapshots.$inferInsert;
 
 export type CanonicalInstrumentRow = typeof canonicalInstruments.$inferSelect;
 export type NewCanonicalInstrumentRow = typeof canonicalInstruments.$inferInsert;

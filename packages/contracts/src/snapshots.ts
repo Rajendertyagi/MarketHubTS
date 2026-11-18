@@ -1,0 +1,133 @@
+import { z } from "zod";
+import { provenanceSchema, type Provenance } from "./market";
+import type { ProviderId } from "./provider";
+
+// --- Canonical snapshot envelope ---
+
+export const captureModeSchema = z.enum(["MANUAL", "SCHEDULED", "BOTH"]);
+export type CaptureMode = z.infer<typeof captureModeSchema>;
+
+export interface OptionGreeks {
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  rho?: number | null;
+}
+
+export interface OptionChainStrike {
+  strike: number;
+  optionType: "CE" | "PE";
+  ltp?: number;
+  oi?: number;
+  volume?: number;
+  bid?: number;
+  ask?: number;
+  iv?: number;
+  greeks?: OptionGreeks;
+}
+
+export interface OptionChainSnapshotEnvelope {
+  underlyingCanonicalId: string;
+  expiryDate: string;
+  /** Local capture time (ISO). Distinct from provider observation time. */
+  capturedAt: string;
+  /** Provider observation time (ISO) — nullable, never defaulted to capturedAt. */
+  observationTimestamp: string | null;
+  underlyingLtp: number | null;
+  strikes: OptionChainStrike[];
+  /** Provider-specific fields, attributed and never promoted to canonical implicitly. */
+  providerExtensions: Record<string, unknown>;
+}
+
+export const optionChainSnapshotEnvelopeSchema = z.object({
+  underlyingCanonicalId: z.string().min(1),
+  expiryDate: z.string().min(1),
+  capturedAt: z.string().datetime(),
+  observationTimestamp: z.string().datetime().nullable(),
+  underlyingLtp: z.number().finite().nullable(),
+  strikes: z.array(z.object({
+    strike: z.number().finite(),
+    optionType: z.enum(["CE", "PE"]),
+    ltp: z.number().finite().optional(),
+    oi: z.number().int().nonnegative().optional(),
+    volume: z.number().int().nonnegative().optional(),
+    bid: z.number().finite().optional(),
+    ask: z.number().finite().optional(),
+    iv: z.number().finite().optional(),
+    greeks: z.object({
+      delta: z.number().finite().nullable().optional(),
+      gamma: z.number().finite().nullable().optional(),
+      theta: z.number().finite().nullable().optional(),
+      vega: z.number().finite().nullable().optional(),
+      rho: z.number().finite().nullable().optional()
+    }).optional()
+  })),
+  providerExtensions: z.record(z.string(), z.unknown())
+});
+
+export interface OptionChainSnapshot {
+  id: string;
+  /** Null when the capture config was deleted — snapshots are retained. */
+  configId: string | null;
+  capturedAt: string;
+  provider: ProviderId;
+  envelope: OptionChainSnapshotEnvelope;
+  provenance: Provenance;
+}
+
+export const optionChainSnapshotSchema = z.object({
+  id: z.string().min(1),
+  configId: z.string().nullable(),
+  capturedAt: z.string(),
+  provider: z.enum(["UPSTOX", "FYERS"]),
+  envelope: optionChainSnapshotEnvelopeSchema,
+  provenance: provenanceSchema
+});
+
+// --- Capture configuration (WebUI-owned, independent of streaming selection) ---
+
+export interface OptionChainCaptureConfig {
+  id: string;
+  underlyingCanonicalId: string;
+  expiryDate: string;
+  /** Validated JSON: strike range selection; null = all available strikes. */
+  strikeRangeJson: string | null;
+  captureEnabled: boolean;
+  captureMode: CaptureMode;
+  /** Validated JSON: cadence; no scheduler framework in M5. */
+  scheduleJson: string | null;
+  /** Streaming selection is independent of snapshot capture. */
+  streamingEnabled: boolean;
+  provider: ProviderId;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const optionChainCaptureConfigSchema = z.object({
+  id: z.string().min(1),
+  underlyingCanonicalId: z.string().min(1),
+  expiryDate: z.string().min(1),
+  strikeRangeJson: z.string().nullable(),
+  captureEnabled: z.boolean(),
+  captureMode: captureModeSchema,
+  scheduleJson: z.string().nullable(),
+  streamingEnabled: z.boolean(),
+  provider: z.enum(["UPSTOX", "FYERS"]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+// --- Retention (validated app_meta value, user-controlled) ---
+
+export const retentionDataClassSchema = z.enum(["CANDLE", "SNAPSHOT"]);
+export type RetentionDataClass = z.infer<typeof retentionDataClassSchema>;
+
+export const retentionSettingsSchema = z.object({
+  version: z.literal(1),
+  classes: z.object({
+    CANDLE: z.object({ maxAgeDays: z.number().int().positive() }).optional(),
+    SNAPSHOT: z.object({ maxAgeDays: z.number().int().positive() }).optional()
+  })
+});
+export type RetentionSettings = z.infer<typeof retentionSettingsSchema>;

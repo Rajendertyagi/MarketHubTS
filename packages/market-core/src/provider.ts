@@ -143,13 +143,20 @@ export async function fetchWithRetry(
   for (let i = 0; i < attempts; i++) {
     try {
       const response = await fetcher(url, init, timeoutMs);
-      if (response.status === 429) {
-        // Respect Retry-After (seconds or HTTP-date). Invalid, past or excessive delays stop retries.
-        const delay = parseRetryAfter(response.headers.get("retry-after"), (options.now ?? Date.now)());
-        if (delay === null || delay > max || i === attempts - 1) return response;
-        lastError = new Error("transient_http_429");
-        await sleep(delay);
-        continue;
+      if (response.status === 429 || response.status === 503) {
+        const rawRetryAfter = response.headers.get("retry-after");
+        // 429 always requires a usable Retry-After; 503 honours one when present
+        // and otherwise keeps the existing bounded 5xx backoff behavior.
+        if (response.status === 429 || rawRetryAfter !== null) {
+          // Honour Retry-After (delta-seconds or HTTP-date). Zero, invalid,
+          // expired or unsafe (over max) delays stop the sequence — never
+          // sleep(0) into an immediate burst, never clamp a trustworthy delay.
+          const delay = parseRetryAfter(rawRetryAfter, (options.now ?? Date.now)());
+          if (delay === null || delay === 0 || delay > max || i === attempts - 1) return response;
+          lastError = new Error(`transient_http_${response.status}`);
+          await sleep(delay);
+          continue;
+        }
       }
       if (response.status >= 500) {
         lastError = new Error(`transient_http_${response.status}`);

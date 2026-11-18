@@ -98,6 +98,11 @@ export function getDatabaseInfo(sqlite: Database): { ok: boolean; journalMode?: 
 
 export { schema };
 export { SqliteCatalogRepository } from "./repositories/catalog";
+export { CandleRepository } from "./repositories/candles";
+export type { UpsertCandlesOptions, UpsertCandlesResult } from "./repositories/candles";
+export { SnapshotRepository } from "./repositories/snapshots";
+export { AppSettings, RETENTION_SETTINGS_KEY } from "./app-settings";
+export type { RetentionReadResult } from "./app-settings";
 export { SqliteCredentialStore, resolveCredentialKeyPath } from "./credentials";
 export { SqliteProviderSettings, PROVIDER_SETTING_KEYS } from "./provider-settings";
 export { SqliteSubscriptionRepository, STREAMING_GENERATION_KEY } from "./subscriptions";

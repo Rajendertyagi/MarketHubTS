@@ -5,6 +5,8 @@ import { fetchProvidersStatus, fetchSystemStatus, formatUptime, type ProviderSta
 import { StatusBadge, toneForState } from "./components/StatusBadge";
 import { LivePanel } from "./components/LivePanel";
 import { SubscriptionPanel } from "./components/SubscriptionPanel";
+import { HistoricalPanel } from "./components/HistoricalPanel";
+import { SnapshotPanel } from "./components/SnapshotPanel";
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -141,7 +143,7 @@ function ProviderPanel() {
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<"overview" | "live">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "live" | "history">("overview");
   const [lastSuccessAt, setLastSuccessAt] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["system-status"],
@@ -194,6 +196,10 @@ export function App() {
             <button type="button" onClick={() => setActiveTab("live")} aria-current={activeTab === "live" ? "page" : undefined}
               className={`rounded-t-md border border-b-0 px-3 py-2 text-sm font-medium ${activeTab === "live" ? "border-slate-700 bg-slate-900 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
               Live data
+            </button>
+            <button type="button" onClick={() => setActiveTab("history")} aria-current={activeTab === "history" ? "page" : undefined}
+              className={`rounded-t-md border border-b-0 px-3 py-2 text-sm font-medium ${activeTab === "history" ? "border-slate-700 bg-slate-900 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+              History & snapshots
             </button>
             <span className="px-3 py-2 text-sm text-slate-500" title="Not implemented in this milestone">Market modules (planned)</span>
           </div>
@@ -278,6 +284,12 @@ export function App() {
           <>
             <LivePanel />
             <SubscriptionPanel />
+          </>
+        )}
+        {activeTab === "history" && (
+          <>
+            <HistoricalPanel />
+            <SnapshotPanel />
           </>
         )}
         <Outlet />

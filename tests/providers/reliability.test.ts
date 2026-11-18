@@ -197,3 +197,90 @@ describe("M3 reliability under failure", () => {
     expect(await credentials.get("FYERS", "access_token")).toBe("f-token");
   });
 });
+
+describe("fetchWithRetry Retry-After (429 and 503)", () => {
+  const NOW = Date.parse("2026-01-01T00:00:00.000Z");
+  function response(status: number, retryAfter?: string): Response {
+    const headers = new Headers();
+    if (retryAfter !== undefined) headers.set("retry-after", retryAfter);
+    return new Response("{}", { status, headers });
+  }
+
+  test("429 delta-seconds and HTTP-date are honored (no retry before indicated time)", async () => {
+    for (const header of ["2", new Date(NOW + 2000).toUTCString()]) {
+      let calls = 0;
+      const slept: number[] = [];
+      const result = await fetchWithRetry(
+        async () => { calls++; return calls === 1 ? response(429, header) : response(200); },
+        "https://example.test", {}, 1000,
+        { attempts: 3, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+      );
+      expect(result.status).toBe(200);
+      expect(slept).toEqual([2000]);
+    }
+  });
+
+  test("503 delta-seconds and HTTP-date are honored", async () => {
+    for (const header of ["3", new Date(NOW + 3000).toUTCString()]) {
+      let calls = 0;
+      const slept: number[] = [];
+      const result = await fetchWithRetry(
+        async () => { calls++; return calls === 1 ? response(503, header) : response(200); },
+        "https://example.test", {}, 1000,
+        { attempts: 3, maxDelayMs: 5000, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+      );
+      expect(result.status).toBe(200);
+      expect(slept).toEqual([3000]);
+    }
+  });
+
+  test("zero, malformed, expired and excessive 503 delays stop without a tight loop", async () => {
+    for (const header of ["0", "garbage", new Date(NOW - 1000).toUTCString(), "9999"]) {
+      let calls = 0;
+      const slept: number[] = [];
+      const result = await fetchWithRetry(
+        async () => { calls++; return response(503, header); },
+        "https://example.test", {}, 1000,
+        { attempts: 5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+      );
+      expect(result.status).toBe(503);
+      expect(calls).toBe(1); // no retry burst
+      expect(slept.length).toBe(0);
+    }
+  });
+
+  test("429 without Retry-After stops; 503 without Retry-After keeps bounded backoff", async () => {
+    let calls429 = 0;
+    const r429 = await fetchWithRetry(
+      async () => { calls429++; return response(429); },
+      "https://example.test", {}, 1000,
+      { attempts: 5, now: () => NOW, sleep: async () => {} }
+    );
+    expect(r429.status).toBe(429);
+    expect(calls429).toBe(1);
+
+    let calls503 = 0;
+    const slept: number[] = [];
+    const r503 = await fetchWithRetry(
+      async () => { calls503++; return response(503); },
+      "https://example.test", {}, 1000,
+      { attempts: 3, baseDelayMs: 50, maxDelayMs: 200, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+    );
+    expect(r503.status).toBe(503);
+    expect(calls503).toBe(3);
+    expect(slept.length).toBe(2);
+  });
+
+  test("other 5xx keep bounded exponential backoff", async () => {
+    let calls = 0;
+    const slept: number[] = [];
+    const result = await fetchWithRetry(
+      async () => { calls++; return calls < 3 ? response(500) : response(200); },
+      "https://example.test", {}, 1000,
+      { attempts: 3, baseDelayMs: 50, maxDelayMs: 200, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+    );
+    expect(result.status).toBe(200);
+    expect(calls).toBe(3);
+    expect(slept.length).toBe(2);
+  });
+});

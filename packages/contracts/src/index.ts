@@ -64,3 +64,5 @@ export * from "./market";
 export * from "./provider";
 export * from "./live";
 export * from "./live-components";
+export * from "./historical";
+export * from "./snapshots";

@@ -118,14 +118,16 @@ describe("M3 independent-review corrections", () => {
     expect(calls).toBe(1);
   });
 
-  test("429 Retry-After is respected; missing delay stops retries", async () => {
+  test("429 Retry-After is respected; zero/missing delay stops retries without a burst", async () => {
+    // M5: Retry-After: 0 must stop the sequence — never sleep(0) into an
+    // immediate retry burst. This supersedes the earlier M3 expectation of 3 calls.
     let calls = 0;
     const withHeader = await fetchWithRetry(
       async () => { calls++; return new Response("{}", { status: 429, headers: { "Retry-After": "0" } }); },
       "http://example.test", {}, 100, { sleep: async () => {} }
     );
     expect(withHeader.status).toBe(429);
-    expect(calls).toBe(3);
+    expect(calls).toBe(1);
 
     let noHeaderCalls = 0;
     await fetchWithRetry(

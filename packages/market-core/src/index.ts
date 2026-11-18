@@ -15,3 +15,8 @@ export type { CatalogRepository, CatalogRepositoryTx, CatalogSyncRunRecord, Deri
 export { ProviderRegistry, fetchWithTimeout, fetchWithRetry, parseRetryAfter, sanitizeError } from "./provider";
 export type { FetchLike } from "./provider";
 export * from "./live";
+export { HistoricalCandleService } from "./historical/service";
+export type { HistoricalProvider, HistoricalFetchOutcome, HistoricalServiceOptions, HistoricalFetchResult, RetentionCleanupResult, CandleStore, RetentionReader } from "./historical/service";
+export { assessGaps, isEmptyCoverage } from "./historical/gaps";
+export { OptionChainSnapshotService } from "./snapshots/service";
+export type { OptionChainProvider, OptionChainRequest, SnapshotServiceOptions, CaptureResult, SnapshotStore } from "./snapshots/service";

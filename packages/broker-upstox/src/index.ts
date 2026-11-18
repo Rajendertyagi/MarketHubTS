@@ -11,6 +11,10 @@ import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from 
 import { UPSTOX_EXPIRY_SETTING, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_VALIDATION_URL } from "./constants";
 
 export { UPSTOX_VALIDATION_URL, UPSTOX_TOKEN_CREDENTIAL, UPSTOX_EXPIRY_SETTING } from "./constants";
+export { UpstoxHistoricalAdapter } from "./historical";
+export type { UpstoxHistoricalOptions, UpstoxCooldown } from "./historical";
+export { UpstoxOptionChainAdapter } from "./option-chain";
+export type { UpstoxOptionChainOptions } from "./option-chain";
 export {
   UPSTOX_V3_LIMITS,
   UpstoxMarketDataStream,

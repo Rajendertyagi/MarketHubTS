@@ -12,6 +12,11 @@ import { emptyProviderStatus, VALIDATION_REQUIRED_ADVISORY, withoutValidationAdv
 import { fetchWithTimeout, fetchWithRetry, sanitizeError, type FetchLike } from "@markethub/market-core";
 
 export * from "./stream";
+export * from "./cooldown";
+export { FyersHistoricalAdapter } from "./historical";
+export type { FyersHistoricalOptions, FyersCooldown } from "./historical";
+export { FyersOptionChainAdapter } from "./option-chain";
+export type { FyersOptionChainOptions } from "./option-chain";
 
 export const FYERS_AUTH_URL = "https://api-t1.fyers.in/api/v3/generate-authcode";
 export const FYERS_TOKEN_URL = "https://api-t1.fyers.in/api/v3/validate-authcode";
