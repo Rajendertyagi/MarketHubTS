@@ -2,7 +2,7 @@
 
 **AI-first, local-first Indian stock-market data platform** focused on comprehensive NSE and BSE F&O market information.
 
-> **Status:** Application foundation (M1), canonical catalog (M2), provider auth framework (M3), and M4 Stages A/B/D/E/F are implemented. Stages D and E are accepted; Stage F (reconnect/recovery/concurrency/resource hardening) passed independent review and was integrated into `main` by an authorized fast-forward that synchronized `main` and `develop`. Stage D adds a provider-ready backend vertical slice with a locked production driver — no live provider connection is attempted. **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+> **Status:** Application foundation (M1), canonical catalog (M2), provider auth framework (M3), and M4 Stages A/B/C/D/E/F are implemented. Stages D and E are accepted; Stage F (reconnect/recovery/concurrency/resource hardening) passed independent review and was integrated into `main` by an authorized fast-forward that synchronized `main` and `develop`. Stage C (FYERS Data Socket adapter) is adapter-only; its final reviewed state is `e8ce409` (original implementation `e236e25`), with final independent review approved. Stage D adds a provider-ready backend vertical slice with a locked production driver — no live provider connection is attempted. **Not** a functioning market-data platform yet. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
 
 ## What MarketHubTS is (confirmed)
 
@@ -28,8 +28,8 @@ Not an automated trading platform, not an AI trading recommendation/prediction/s
 - **Market domain (`packages/contracts`, `packages/market-core`):** canonical instrument identity/catalog with transactional sync; canonical live contracts, observation normalization, session-aware freshness, deterministic source selection, and bounded in-memory live state with change notifications.
 - **Providers (`packages/broker-upstox`, `packages/broker-fyers`):** portable encrypted credential store, independent Upstox/FYERS auth adapters, an Upstox V3 SDK streaming adapter, and a FYERS Data Socket streaming adapter (M4 Stage C, official `fyers-api-v3@2.4.1`) — both market-data streaming only. Production drivers remain locked.
 - **Live backend (`packages/realtime`, `apps/api`):** bounded realtime hub, subscription persistence with durable generation, supervisor, and REST/SSE market endpoints (`/api/market/snapshot`, `/api/market/stream`, `/api/market/subscriptions`). Production uses a locked driver: no SDK construction, socket or provider connection.
-- **Tests:** 423 tests passing (39 focused Stage C), typecheck/build passing. No real network or live provider connection in tests. Figures are the verified local snapshot in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) §3.9; they are not GitHub CI evidence.
-- Placeholder package remains: `analytics`. The FYERS streaming adapter (Stage C) is implemented; live verification (Stage G) is pending; WebUI live views (Stage E) and reconnect/recovery hardening (Stage F) are implemented.
+- **Tests (local verification, 2026-11-18):** `bun test` — 459 passed, 0 failed, 5452 assertions, 37 files (54 focused FYERS adapter tests); `bun run typecheck` — 12/12 workspaces; strict TypeScript check of the changed test — clean; `bun run build` — all packages and apps passed; `git diff --check` — clean. No real network or live provider connection in tests. These are local verification figures, **not GitHub CI evidence**; see [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) §3.9. The earlier 423-test snapshot is historical.
+- Placeholder package remains: `analytics`. The FYERS streaming adapter (Stage C) is implemented and final-reviewed at `e8ce409`; live verification (Stage G) is pending and locked; WebUI live views (Stage E) and reconnect/recovery hardening (Stage F) are implemented.
 
 ## Prerequisites
 

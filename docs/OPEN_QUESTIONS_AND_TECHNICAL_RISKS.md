@@ -1,7 +1,7 @@
 # Open Questions and Technical Risks
 
 > **Status:** Tracked confirmations, established decisions, pending verifications, and risks. Do not reopen confirmed product decisions.
-> **Last updated:** 2026-11-17
+> **Last updated:** 2026-11-18
 > **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [REFERENCES.md](REFERENCES.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
 
 ## 1. Confirmed product decisions (do not reopen)
@@ -43,6 +43,8 @@
 | Vela charting | React/provider integration, required features (candles/indicators/drawings/multi-chart/workspace persistence), performance/memory, licensing/attribution, Bun/Vite fit | Chart milestone feasibility |
 | Secure credential storage | **Implemented (M3, AD-021):** portable encrypted SQLite + one local key file in the app folder; no Windows/OS credential store, no plaintext. | Security, portability, owner workflow |
 | Backup key material | AD-014 preserved: the folder (DB + key file) is the backup unit; a DB-only copy is not complete. M9 must design encrypted export/import and clean-install restore drills. | True full restore; no false claims |
+| Stage G — FYERS terminal-error classification | The Stage C adapter's `isLimitFailure()` uses broad message matching. Before Stage G, verify actual SDK error payloads and rejection signatures; establish that genuine subscription-limit failures are classified as terminal `LIMITED`, while ordinary transient failures are not incorrectly classified as terminal. | Correct non-retryable classification; avoid both silent retries and false terminal limits |
+| Stage G — FYERS depth subscription handoff | The FYERS adapter accepts `depth?: boolean` on `FyersDriverSubscription`, while the generic `DriverSubscription` exposes only `canonicalId` and `nativeIdentifier`. The Stage G integration design must resolve how depth intent reaches the FYERS adapter through the generic driver seam. Do not claim end-to-end five-level depth subscription support through the supervisor until that handoff exists and is tested. | Honest depth capability; no unsupported end-to-end claim |
 
 ## 4. Compatibility issues (known/possible)
 
