@@ -3,7 +3,7 @@
 > **Status:** Planning only. No implementation, source/test modification, commit, push, merge, or DB change performed for M5. Awaiting independent review and explicit implementation authorization.
 > **Baseline:** M5 planning baseline `2e7ec2799ef73401f355075088501cd6dfdc2195` (the commit on which M5 planning began); `main` @ `865d86f393a29bc1ec8d455a51d9efa82d722c48`. Final reviewed Stage C state `e8ce409eddbaf50c1363dfa0d4e5bc9e82d31ddd`; original Stage C implementation `e236e254b90b390077613c7f055ae1bb070bd13e`. The active `develop` HEAD is intentionally not recorded here — re-check with `git log -1`.
 > **Governing docs:** `AGENTS.md`, `PROJECT_MANAGER_PROTOCOL.md`, `ENGINEERING_STANDARDS.md` (canonical), `PRODUCT_REQUIREMENTS.md` §6.2–6.4, `DATA_LIFECYCLE_AND_STORAGE.md` §3–4, `IMPLEMENTATION_ROADMAP.md` M5, `ARCHITECTURE.md`, `MULTI_PROVIDER_STREAMING_ARCHITECTURE.md` §6.2/§7.1, `REFERENCES.md`.
-> **Revision:** optimized after independent architecture review — five tables (not six), derived coverage, offline adapter code, resolved v2 deprecation question. Final refinement adds interval/session-aware gap labeling, manual-review conflict policy, explicit Stage G REST verification scenarios (§3A), exact test-file allocation, and a fail-closed retention fallback.
+> **Revision:** optimized after independent architecture review — five tables (not six), derived coverage, offline adapter code, resolved v2 deprecation question. Refined with interval/session-aware gap labeling, manual-review conflict policy, explicit Stage G REST verification scenarios (§3A), exact test-file allocation, and a fail-closed retention fallback. Final correction separates daily/weekly/monthly/intraday gap semantics and transient throttling from permanent unavailability (no permanent negative cache).
 
 ## 1. Settled direction (do not re-litigate)
 
@@ -107,11 +107,13 @@ Every table is justified by a distinct, non-derivable responsibility. Nothing el
 ## 5. Coverage, gaps, and conflicts (correctness first)
 
 - **Coverage is derived**, never stored as a claim: for `(canonical_id, interval)`, the covered timestamps are exactly the `ts_ms` values in `historical_candles`, each with its own `provider`. A requested window minus covered timestamps minus `UNAVAILABLE` notes = candidate gaps.
-- **`UNAVAILABLE` notes are authoritative**: written only from a provider response that explicitly reports entitlement failure, date-range limit, or `no_data`. They carry a stable `reason_code` (`ENTITLEMENT`, `DATE_LIMIT`, `NO_DATA`, `RATE_LIMITED`) and a sanitized detail. They are not retried against the same provider until config/entitlement changes.
-- **Gap assessment is interval-aware and explicitly labeled.** No verified exchange-calendar or session source exists in this repo (calendars are a later-phase market-wide source), so M5 must not assert confirmed missing candles from weekday-only logic. The contract:
-  - **Daily and coarser intervals (`1D`/`1W`/`1M`):** a weekday-only filter is usable as a *hint*. Every assessment carries `gapBasis: "WEEKDAY_ONLY"` and is reported as **approximate/indeterminate**, never as a confirmed missing candle. Weekends and exchange holidays are never asserted as missing; holiday detection is deferred until a verified calendar source exists.
-  - **Intraday intervals (minutes/hours):** session boundaries cannot be established without a calendar/session source. Overnight gaps, pre-open and post-market periods, and different exchange/segment sessions (e.g. NSE vs BSE, equity vs F&O) cannot be distinguished from genuine missing candles. Therefore intraday gaps are **indeterminate** (`gapBasis: "SESSION_UNKNOWN"`) and are reported only as "no candle stored in this window; session status unverified" — never as a confirmed missing candle. No candle is fabricated to fill any gap.
-  - **Every gap result carries its basis** (`WEEKDAY_ONLY` | `SESSION_UNKNOWN` | later `CALENDAR_BACKED`) and an explicit `confirmed: false` in M5. A future calendar-backed mode is a separate, justified change — no calendar dependency or new subsystem in M5.
+- **`UNAVAILABLE` notes are authoritative and permanent-only**: written only for **request-specific or permanent** unavailability — entitlement failure (`ENTITLEMENT`), unsupported interval/date range (`DATE_LIMIT`), or an explicit provider `no_data` for the requested range (`NO_DATA`) where the response semantics support that conclusion. They carry provider attribution, a stable `reason_code`, and sanitized evidence. They are not retried against the same provider until config/entitlement changes. Do not generalize an endpoint-specific restriction into instrument-wide permanent unavailability. **Transient throttling is never written as an `UNAVAILABLE` note** — see the rate-limit contract below.
+- **Gap assessment is interval-aware and explicitly labeled.** No verified exchange-calendar or session source exists in this repo (calendars are a later-phase market-wide source), so M5 must not assert confirmed missing candles. The contract:
+  - **`1D` (daily):** weekends may be excluded by the weekday rule. A weekday with no stored candle is only an **approximate candidate** (`gapBasis: "WEEKDAY_ONLY"`, `confirmed: false`). Without a verified exchange calendar the system **cannot determine** whether that weekday was an exchange holiday, a trading day with a provider omission, or a non-trading day — holiday/session status is explicitly **unknown**. Do not claim holidays are algorithmically excluded; no calendar exists. Such a weekday is never a confirmed missing candle.
+  - **`1W` (weekly):** compare available **weekly candle periods/buckets** against the requested period range — not a daily weekday-by-weekday check. A missing weekly bucket is an unconfirmed candidate (`gapBasis: "WEEKLY_BUCKET"`, `confirmed: false`); without verified calendar evidence it cannot be attributed to a holiday or a provider omission.
+  - **`1M` (monthly):** compare available **monthly candle periods/buckets** against the requested period range — not a daily weekday-by-weekday check. A missing monthly bucket is an unconfirmed candidate (`gapBasis: "MONTHLY_BUCKET"`, `confirmed: false`).
+  - **Intraday (minutes/hours):** retain `SESSION_UNKNOWN`. Overnight, pre-open, post-market and cross-session windows (including different exchange/segment sessions such as NSE vs BSE, equity vs F&O) cannot be distinguished from genuine missing candles; report only "no candle stored in this window; session status unverified", never a confirmed missing candle.
+  - **Every gap result carries its basis** (`WEEKDAY_ONLY` | `WEEKLY_BUCKET` | `MONTHLY_BUCKET` | `SESSION_UNKNOWN` | later `CALENDAR_BACKED`) and `confirmed: false` in M5. Do not conflate exchange, segment, provider timezone or candle timestamp semantics. No calendar dependency or subsystem in M5; no fabricated candles.
 - **Alternate-provider fill**: a candidate gap or `UNAVAILABLE` range may be fetched from another provider per the configured policy. Successful fills write candles attributed to that provider; the original `UNAVAILABLE` note is retained (so we do not pointlessly retry the first provider). Filling never converts an indeterminate gap into a confirmed one.
 - **Conflicts — smallest safe policy (manual review, no automated re-resolution in M5):**
   - PK is provider-agnostic. **First valid write wins** — an existing candle is never overwritten by an alternate fill, a duplicate, or a late-arriving response.
@@ -120,6 +122,24 @@ Every table is justified by a distinct, non-derivable responsibility. Nothing el
   - **Same-provider refresh** replaces only on an explicit re-sync with a newer `received_at`, and is idempotent for identical payloads. This is the only replacement path, and it is owner-initiated, not automatic.
   - If automated re-resolution is ever needed, it requires a separately authorized operation with explicit provenance handling — not a silent provider priority.
 - **Automatic selection** uses the configured provider policy plus existing capability/availability/freshness logic — no hardcoded priority.
+
+### Rate-limit and transient throttling (never a permanent negative cache)
+
+Transient throttling — HTTP 429, provider rate-limit error codes, temporary request throttling, quota cooldowns — must **not** create a permanent `UNAVAILABLE` note that suppresses future attempts indefinitely. Reuse the existing helpers in `packages/market-core/src/provider.ts`; do not invent new capabilities. Verified semantics (inspected):
+
+- `parseRetryAfter(value, nowMs)` returns a delay in ms for **delta-seconds** (`^\d+$`) and **HTTP-date** forms; returns `null` when the header is missing, malformed, or the date is in the past.
+- `fetchWithRetry` retries only transient failures (network errors, 429, 5xx), bounded to 1–5 attempts (default 3), base 250 ms, max 2000 ms, with jitter. On 429 it sleeps exactly the parsed `Retry-After` delay and **never retries before that time**; it stops the retry sequence when `Retry-After` is missing/invalid/past (`null`), when the delay exceeds `max` (unsafe), or on the final attempt.
+
+M5 contract:
+
+1. Honor valid `Retry-After` in both delta-seconds and HTTP-date forms; never retry before the indicated time.
+2. Apply bounded backoff only where permitted by existing engineering standards (the helper's bounded attempts/backoff/jitter).
+3. If `Retry-After` is missing, invalid, expired or implies an unsafe delay, **stop the current retry sequence** — no tight loop.
+4. Distinguish short rate-limit cooldowns from **daily quota exhaustion or account-level temporary blocking**. For a daily quota/account block, do not retry before a trustworthy reset time; if the reset time is unknown, leave the range **unresolved** and report the provider restriction. A subsequent scheduled or owner-requested attempt must not be permanently suppressed by a stale note.
+5. Preserve provider attribution and sanitized error information (`sanitizeError`); never log tokens or account identifiers.
+6. Do not silently change user-selected providers, sync schedules or operational configuration.
+
+**Representation — runtime cooldown state only:** owned by the historical service instance, keyed by `(provider, reason)`, holding `notBeforeMs` (from a trustworthy `Retry-After`/reset) or an "unknown reset" marker. Lifecycle: created on a transient throttle, cleared on the next successful request or when `notBeforeMs` passes, discarded on service shutdown (no persistence). **No new table or dependency.** Rationale: cooldowns are short-lived and provider-instance-scoped; persisting them would create exactly the stale negative-cache state this correction forbids. If restart-safe daily-quota handling is later required it needs separate justification — M5 leaves the range unresolved across restart rather than persisting a suppression.
 
 ## 6. Snapshot envelope and field semantics
 
@@ -189,15 +209,29 @@ All M5 tests are offline: fake providers, mocked `fetchImpl`, temp/in-memory DB,
 10. **Local-owner-only**: non-loopback PUT to config routes → 403 via `isLocalPeer`.
 11. **Migration**: `0005` applies on a fresh DB and on upgrade from `0004` without touching `app_meta`, catalog, or subscriptions.
 12. **Adapter mapping (mocked fetch)**: Upstox V3/expired 7-element candles and FYERS regular/expired `columns`-based mapping; `no_data`, 422/`-50`, null Greeks, rate-limit, malformed-200 all handled explicitly; no live network.
+13. **Daily weekday candidate**: a weekday with no stored candle → `WEEKDAY_ONLY`, `confirmed: false`, approximate; never a confirmed missing candle.
+14. **Weekend exclusion**: weekend dates never appear as daily candidate gaps.
+15. **Weekday holiday unknown**: a weekday that was an exchange holiday cannot be identified without a calendar; result states holiday/session status unknown and is never confirmed missing; no claim that holidays are algorithmically excluded.
+16. **Weekly buckets**: `1W` compares weekly period buckets against the requested range; a missing weekly bucket → `WEEKLY_BUCKET`, `confirmed: false`; no daily weekday-by-weekday check.
+17. **Monthly buckets**: `1M` compares monthly period buckets against the requested range; a missing monthly bucket → `MONTHLY_BUCKET`, `confirmed: false`; no daily weekday-by-weekday check.
+18. **Intraday session windows**: overnight, pre-open, post-market and cross-session windows remain `SESSION_UNKNOWN`, `confirmed: false`; never classified as missing.
+19. **429 with delta-seconds `Retry-After`**: mocked time/fetch; no retry before the indicated time; retry occurs at/after it.
+20. **429 with HTTP-date `Retry-After`**: same guarantee using an HTTP-date header.
+21. **Missing/malformed/expired/unsafe `Retry-After`**: retry sequence stops, no tight loop; no `UNAVAILABLE` note written.
+22. **Quota exhaustion not permanent**: FYERS intraday/daily quota exhaustion (or account block) is not stored as a permanent `UNAVAILABLE` note; range left unresolved with provider restriction reported.
+23. **Retry after cooldown/reset**: a subsequent scheduled or owner-requested attempt after a known reset is allowed; not suppressed by a stale note.
+24. **Restart / stale cooldown**: runtime cooldown state is discarded on shutdown; after restart the provider/range is not permanently suppressed.
+25. **Permanent vs transient distinction**: `ENTITLEMENT`/`DATE_LIMIT`/`NO_DATA` produce attributed `UNAVAILABLE` notes; 429/rate-limit codes produce runtime cooldown only — the two remain distinguishable in status.
 
 ## 11. Acceptance criteria
 
 - Cached candles survive provider disconnect/removal and restart; disjoint coverage, unavailable periods, and partial failures reported explicitly, never fabricated.
-- Gap assessment is interval-aware and labeled: daily gaps `WEEKDAY_ONLY`, intraday gaps `SESSION_UNKNOWN`, all `confirmed: false` in M5; overnight/non-session/weekend/holiday periods are never asserted as missing candles; calendar-backed detection is explicitly deferred; alternate fill respects policy and never overwrites valid candles or converts an indeterminate gap into a confirmed one.
+- Gap assessment is interval-aware and labeled: `1D` → `WEEKDAY_ONLY`, `1W` → `WEEKLY_BUCKET`, `1M` → `MONTHLY_BUCKET`, intraday → `SESSION_UNKNOWN`, all `confirmed: false` in M5. Weekends are excluded from daily candidates; a weekday holiday cannot be identified without a calendar and is never confirmed missing; weekly/monthly use period buckets, not daily weekday checks; overnight/non-session periods are never asserted as missing. Calendar-backed detection is explicitly deferred; alternate fill respects policy and never overwrites valid candles or converts an indeterminate gap into a confirmed one.
 - Provider conflicts deterministic (first-valid-wins), provenance preserved, competing values recorded in `candle_range_notes` for manual review; no automated re-resolution or fixed provider priority; duplicates and late responses never silently replace stored data.
 - Snapshots use the canonical envelope with provider extensions; missing/null/unsupported/zero distinguishable; observation and capture timestamps distinct; manual/scheduled capture works; streaming independent of capture.
 - Retention user-configurable in validated `app_meta`; invalid/missing retention config disables all cleanup and deletes nothing (no arbitrary default); cleanup resumes only after valid settings are restored; deletion rules in §7 hold; cleanup bounded and FK-safe.
 - On-demand retrieval never mutates saved config; operational config writes local-owner-only.
+- Transient throttling (429/rate-limit codes/quota cooldowns) never becomes a permanent `UNAVAILABLE` note: valid `Retry-After` (delta-seconds or HTTP-date) is honored with no retry before the indicated time; missing/invalid/expired/unsafe headers stop the retry sequence without a tight loop; daily quota/account blocks wait for a trustworthy reset or leave the range unresolved; runtime cooldown state is instance-owned and discarded on shutdown, with no new table or dependency. Permanent `ENTITLEMENT`/`DATE_LIMIT`/`NO_DATA` failures remain distinguishable from throttling.
 - Capabilities/limits stay `UNKNOWN`/`UNVERIFIED` until Stage G; no live claim without verification.
 - Focused + full suite, typecheck, build, `git diff --check` pass locally; independent diff review before any merge. Report actual commands/results; do not claim unexecuted tests.
 
@@ -225,7 +259,7 @@ All M5 tests are offline: fake providers, mocked `fetchImpl`, temp/in-memory DB,
 - Upstox v2 expired duration limits (SDK figures unconfirmed on endpoint page); account entitlements (Upstox Plus, FYERS plan).
 - Upstox Put/Call option-chain detail field shape (only index page fetched).
 - FYERS live `null`-Greeks / field-omission vs explicit-zero behavior and `greeks_at` semantics.
-- Any verified exchange-calendar / session source before enabling calendar-backed gap detection (deferred); until then intraday gaps remain `SESSION_UNKNOWN`.
+- Any verified exchange-calendar / session source before enabling calendar-backed gap detection (deferred); until then daily gaps remain `WEEKDAY_ONLY` (holiday status unknown), weekly/monthly use period buckets, and intraday gaps remain `SESSION_UNKNOWN`.
 - All §3A Stage G REST scenarios (Upstox V3 active, v2 expired, option chain, entitlements, limits; FYERS regular/expired history, option chain, Standard vs Prime, limits/errors) — each run only under separate Stage G authorization with sanitized fixture capture.
 - Re-run the full suite and record actual counts; the prior baseline was not re-verified in this review.
 
