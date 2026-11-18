@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { ComponentUpdate, CredentialStore, ProviderConnectionState } from "../../packages/contracts/src/index";
-import type { NormalizeObservationInput } from "../../packages/market-core/src/index";
+import type {
+  ComponentUpdate,
+  CredentialStore,
+  FreshnessPolicy,
+  MarketSessionState,
+  ProviderConnectionState
+} from "../../packages/contracts/src/index";
+import { MarketDataService, type NormalizeObservationInput } from "../../packages/market-core/src/index";
 import {
   FyersMarketDataStream,
   type FyersDriverCallbacks,
@@ -28,6 +34,7 @@ class FakeStreamer implements FyersStreamer {
   autoreconnectCalls: number[] = [];
   registeredEvents: string[] = [];
   subscribeThrows = false;
+  subscribeError: Error | null = null;
   private listeners = new Map<string, Listener>();
 
   on(event: string, listener: Listener): void {
@@ -37,6 +44,7 @@ class FakeStreamer implements FyersStreamer {
   connect(): void { this.connectCalls++; }
   close(): void { this.closeCalls++; }
   subscribe(symbols: string[], depth?: boolean): void {
+    if (this.subscribeError) throw this.subscribeError;
     if (this.subscribeThrows) throw new Error("FYERS subscription limit exceeded");
     this.subscribeCalls.push(depth === undefined ? { symbols } : { symbols, depth });
   }
@@ -68,6 +76,9 @@ function setup(opts: { streamer?: FakeStreamer; token?: string | null; connectTi
   const updates: ComponentUpdate[] = [];
   const observations: NormalizeObservationInput[] = [];
   const states: Array<{ state: ProviderConnectionState; error?: string | null }> = [];
+  /** Ordered callback log: proves onTerminalFailure precedes onConnectionState. */
+  const callOrder: string[] = [];
+  const terminalFailures: Array<import("../../packages/contracts/src/index").DriverTerminalFailure> = [];
   const stream = new FyersMarketDataStream({
     credentials: credentials as unknown as CredentialStore,
     now: () => new Date(NOW),
@@ -76,10 +87,11 @@ function setup(opts: { streamer?: FakeStreamer; token?: string | null; connectTi
   });
   const callbacks: FyersDriverCallbacks = {
     onObservation: (o) => observations.push(o),
-    onConnectionState: (s, e) => states.push({ state: s, error: e ?? null }),
-    onComponentUpdate: (u) => updates.push(u)
+    onConnectionState: (s, e) => { callOrder.push(`connection:${s}`); states.push({ state: s, error: e ?? null }); },
+    onComponentUpdate: (u) => updates.push(u),
+    onTerminalFailure: (f) => { callOrder.push("terminal"); terminalFailures.push(f); }
   };
-  return { stream, streamer, credentials, factoryCalls, updates, observations, states, callbacks };
+  return { stream, streamer, credentials, factoryCalls, updates, observations, states, callbacks, callOrder, terminalFailures };
 }
 
 const quoteSub = (canonicalId = SBIN_CANONICAL, nativeIdentifier = SBIN): FyersDriverSubscription => ({ canonicalId, nativeIdentifier });
@@ -94,6 +106,35 @@ async function connected(
   h.streamer.emit("connect");
   await startPromise;
   return h;
+}
+
+const POLICY: FreshnessPolicy = {
+  openMaxAgeMs: 15_000,
+  unknownMaxAgeMs: 5_000,
+  maxRetainedObservationAgeMs: 60_000
+};
+
+/** Wire the adapter callbacks to the REAL canonical store, not just spies. */
+async function connectedToStore(subs: FyersDriverSubscription[] = [quoteSub()]) {
+  const h = setup();
+  const service = new MarketDataService({
+    now: () => new Date(NOW),
+    policy: POLICY,
+    maxInstruments: 10,
+    session: (): MarketSessionState => "OPEN"
+  });
+  for (const sub of subs) service.track(sub.canonicalId);
+  service.setProviderConnection("FYERS", "STREAMING");
+  const storeCallbacks: FyersDriverCallbacks = {
+    ...h.callbacks,
+    onObservation: (o) => { h.observations.push(o); service.applyProviderUpdate(o); },
+    onComponentUpdate: (u) => { h.updates.push(u); service.applyComponentUpdate(u); }
+  };
+  const startPromise = h.stream.start(subs, storeCallbacks, new AbortController().signal);
+  await flush();
+  h.streamer.emit("connect");
+  await startPromise;
+  return { ...h, service };
 }
 
 function sf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -332,6 +373,51 @@ describe("Stage C — component mapping", () => {
     expect(depthUpdates(h.updates).length).toBe(2);
   });
 
+  test("valid sf then empty sf keeps the previous observation in the real store", async () => {
+    const h = await connectedToStore();
+    h.streamer.emit("message", sf());
+    expect(h.service.getSelected(SBIN_CANONICAL)?.value?.ltp).toBe(100.5);
+    expect(h.service.getSelected(SBIN_CANONICAL)?.value?.open).toBe(99);
+    h.streamer.emit("message", { type: "sf", symbol: SBIN }); // no canonical fields
+    expect(h.observations.length).toBe(1);
+    expect(h.service.getSelected(SBIN_CANONICAL)?.value?.ltp).toBe(100.5);
+    expect(h.service.getSelected(SBIN_CANONICAL)?.value?.open).toBe(99);
+  });
+
+  test("valid quote then empty if keeps the previous observation in the real store", async () => {
+    const h = await connectedToStore([quoteSub(NIFTY_CANONICAL, NIFTY)]);
+    h.streamer.emit("message", { type: "if", symbol: NIFTY, ltp: 25000, open_price: 24950 });
+    expect(h.service.getSelected(NIFTY_CANONICAL)?.value?.ltp).toBe(25000);
+    h.streamer.emit("message", { type: "if", symbol: NIFTY }); // no canonical fields
+    expect(h.observations.length).toBe(1);
+    expect(h.service.getSelected(NIFTY_CANONICAL)?.value?.ltp).toBe(25000);
+    expect(h.service.getSelected(NIFTY_CANONICAL)?.value?.open).toBe(24950);
+  });
+
+  test("native-only payload produces no observation and no quote update", async () => {
+    const h = await connectedToStore();
+    h.streamer.emit("message", { type: "sf", symbol: SBIN, someNativeField: "x" });
+    expect(h.observations.length).toBe(0);
+    expect(quoteUpdates(h.updates).length).toBe(0);
+  });
+
+  test("timestamp-only payload does not qualify as a quote observation", async () => {
+    const h = await connectedToStore();
+    h.streamer.emit("message", { type: "sf", symbol: SBIN, last_traded_time: 1700000000 });
+    expect(h.observations.length).toBe(0);
+  });
+
+  test("valid zero-valued quote field is retained in the real store", async () => {
+    const h = await connectedToStore();
+    h.streamer.emit("message", sf({
+      ltp: 0, open_price: 0, high: 0, low: 0, prev_close_price: 0,
+      vol_traded_today: 0, last_traded_qty: 0
+    }));
+    expect(h.observations.length).toBe(1);
+    expect(h.observations[0]!.value.ltp).toBe(0);
+    expect(h.service.getSelected(SBIN_CANONICAL)?.value?.ltp).toBe(0);
+  });
+
   test("derivatives are never fabricated from any message", async () => {
     const h = await connected();
     h.streamer.emit("message", sf({ oi: 123, iv: 45, delta: 0.5 }));
@@ -448,6 +534,57 @@ describe("Stage C — adapter-side depth protection", () => {
     h.streamer.emit("message", sf());
     expect(depthUpdates(h.updates).length).toBe(2); // L1 emitted again
   });
+
+  test("empty dp does not establish protection: following sf emits L1 depth", async () => {
+    const h = await connected();
+    h.streamer.emit("message", { type: "dp", symbol: SBIN }); // no levels at all
+    expect(depthUpdates(h.updates).length).toBe(0); // nothing emitted
+    h.streamer.emit("message", sf());
+    const depths = depthUpdates(h.updates);
+    expect(depths.length).toBe(1);
+    expect(levelCount(depths[0]!)).toBe(1); // L1 not suppressed
+  });
+
+  test("partial dp does not establish protection: following sf emits L1 depth", async () => {
+    const h = await connected();
+    h.streamer.emit("message", { type: "dp", symbol: SBIN, bid_price1: 99, ask_price1: 101 });
+    expect(depthUpdates(h.updates).length).toBe(1);
+    expect(levelCount(depthUpdates(h.updates)[0]!)).toBe(1);
+    h.streamer.emit("message", sf());
+    const depths = depthUpdates(h.updates);
+    expect(depths.length).toBe(2);
+    expect(levelCount(depths[1]!)).toBe(1); // L1 not suppressed by partial dp
+  });
+
+  test("complete five-level dp establishes protection: following sf L1 suppressed", async () => {
+    const h = await connected();
+    h.streamer.emit("message", dp());
+    expect(levelCount(depthUpdates(h.updates)[0]!)).toBe(5);
+    h.streamer.emit("message", sf());
+    expect(depthUpdates(h.updates).length).toBe(1); // L1 suppressed
+    expect(quoteUpdates(h.updates).length).toBe(1); // quote still emitted
+  });
+
+  test("partial dp then complete dp establishes protection only after the complete frame", async () => {
+    const h = await connected();
+    h.streamer.emit("message", { type: "dp", symbol: SBIN, bid_price1: 99, ask_price1: 101 });
+    h.streamer.emit("message", dp());
+    h.streamer.emit("message", sf());
+    const depths = depthUpdates(h.updates);
+    expect(depths.length).toBe(2); // partial dp + complete dp; sf L1 suppressed
+    expect(levelCount(depths[0]!)).toBe(1);
+    expect(levelCount(depths[1]!)).toBe(5);
+  });
+
+  test("partial dp for symbol A does not suppress sf L1 for symbol B", async () => {
+    const h = await connected([quoteSub(SBIN_CANONICAL, SBIN), quoteSub(INFY_CANONICAL, INFY)]);
+    h.streamer.emit("message", { type: "dp", symbol: SBIN, bid_price1: 99, ask_price1: 101 });
+    h.streamer.emit("message", sf({ symbol: INFY }));
+    const depths = depthUpdates(h.updates);
+    expect(depths.length).toBe(2);
+    expect(levelCount(depths[0]!)).toBe(1);
+    expect(levelCount(depths[1]!)).toBe(1);
+  });
 });
 
 describe("Stage C — limits and failure classification", () => {
@@ -500,5 +637,96 @@ describe("Stage C — limits and failure classification", () => {
     expect(h.streamer.subscribeCalls[0]!.depth).toBeUndefined();
     expect(h.streamer.subscribeCalls[1]!.depth).toBe(true);
     expect(h.streamer.subscribeCalls[1]!.symbols).toEqual([SBIN]);
+  });
+});
+
+describe("Stage C Finding 3 — FYERS typed terminal failure", () => {
+  test("startup limit rejection emits typed LIMITED failure before the connection error", async () => {
+    const h = setup();
+    h.streamer.subscribeThrows = true;
+    const startPromise = h.stream.start([quoteSub()], h.callbacks, new AbortController().signal);
+    await flush();
+    h.streamer.emit("connect");
+    await expect(startPromise).rejects.toThrow("limit exceeded");
+
+    expect(h.terminalFailures).toHaveLength(1);
+    const failure = h.terminalFailures[0]!;
+    expect(failure.kind).toBe("LIMITED");
+    expect(failure.reason).toContain("limit exceeded");
+    expect(failure.capabilities.find((c) => c.component === "quote")?.status).toBe("LIMITED");
+    expect(failure.capabilities.find((c) => c.component === "depth")?.status).toBe("LIMITED");
+    expect(failure.capabilities.find((c) => c.component === "derivatives")?.status).toBe("UNSUPPORTED");
+    // Typed notification must precede the paired ERROR connection state.
+    expect(h.callOrder.indexOf("terminal")).toBeGreaterThanOrEqual(0);
+    expect(h.callOrder.indexOf("connection:ERROR")).toBeGreaterThan(h.callOrder.indexOf("terminal"));
+  });
+
+  test("typed failure reason and capabilities never expose credentials", async () => {
+    const h = setup();
+    h.streamer.subscribeError = new Error("limit exceeded for access_token=appid:test-token secret=abc");
+    const startPromise = h.stream.start([quoteSub()], h.callbacks, new AbortController().signal);
+    await flush();
+    h.streamer.emit("connect");
+    await expect(startPromise).rejects.toThrow();
+
+    expect(h.terminalFailures).toHaveLength(1);
+    const failure = h.terminalFailures[0]!;
+    expect(failure.reason).not.toContain("test-token");
+    expect(failure.reason).not.toContain("abc");
+    for (const cap of failure.capabilities) {
+      if (cap.reason) {
+        expect(cap.reason).not.toContain("test-token");
+        expect(cap.reason).not.toContain("abc");
+      }
+    }
+  });
+
+  test("async error callback and promise rejection emit exactly one terminal failure", async () => {
+    const h = setup();
+    h.streamer.subscribeThrows = true;
+    const startPromise = h.stream.start([quoteSub()], h.callbacks, new AbortController().signal);
+    await flush();
+    h.streamer.emit("connect"); // connect handler reports failure + rejects
+    h.streamer.emit("error", "maximum symbol limit exceeded"); // async path also reports
+    await expect(startPromise).rejects.toThrow("limit exceeded");
+
+    // Both paths call reportFailure, but the guard emits one typed notification.
+    expect(h.terminalFailures).toHaveLength(1);
+    expect(h.callOrder.filter((x) => x === "terminal")).toHaveLength(1);
+  });
+
+  test("subscription update limit failure emits typed terminal failure and rejects", async () => {
+    const h = await connected();
+    h.streamer.subscribeThrows = true;
+    await expect(
+      h.stream.updateSubscriptions([quoteSub(INFY_CANONICAL, "NSE:INFY-EQ")], new AbortController().signal)
+    ).rejects.toThrow("limit exceeded");
+
+    expect(h.terminalFailures).toHaveLength(1);
+    expect(h.terminalFailures[0]!.kind).toBe("LIMITED");
+    expect(h.terminalFailures[0]!.reason).toContain("limit exceeded");
+    expect(h.callOrder.indexOf("connection:ERROR")).toBeGreaterThan(h.callOrder.indexOf("terminal"));
+    expect(h.stream.getConnectionState()).toBe("ERROR");
+  });
+
+  test("a fresh start resets the terminal-failure guard", async () => {
+    const h = setup();
+    h.streamer.subscribeThrows = true;
+    const first = h.stream.start([quoteSub()], h.callbacks, new AbortController().signal);
+    await flush();
+    h.streamer.emit("connect");
+    await expect(first).rejects.toThrow("limit exceeded");
+    expect(h.terminalFailures).toHaveLength(1);
+
+    // stop() then a new start with the limit cleared must allow a new notification.
+    h.stream.stop();
+    h.streamer.subscribeThrows = false;
+    const second = h.stream.start([quoteSub()], h.callbacks, new AbortController().signal);
+    await flush();
+    h.streamer.emit("connect");
+    await second;
+    h.streamer.subscribeThrows = true;
+    h.streamer.emit("error", "maximum symbol limit exceeded");
+    expect(h.terminalFailures).toHaveLength(2);
   });
 });

@@ -5,6 +5,7 @@ import type {
   ComponentUpdate,
   CredentialStore,
   DepthLevel,
+  DriverTerminalFailure,
   FieldUpdate,
   ProviderConnectionState,
   QuoteField,
@@ -63,6 +64,12 @@ export interface FyersDriverCallbacks {
   onObservation?: (input: NormalizeObservationInput) => void;
   onConnectionState: (state: ProviderConnectionState, error?: string | null) => void;
   onComponentUpdate?: (update: ComponentUpdate) => void;
+  /**
+   * Typed terminal failure, reported BEFORE the paired connection failure so
+   * the supervisor can record the limitation reason and capabilities. Uses the
+   * shared contract type; this adapter never imports apps/api.
+   */
+  onTerminalFailure?: (failure: DriverTerminalFailure) => void;
 }
 
 /** Structurally compatible with the supervisor's StreamingDriver. */
@@ -271,8 +278,15 @@ function dpDepthUpdate(msg: DecodedMessage, canonicalId: string, receivedAtMs: n
   };
 }
 
-function observationFrom(msg: DecodedMessage, canonicalId: string, receivedAtMs: number): NormalizeObservationInput {
-  const value: Record<string, unknown> = { native: { ...msg } };
+/**
+ * Build an observation only when the frame carries at least one valid canonical
+ * quote value. A native-only payload is not a quote: LiveStateStore replaces the
+ * whole provider observation, so emitting an empty one would erase previously
+ * valid LTP/OHLC. A timestamp alone does not qualify either — it is metadata,
+ * not a quote value. Valid zero values are preserved (0 !== undefined).
+ */
+function observationFrom(msg: DecodedMessage, canonicalId: string, receivedAtMs: number): NormalizeObservationInput | null {
+  const value: Record<string, unknown> = {};
   const ltp = finiteNumber(msg.ltp);
   if (ltp !== undefined) value.ltp = ltp;
   const prevClose = finiteNumber(msg.prev_close_price);
@@ -287,6 +301,8 @@ function observationFrom(msg: DecodedMessage, canonicalId: string, receivedAtMs:
   if (volume !== undefined) value.volume = volume;
   const ltq = safeInteger(msg.last_traded_qty);
   if (ltq !== undefined) value.lastTradedQuantity = ltq;
+  if (Object.keys(value).length === 0) return null;
+  value.native = { ...msg };
   const raw = finiteNumber(msg.last_traded_time ?? msg.exch_feed_time);
   return {
     provider: "FYERS",
@@ -335,6 +351,8 @@ export class FyersMarketDataStream implements FyersDriver {
   /** nativeIdentifier -> five-level depth established for that symbol. */
   private depthEstablished = new Set<string>();
   private limitReason: string | null = null;
+  /** Guards the typed terminal-failure notification to once per generation. */
+  private terminalFailureReported = false;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingStart: PendingStart | null = null;
 
@@ -402,6 +420,18 @@ export class FyersMarketDataStream implements FyersDriver {
     const message = sanitizeError(error);
     if (isLimitFailure(message)) {
       this.limitReason = message;
+      // Notify the supervisor of the typed terminal failure BEFORE reporting the
+      // connection failure, so it can preserve the reason and capabilities. The
+      // guard prevents the async error callback and the promise-rejection path
+      // (both call reportFailure) from emitting a duplicate notification.
+      if (!this.terminalFailureReported) {
+        this.terminalFailureReported = true;
+        this.callbacks?.onTerminalFailure?.({
+          kind: "LIMITED",
+          reason: message,
+          capabilities: this.getCapabilities()
+        });
+      }
       this.setState("ERROR", `FYERS Data Socket limit: ${message}`);
     } else {
       this.setState("ERROR", message);
@@ -535,6 +565,7 @@ export class FyersMarketDataStream implements FyersDriver {
     this.callbacks = callbacks;
     this.subscriptions = new Map(subscriptions.map((s) => [s.nativeIdentifier, { ...s }]));
     this.limitReason = null;
+    this.terminalFailureReported = false;
     this.setState("CONNECTING");
 
     let streamer: FyersStreamer | null = null;
@@ -630,15 +661,20 @@ export class FyersMarketDataStream implements FyersDriver {
     const canonicalId = sub.canonicalId;
 
     if (type === "dp") {
-      // dp carries no price fields. Emitting an observation here would replace
-      // the provider's quote observation in the shared store with an empty one.
-      this.depthEstablished.add(symbol);
+      // dp carries no price fields, so it never produces an observation.
+      // Generate and validate the depth update FIRST: only a complete five-level
+      // snapshot that was actually emitted may establish protection. Empty or
+      // partial dp frames must not suppress later sf L1 depth.
       const update = dpDepthUpdate(msg, canonicalId, receivedAtMs);
-      if (update) this.callbacks?.onComponentUpdate?.(update);
+      if (update) {
+        this.callbacks?.onComponentUpdate?.(update);
+        if (update.complete === true) this.depthEstablished.add(symbol);
+      }
       return;
     }
-    // Only price-bearing frames produce observations (mirrors the Upstox seam).
-    this.callbacks?.onObservation?.(observationFrom(msg, canonicalId, receivedAtMs));
+    // Only frames with a valid canonical quote value produce observations.
+    const observation = observationFrom(msg, canonicalId, receivedAtMs);
+    if (observation) this.callbacks?.onObservation?.(observation);
     if (type === "sf") {
       const quote = sfQuoteUpdate(msg, canonicalId, receivedAtMs);
       if (quote) this.callbacks?.onComponentUpdate?.(quote);
@@ -663,6 +699,7 @@ export class FyersMarketDataStream implements FyersDriver {
     this.ready = false;
     this.depthEstablished.clear(); // full clear only on retirement/replacement
     this.limitReason = null;
+    this.terminalFailureReported = false;
     if (this.connectTimer !== null) { clearTimeout(this.connectTimer); this.connectTimer = null; }
     if (this.pendingStart) {
       this.pendingStart.reject(new Error("FYERS stream stopped"));

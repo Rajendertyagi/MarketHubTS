@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { ProviderId } from "./provider";
 import { availabilityStateSchema, provenanceSchema, type AvailabilityState, type Provenance } from "./market";
-import type { ComponentKind, SelectedComponent } from "./live-components";
+import type { CapabilityResult, ComponentKind, SelectedComponent } from "./live-components";
+// live-components.ts imports only TYPES from live.ts (erased at runtime), so a
+// runtime import of the capability schema here does not create a runtime cycle.
+import { capabilityResultSchema } from "./live-components";
 
 // Provider ids are inlined as a value schema here so live.ts never needs a
 // runtime import from provider.ts (provider.ts imports the connection schema
@@ -233,9 +236,27 @@ export const subscriptionRuntimeStatusSchema = z.object({
   generation: z.number().int().nonnegative(),
   connectionState: providerConnectionStateSchema,
   resolutions: z.array(subscriptionResolutionSchema),
-  lastError: z.string().nullable()
+  lastError: z.string().nullable(),
+  /**
+   * Optional provider-neutral capability results (e.g. FYERS quote/depth LIMITED
+   * with a reason). Absent on legacy payloads, so existing status remains valid.
+   */
+  capabilities: z.array(capabilityResultSchema).optional()
 });
 export type SubscriptionRuntimeStatus = z.infer<typeof subscriptionRuntimeStatusSchema>;
+
+/**
+ * Typed, non-retryable terminal failure reported by a streaming driver to its
+ * supervisor. Currently the only terminal kind is a provider subscription
+ * LIMIT (e.g. FYERS over-limit rejection). The reason is human-readable and
+ * sanitized; capability results carry the structured LIMITED/UNSUPPORTED state.
+ * Shared here so adapters never import apps/api.
+ */
+export interface DriverTerminalFailure {
+  readonly kind: "LIMITED";
+  readonly reason: string;
+  readonly capabilities: readonly CapabilityResult[];
+}
 
 export const subscriptionStateViewSchema = z.object({
   /** Persisted desired selections (visible immediately after commit). */

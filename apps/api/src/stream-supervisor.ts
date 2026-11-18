@@ -1,4 +1,6 @@
 import type {
+  CapabilityResult,
+  DriverTerminalFailure,
   ProviderConnectionState,
   ProviderId,
   SubscriptionRepository,
@@ -22,6 +24,12 @@ export interface DriverCallbacks {
   onConnectionState(state: ProviderConnectionState, error?: string | null): void;
   /** Optional canonical component sink; forwarded to the shared service. */
   onComponentUpdate?(update: import("@markethub/contracts").ComponentUpdate): void;
+  /**
+   * Optional typed terminal-failure notification. A driver calls this BEFORE
+   * reporting the corresponding connection failure so the supervisor can record
+   * the limitation reason and capabilities. Terminal failures are never retried.
+   */
+  onTerminalFailure?(failure: DriverTerminalFailure): void;
 }
 
 export interface StreamingDriver {
@@ -136,6 +144,10 @@ interface DriverInstance {
 
 interface Operation {
   readonly kind: "start" | "update";
+  /** Desired generation this operation applies; captured so a late driver
+   * callback is attributed to its own generation, not a newer one committed
+   * while the driver was connecting. */
+  readonly generation: number;
   readonly controller: AbortController;
   readonly instance: DriverInstance;
   readonly logicalCompletion: Promise<OperationOutcome>;
@@ -206,6 +218,12 @@ export class StreamSupervisor {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private lastOutcome: OperationOutcome | null = null;
+  /** Typed terminal failure (e.g. LIMITED) captured before the connection failure callback. */
+  private terminalFailure: DriverTerminalFailure | null = null;
+  /** Desired generation that hit a terminal failure; reconciliation for it is blocked. */
+  private limitedGeneration: number | null = null;
+  /** Capability results from the terminal failure, retained across driver retirement. */
+  private capabilities: CapabilityResult[] = [];
 
   constructor(private readonly opts: StreamSupervisorOptions) {
     this.provider = opts.provider ?? "UPSTOX";
@@ -292,6 +310,14 @@ export class StreamSupervisor {
       try {
         const state = await this.opts.subscriptions.load();
         if (state.generation < expectedGeneration) return;
+        // Re-check the terminal guard at RUN time, not only at enqueue time: a
+        // terminal failure may have landed after this reconcile was queued.
+        // Block the exact generation that hit the limit; clear stale limitation
+        // info for a genuinely newer generation so it gets a fresh attempt.
+        if (this.limitedGeneration === state.generation) return;
+        if (this.limitedGeneration !== null && this.limitedGeneration !== state.generation) {
+          this.clearLimitationState();
+        }
         const applied = await this.applySelections(state.selections, state.generation);
         if (applied && state.generation > this.appliedGeneration) {
           this.appliedGeneration = state.generation;
@@ -372,9 +398,9 @@ export class StreamSupervisor {
     // A retired/disconnected driver must be replaced with a fresh start, never
     // updated in place (a disconnected adapter's update does not reconnect).
     if (!this.currentInstance || this.currentInstance.retired || !this.driverStarted) {
-      return await this.startDriver(driverSubscriptions);
+      return await this.startDriver(driverSubscriptions, generation);
     }
-    return await this.updateDriver(driverSubscriptions);
+    return await this.updateDriver(driverSubscriptions, generation);
   }
 
   /** Acquire a fresh driver instance from the factory. */
@@ -396,12 +422,13 @@ export class StreamSupervisor {
   }
 
   /** Begin a supervisor-owned logical operation on an instance. */
-  private beginOperation(instance: DriverInstance, kind: "start" | "update"): Operation {
+  private beginOperation(instance: DriverInstance, kind: "start" | "update", generation: number): Operation {
     const controller = new AbortController();
     let resolveLogical!: (outcome: OperationOutcome) => void;
     const logicalCompletion = new Promise<OperationOutcome>((resolve) => { resolveLogical = resolve; });
     const op: Operation = {
       kind,
+      generation,
       controller,
       instance,
       logicalCompletion,
@@ -457,11 +484,11 @@ export class StreamSupervisor {
           this.resolveOperation(op, { kind: "applied" });
         } else {
           const message = errorMessage(error);
-          this.lastError = message;
-          this.setConnectionState("ERROR", message);
+          this.recordError(message);
+          this.setConnectionState("ERROR", this.lastError ?? message);
           this.retireInstance(op.instance, "failed");
-          this.resolveOperation(op, { kind: "failed", error: message });
-          this.scheduleReconnect(this.epoch, message);
+          this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
+          if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
         }
       } else if (op.state === "aborting") {
         this.wakeQuiescence();
@@ -526,8 +553,8 @@ export class StreamSupervisor {
     op.state = "aborting";
     op.instance.callbacksEnabled = false; // synchronous, before abort
     const error = `operation timed out after ${this.opts.operationTimeoutMs ?? 5000}ms`;
-    this.lastError = error;
-    this.setConnectionState("ERROR", error);
+    this.recordError(error);
+    this.setConnectionState("ERROR", this.lastError ?? error);
     try { op.controller.abort(); } catch { /* abort must not throw */ }
     await this.awaitQuiescence(op);
     // Shutdown may have resolved this op with `shutdown` while quiescing.
@@ -553,6 +580,31 @@ export class StreamSupervisor {
     this.scheduleReconnect(this.epoch, cause);
   }
 
+  /**
+   * Record a failure message. When a typed terminal failure is active for the
+   * current generation, its reason is authoritative and must not be overwritten
+   * by the paired connection-failure callback or promise rejection.
+   */
+  private recordError(message: string): void {
+    if (this.terminalFailure !== null && this.limitedGeneration === this.generation) {
+      this.lastError = this.terminalFailure.reason;
+      return;
+    }
+    this.lastError = message;
+  }
+
+  /** True when the current generation is terminally blocked (e.g. LIMITED). */
+  private isCurrentGenerationTerminal(): boolean {
+    return this.terminalFailure !== null && this.limitedGeneration === this.generation;
+  }
+
+  /** Clear stale limitation info when a genuinely new generation is attempted. */
+  private clearLimitationState(): void {
+    this.terminalFailure = null;
+    this.limitedGeneration = null;
+    this.capabilities = [];
+  }
+
   /** Build the callback set for an instance, gated by instance and epoch. */
   private makeCallbacks(instance: DriverInstance): DriverCallbacks {
     const epoch = instance.epoch;
@@ -573,6 +625,23 @@ export class StreamSupervisor {
           // Late or invalid component updates must not corrupt shared state.
         }
       },
+      onTerminalFailure: (failure) => {
+        if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
+        // Attribute the failure to the generation of the operation that owns
+        // this driver, NOT the mutable this.generation: a newer generation may
+        // have been committed while this driver was still connecting. Using the
+        // operation's generation keeps the block scoped to the generation that
+        // actually hit the limit, so a newer generation is never wrongly blocked.
+        const generation = instance.currentOperation?.generation ?? this.generation;
+        // Capture the typed terminal failure and its capability results. This is
+        // recorded BEFORE the paired connection-failure callback, so recordError
+        // preserves this reason. It does NOT retire or resolve anything: the
+        // existing connection-failure / promise-rejection paths own that, once.
+        this.terminalFailure = failure;
+        this.limitedGeneration = generation;
+        this.capabilities = failure.capabilities.map((c) => ({ ...c }));
+        this.lastError = failure.reason;
+      },
       onConnectionState: (state, error) => {
         if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
         try {
@@ -589,10 +658,10 @@ export class StreamSupervisor {
             const cause = state === "ERROR"
               ? (error ?? "provider error")
               : (error ?? "provider disconnected");
-            if (state === "ERROR") this.lastError = cause;
-            // Transition the canonical connection state before retiring; the
-            // WebUI renders this from the shared service, not from the driver.
-            this.setConnectionState(state, state === "ERROR" ? cause : (error ?? null));
+            if (state === "ERROR") this.recordError(cause);
+            // Keep the connection state honest (ERROR) even for a terminal
+            // limitation; only the reason/capabilities are structured.
+            this.setConnectionState(state, state === "ERROR" ? (this.lastError ?? cause) : (error ?? null));
             const op = instance.currentOperation;
             if (op && op.state === "active") {
               void this.retireFromCallback(instance, op, cause, state);
@@ -611,7 +680,7 @@ export class StreamSupervisor {
   }
 
   /** Returns true only when the driver start completed for the current epoch. */
-  private async startDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
+  private async startDriver(subscriptions: DriverSubscription[], generation: number): Promise<boolean> {
     let instance: DriverInstance;
     try {
       instance = this.acquireInstance();
@@ -624,18 +693,18 @@ export class StreamSupervisor {
       return false;
     }
 
-    const op = this.beginOperation(instance, "start");
+    const op = this.beginOperation(instance, "start", generation);
     this.setConnectionState("CONNECTING", null);
     let raw: Promise<void>;
     try {
       raw = instance.driver.start(subscriptions, this.makeCallbacks(instance), op.controller.signal);
     } catch (error) {
       const message = errorMessage(error);
-      this.lastError = message;
-      this.setConnectionState("ERROR", message);
+      this.recordError(message);
+      this.setConnectionState("ERROR", this.lastError ?? message);
       this.retireInstance(instance, "failed");
-      this.resolveOperation(op, { kind: "failed", error: message });
-      this.scheduleReconnect(this.epoch, message);
+      this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
+      if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
       return false;
     }
     this.attachSettlement(op, raw);
@@ -644,19 +713,19 @@ export class StreamSupervisor {
   }
 
   /** Returns true only when the driver update completed for the current epoch. */
-  private async updateDriver(subscriptions: DriverSubscription[]): Promise<boolean> {
+  private async updateDriver(subscriptions: DriverSubscription[], generation: number): Promise<boolean> {
     const instance = this.currentInstance!;
-    const op = this.beginOperation(instance, "update");
+    const op = this.beginOperation(instance, "update", generation);
     let raw: Promise<void>;
     try {
       raw = instance.driver.updateSubscriptions(subscriptions, op.controller.signal);
     } catch (error) {
       const message = errorMessage(error);
-      this.lastError = message;
-      this.setConnectionState("ERROR", message);
+      this.recordError(message);
+      this.setConnectionState("ERROR", this.lastError ?? message);
       this.retireInstance(instance, "failed");
-      this.resolveOperation(op, { kind: "failed", error: message });
-      this.scheduleReconnect(this.epoch, message);
+      this.resolveOperation(op, { kind: "failed", error: this.lastError ?? message });
+      if (!this.isCurrentGenerationTerminal()) this.scheduleReconnect(this.epoch, message);
       return false;
     }
     this.attachSettlement(op, raw);
@@ -673,6 +742,9 @@ export class StreamSupervisor {
   }
 
   private scheduleReconnect(epoch: number, cause: string): void {
+    // Terminal failures (e.g. LIMITED) are non-retryable: never schedule an
+    // automatic reconnect for a generation blocked by a typed terminal failure.
+    if (this.isCurrentGenerationTerminal()) return;
     if (this.reconnectTimer || this.stopped || this.lockedDriver) return;
     const maxAttempts = this.opts.reconnect?.maxAttempts ?? 5;
     const baseDelayMs = this.opts.reconnect?.baseDelayMs ?? 1000;
@@ -711,7 +783,9 @@ export class StreamSupervisor {
         generation: this.appliedGeneration,
         connectionState: this.connectionState,
         resolutions: this.resolutions.map((r) => ({ ...r })),
-        lastError: this.lastError
+        lastError: this.lastError,
+        // Structured capability results (e.g. FYERS LIMITED) survive retirement.
+        ...(this.capabilities.length > 0 ? { capabilities: this.capabilities.map((c) => ({ ...c })) } : {})
       }
     };
   }

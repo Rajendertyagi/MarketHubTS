@@ -36,11 +36,23 @@ class FakeDriver implements StreamingDriver {
   stopCount = 0;
   callbacks: DriverCallbacks | null = null;
   failStart = false;
+  failWithLimit = false;
   state = "NOT_STARTED";
 
   async start(subs: DriverSubscription[], callbacks: DriverCallbacks, _signal: AbortSignal): Promise<void> {
     this.starts.push(subs.map((s) => ({ ...s })));
     this.callbacks = callbacks;
+    if (this.failWithLimit) {
+      callbacks.onTerminalFailure?.({
+        kind: "LIMITED",
+        reason: "maximum symbol limit exceeded",
+        capabilities: [
+          { component: "quote", provider: "FYERS", status: "LIMITED", reason: "maximum symbol limit exceeded", entitlementUnverified: true }
+        ]
+      });
+      callbacks.onConnectionState("ERROR", "FYERS Data Socket limit: maximum symbol limit exceeded");
+      throw new Error("FYERS Data Socket limit: maximum symbol limit exceeded");
+    }
     if (this.failStart) throw new Error("start failed");
     this.state = "CONNECTING";
     callbacks.onConnectionState("CONNECTING");
@@ -178,6 +190,35 @@ describe("SubscriptionCoordinator ownership", () => {
 
       expect(h.fyersDriver.starts.length).toBe(1);
       expect(h.fyers.getView().runtime.connectionState).toBe("CONNECTING");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("a FYERS typed LIMITED failure leaves the UPSTOX runtime fully independent", async () => {
+    const h = harness();
+    try {
+      await h.seed([
+        { instrument: instrument(A), mappings: [mapping("UPSTOX", A, "U-A"), mapping("FYERS", A, "F-A")] }
+      ]);
+      h.fyersDriver.failWithLimit = true;
+      await h.upstox.start();
+      await h.fyers.start();
+      await h.coordinator.start();
+      await h.coordinator.replaceSubscriptions([{ canonicalId: A, enabled: true }]);
+
+      // FYERS is terminally limited with structured capabilities.
+      const fyView = h.fyers.getView();
+      expect(fyView.runtime.connectionState).toBe("ERROR");
+      expect(fyView.runtime.capabilities?.find((c) => c.component === "quote")?.status).toBe("LIMITED");
+
+      // UPSTOX is unaffected: streaming, no limitation state, generation applied.
+      const upView = h.upstox.getView();
+      expect(upView.runtime.connectionState).toBe("CONNECTING");
+      expect(upView.runtime.capabilities).toBeUndefined();
+      expect(upView.runtime.lastError).toBeNull();
+      expect(upView.runtime.generation).toBe(1);
+      expect(h.upstoxDriver.starts).toHaveLength(1);
     } finally {
       h.cleanup();
     }
