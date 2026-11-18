@@ -43,18 +43,25 @@ describe("historical web client", () => {
     await expect(fetchCachedCandles(request)).rejects.toBeDefined();
   });
 
-  test("coverage preserves unconfirmed gaps and basis", async () => {
+  test("coverage preserves unconfirmed gaps, basis and unavailable notes", async () => {
     fakeFetch(() => ({
       status: 200,
       body: {
         gaps: [{ canonicalId: "A", interval: "1D", fromMs: 1, toMs: 2, basis: "WEEKDAY_ONLY", confirmed: false, reason: "no candle stored" }],
-        basis: "WEEKDAY_ONLY", confirmed: false
+        basis: "WEEKDAY_ONLY", confirmed: false,
+        unavailableNotes: [{
+          canonicalId: "A", interval: "1D", provider: "FYERS", rangeStartMs: 3, rangeEndMs: 4,
+          kind: "UNAVAILABLE", reasonCode: "NO_DATA", reasonJson: "{}",
+          requestedAtMs: 5, updatedAtMs: 5
+        }]
       }
     }));
     const result = await fetchCoverage(request);
     expect(result.gaps[0]!.basis).toBe("WEEKDAY_ONLY");
     expect(result.gaps[0]!.confirmed).toBe(false);
     expect(result.confirmed).toBe(false);
+    expect(result.unavailableNotes[0]!.reasonCode).toBe("NO_DATA");
+    expect(result.unavailableNotes[0]!.provider).toBe("FYERS");
   });
 
   test("sync config CRUD round-trips and 403 is forbidden", async () => {

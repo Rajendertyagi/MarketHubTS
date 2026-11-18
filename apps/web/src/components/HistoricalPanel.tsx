@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
-  CandleGap, CandleInterval, HistoricalCandle, HistoricalSyncConfig, RetentionSettings
+  CandleGap, CandleInterval, CandleRangeNote, HistoricalCandle, HistoricalSyncConfig, RetentionSettings
 } from "@markethub/contracts";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
@@ -30,6 +30,7 @@ export function HistoricalPanel() {
   const [to, setTo] = useState("");
   const [candles, setCandles] = useState<HistoricalCandle[] | null>(null);
   const [gaps, setGaps] = useState<CandleGap[]>([]);
+  const [unavailableNotes, setUnavailableNotes] = useState<CandleRangeNote[]>([]);
   const [configs, setConfigs] = useState<HistoricalSyncConfig[]>([]);
   const [retention, setRetention] = useState<RetentionSettings | null>(null);
   const [retentionValid, setRetentionValid] = useState(false);
@@ -42,7 +43,9 @@ export function HistoricalPanel() {
   };
   const loadRetention = () => {
     void fetchRetention().then((view) => {
-      setRetention(view.settings);
+      // Always keep an editable draft: from an invalid/missing state the
+      // operator can still save a schema-valid "no limits" configuration.
+      setRetention(view.settings ?? { version: 1, classes: {} });
       setRetentionValid(view.valid);
     }).catch((cause) => setError(toError(cause)));
   };
@@ -59,11 +62,13 @@ export function HistoricalPanel() {
     setError(null);
     setCandles(null);
     setGaps([]);
+    setUnavailableNotes([]);
     try {
       const request = { canonicalId: canonicalId.trim(), interval, fromMs, toMs };
       const [cached, coverage] = await Promise.all([fetchCachedCandles(request), fetchCoverage(request)]);
       setCandles(cached.candles);
       setGaps(coverage.gaps);
+      setUnavailableNotes(coverage.unavailableNotes);
     } catch (cause) {
       setError(toError(cause));
     } finally {
@@ -104,9 +109,9 @@ export function HistoricalPanel() {
   };
 
   const saveRetentionSettings = async () => {
-    if (!retention) return;
+    const draft = retention ?? { version: 1, classes: {} };
     try {
-      await saveRetention(retention);
+      await saveRetention(draft);
       setMessage("Retention settings saved.");
       loadRetention();
     } catch (cause) { setError(toError(cause)); }
@@ -175,6 +180,17 @@ export function HistoricalPanel() {
               {gaps.slice(0, 20).map((g, i) => (
                 <li key={i} className="text-xs text-slate-400">
                   {new Date(g.fromMs).toISOString()} → {new Date(g.toMs).toISOString()} · {g.basis} · unconfirmed
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="mt-3">
+            <h4 className="text-sm font-semibold text-slate-200">Unavailable periods ({unavailableNotes.length})</h4>
+            {unavailableNotes.length === 0 && <p className="mt-1 text-xs text-slate-400">No known permanent restrictions in this range.</p>}
+            <ul className="mt-1 space-y-1">
+              {unavailableNotes.slice(0, 20).map((n, i) => (
+                <li key={i} className="text-xs text-amber-300">
+                  {new Date(n.rangeStartMs).toISOString()} → {new Date(n.rangeEndMs).toISOString()} · {n.provider} · {n.reasonCode ?? "unspecified"}
                 </li>
               ))}
             </ul>

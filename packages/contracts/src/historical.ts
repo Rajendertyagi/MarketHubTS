@@ -130,6 +130,19 @@ export interface CandleRangeNote {
 /** Report-only reason: surfaced in status but never persisted as a permanent note. */
 export type ReportReasonCode = UnavailableReasonCode | "REQUEST_ERROR";
 
+export const candleRangeNoteSchema = z.object({
+  canonicalId: z.string().min(1),
+  interval: candleIntervalSchema,
+  provider: z.enum(["UPSTOX", "FYERS"]),
+  rangeStartMs: z.number().int().nonnegative(),
+  kind: rangeNoteKindSchema,
+  rangeEndMs: z.number().int().nonnegative(),
+  reasonCode: unavailableReasonCodeSchema.nullable(),
+  reasonJson: z.string(),
+  requestedAtMs: z.number().int().nonnegative(),
+  updatedAtMs: z.number().int().nonnegative()
+});
+
 export interface DataUnavailableReport {
   canonicalId: string;
   interval: CandleInterval;
@@ -156,6 +169,12 @@ export interface HistoricalSyncConfig {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Minimal, validated provider preference policy — never a fixed priority. */
+export const providerPolicySchema = z.object({
+  preferredProvider: z.enum(["UPSTOX", "FYERS"]).optional()
+});
+export type ProviderPolicy = z.infer<typeof providerPolicySchema>;
 
 export const historicalSyncConfigSchema = z.object({
   id: z.string().min(1),

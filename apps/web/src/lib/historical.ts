@@ -1,9 +1,11 @@
 import {
   candleGapSchema,
+  candleRangeNoteSchema,
   historicalCandleSchema,
   historicalSyncConfigSchema,
   retentionSettingsSchema,
   type CandleGap,
+  type CandleRangeNote,
   type CandleRangeRequest,
   type HistoricalCandle,
   type HistoricalSyncConfig,
@@ -65,15 +67,23 @@ export interface CoverageResult {
   gaps: CandleGap[];
   basis: string | null;
   confirmed: false;
+  /** Authoritative permanent restrictions for the requested window. */
+  unavailableNotes: CandleRangeNote[];
 }
 
 export async function fetchCoverage(request: CandleRangeRequest): Promise<CoverageResult> {
   const response = await fetch(`/api/historical/coverage?${rangeQuery(request)}`, { headers: { Accept: "application/json" } });
   const payload = await readPayload(response);
   if (!response.ok) throw new HistoricalHttpError(classify(response.status), messageOf(payload, response.status));
-  const gaps = (payload as { gaps?: unknown }).gaps;
-  if (!Array.isArray(gaps)) throw new HistoricalHttpError("internal", "Invalid coverage payload");
-  return { gaps: gaps.map((g) => candleGapSchema.parse(g) as CandleGap), basis: (payload as { basis?: string | null }).basis ?? null, confirmed: false };
+  const p = payload as { gaps?: unknown; basis?: unknown; unavailableNotes?: unknown };
+  if (!Array.isArray(p.gaps)) throw new HistoricalHttpError("internal", "Invalid coverage payload");
+  const notes = Array.isArray(p.unavailableNotes) ? p.unavailableNotes : [];
+  return {
+    gaps: p.gaps.map((g) => candleGapSchema.parse(g) as CandleGap),
+    basis: typeof p.basis === "string" ? p.basis : null,
+    confirmed: false,
+    unavailableNotes: notes.map((n) => candleRangeNoteSchema.parse(n) as CandleRangeNote)
+  };
 }
 
 export async function fetchSyncConfigs(): Promise<HistoricalSyncConfig[]> {

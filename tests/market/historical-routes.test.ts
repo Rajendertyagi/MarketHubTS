@@ -95,6 +95,26 @@ describe("M5 historical/snapshot API routes", () => {
     } finally { h.cleanup(); }
   });
 
+  test("coverage reports authoritative unavailable periods alongside gaps", async () => {
+    const h = harness();
+    try {
+      h.candles.addRangeNote({
+        canonicalId: CANON, interval: "1D", provider: "FYERS",
+        rangeStartMs: Date.parse("2026-01-10T00:00:00Z"), kind: "UNAVAILABLE",
+        rangeEndMs: Date.parse("2026-01-12T00:00:00Z"), reasonCode: "NO_DATA",
+        reasonJson: "{}", requestedAtMs: 1, updatedAtMs: 1
+      });
+      const res = await h.app.request(
+        `/api/historical/coverage?canonicalId=${encodeURIComponent(CANON)}&interval=1D&from=${FROM}&to=${TO}`, {}, h.localEnv
+      );
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.unavailableNotes.length).toBe(1);
+      expect(body.unavailableNotes[0].reasonCode).toBe("NO_DATA");
+      expect(body.unavailableNotes[0].provider).toBe("FYERS");
+    } finally { h.cleanup(); }
+  });
+
   test("invalid range returns 400", async () => {
     const h = harness();
     try {
@@ -216,6 +236,18 @@ describe("M5 historical/snapshot API routes", () => {
       const after = await json(await h.app.request("/api/snapshots", {}, h.localEnv));
       expect(after.snapshots.length).toBe(1);
       expect(after.snapshots[0].configId).toBeNull();
+    } finally { h.cleanup(); }
+  });
+
+  test("manual capture rejects an invalid provider enum with 400", async () => {
+    const h = harness();
+    try {
+      const res = await h.app.request("/api/snapshots/capture", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ underlyingCanonicalId: CANON, expiryDate: "2026-01-29", provider: "NOPE" })
+      }, h.localEnv);
+      expect(res.status).toBe(400);
+      expect((await json(res)).error).toBe("invalid_request");
     } finally { h.cleanup(); }
   });
 

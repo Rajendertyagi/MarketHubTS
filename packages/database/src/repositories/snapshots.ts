@@ -80,15 +80,16 @@ export class SnapshotRepository {
     this.db.delete(optionChainCaptureConfigs).where(eq(optionChainCaptureConfigs.id, id)).run();
   }
 
-  putSnapshot(snapshot: OptionChainSnapshot): void {
-    this.db.insert(optionChainSnapshots).values({
-      id: snapshot.id,
-      configId: snapshot.configId,
-      capturedAt: snapshot.capturedAt,
-      provider: snapshot.provider,
-      envelopeJson: JSON.stringify(snapshot.envelope),
-      provenanceJson: JSON.stringify(snapshot.provenance)
-    }).run();
+  /** Idempotent append: a duplicate id is a no-op, never a constraint error. */
+  putSnapshot(snapshot: OptionChainSnapshot): boolean {
+    const result = this.sqlite.run(
+      "INSERT OR IGNORE INTO option_chain_snapshots (id, config_id, captured_at, provider, envelope_json, provenance_json) VALUES (?, ?, ?, ?, ?, ?)",
+      [
+        snapshot.id, snapshot.configId, snapshot.capturedAt, snapshot.provider,
+        JSON.stringify(snapshot.envelope), JSON.stringify(snapshot.provenance)
+      ]
+    );
+    return result.changes > 0;
   }
 
   getSnapshot(id: string): OptionChainSnapshot | null {

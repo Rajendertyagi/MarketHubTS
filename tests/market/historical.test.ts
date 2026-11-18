@@ -168,6 +168,24 @@ describe("HistoricalCandleService", () => {
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 
+  test("runSync applies the saved provider preference without a fixed priority", async () => {
+    const upstox = new FakeProvider("UPSTOX", [candle(Date.parse("2026-01-05T00:00:00Z"), 100)]);
+    const fyers = new FakeProvider("FYERS", [candle(Date.parse("2026-01-06T00:00:00Z"), 101, "FYERS")]);
+    const h = harness([upstox, fyers]); // caller order: UPSTOX first
+    try {
+      const config: HistoricalSyncConfig = {
+        id: "cfg-1", canonicalId: CANON, interval: "1D", enabled: true,
+        dateRangeJson: null,
+        providerPolicyJson: JSON.stringify({ preferredProvider: "FYERS" }),
+        scheduleJson: null,
+        createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+      };
+      const result = await h.service.runSync(config);
+      expect(result.providersTried[0]).toBe("FYERS"); // saved preference wins
+      expect(result.providersTried).toContain("UPSTOX"); // fallback retained
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
   test("runSync rejects invalid parsed date bounds instead of propagating NaN", async () => {
     const p = new FakeProvider("UPSTOX", [candle(Date.parse("2026-01-05T00:00:00Z"), 100)]);
     const h = harness([p]);

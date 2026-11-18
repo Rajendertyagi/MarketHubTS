@@ -104,6 +104,14 @@ export interface OptionChainCaptureConfig {
   updatedAt: string;
 }
 
+export const optionChainCaptureRequestSchema = z.object({
+  underlyingCanonicalId: z.string().min(1),
+  expiryDate: z.string().min(1),
+  provider: z.enum(["UPSTOX", "FYERS"]).optional(),
+  strikeRangeJson: z.string().nullable().optional(),
+  nativeIdentifier: z.string().optional()
+});
+
 export const optionChainCaptureConfigSchema = z.object({
   id: z.string().min(1),
   underlyingCanonicalId: z.string().min(1),

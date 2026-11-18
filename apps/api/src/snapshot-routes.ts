@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import {
   apiErrorSchema,
   optionChainCaptureConfigSchema,
+  optionChainCaptureRequestSchema,
   optionChainSnapshotSchema
 } from "@markethub/contracts";
 import type { OptionChainSnapshotService, OptionChainRequest } from "@markethub/market-core";
@@ -60,11 +61,11 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Manual capture is local-owner only" }), 403);
     }
-    const body = await c.req.json().catch(() => null) as Partial<OptionChainRequest> | null;
-    if (!body || typeof body.underlyingCanonicalId !== "string" || typeof body.expiryDate !== "string" ||
-        !body.underlyingCanonicalId || !body.expiryDate) {
-      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "underlyingCanonicalId and expiryDate are required" }), 400);
+    const parsed = optionChainCaptureRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid capture request" }), 400);
     }
+    const body = parsed.data;
     const request: OptionChainRequest = {
       underlyingCanonicalId: body.underlyingCanonicalId,
       expiryDate: body.expiryDate,

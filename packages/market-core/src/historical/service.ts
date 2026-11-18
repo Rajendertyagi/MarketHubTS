@@ -1,7 +1,8 @@
-import type {
-  CandleGap, CandleRangeNote, CandleRangeRequest, DataUnavailableReport,
-  HistoricalCandle, HistoricalSyncConfig, ProviderId, RetentionSettings,
-  UnavailableReasonCode
+import {
+  providerPolicySchema,
+  type CandleGap, type CandleRangeNote, type CandleRangeRequest, type DataUnavailableReport,
+  type HistoricalCandle, type HistoricalSyncConfig, type ProviderId, type RetentionSettings,
+  type UnavailableReasonCode
 } from "@markethub/contracts";
 import { assessGaps } from "./gaps";
 
@@ -38,6 +39,12 @@ export interface HistoricalServiceOptions {
   now?: () => number;
 }
 
+export interface CoverageStatus {
+  gaps: CandleGap[];
+  /** Authoritative permanent restrictions for the requested window. */
+  unavailableNotes: CandleRangeNote[];
+}
+
 export interface HistoricalFetchResult {
   /** Provider-returned candles for this call (including any that conflicted
    * with stored values). `conflicts` reports how many were not applied; the
@@ -70,6 +77,20 @@ export class HistoricalCandleService {
     const covered = this.options.candles.getCoveredTimestamps(request.canonicalId, request.interval, request.fromMs, request.toMs);
     const notes = this.options.candles.getRangeNotes(request.canonicalId, request.interval, request.fromMs, request.toMs);
     return assessGaps(request, covered, notes);
+  }
+
+  /**
+   * Full coverage status: candidate gaps PLUS authoritative unavailable
+   * periods. Without the latter, "no candles and no gaps" would be ambiguous
+   * between an unconfirmed gap and a known permanent restriction. Derived
+   * entirely from stored notes — never fabricated.
+   */
+  getCoverageStatus(request: CandleRangeRequest): CoverageStatus {
+    const notes = this.options.candles.getRangeNotes(request.canonicalId, request.interval, request.fromMs, request.toMs);
+    return {
+      gaps: this.getCoverage(request),
+      unavailableNotes: notes.filter((n) => n.kind === "UNAVAILABLE")
+    };
   }
 
   /**
@@ -158,7 +179,22 @@ export class HistoricalCandleService {
         toMs = defaultTo;
       }
     }
-    const request: CandleRangeRequest = { canonicalId: config.canonicalId, interval: config.interval, fromMs, toMs };
+    // Apply the saved provider preference defensively. Invalid/missing policy
+    // means no preference — never a hardcoded priority. Alternate providers
+    // are still tried by fetchOnDemand (prefer-then-fallback).
+    let preferredProvider: ProviderId | undefined;
+    if (config.providerPolicyJson) {
+      try {
+        const parsed = providerPolicySchema.safeParse(JSON.parse(config.providerPolicyJson));
+        if (parsed.success) preferredProvider = parsed.data.preferredProvider;
+      } catch {
+        // Malformed policy: ignore, no preference.
+      }
+    }
+    const request: CandleRangeRequest = {
+      canonicalId: config.canonicalId, interval: config.interval, fromMs, toMs,
+      ...(preferredProvider ? { provider: preferredProvider } : {})
+    };
     return this.fetchOnDemand(request);
   }
 

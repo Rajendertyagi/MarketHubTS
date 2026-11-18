@@ -9,7 +9,7 @@ export interface SnapshotStore {
   getCaptureConfig(id: string): OptionChainCaptureConfig | null;
   listCaptureConfigs(): OptionChainCaptureConfig[];
   deleteCaptureConfig(id: string): void;
-  putSnapshot(snapshot: OptionChainSnapshot): void;
+  putSnapshot(snapshot: OptionChainSnapshot): boolean;
   getSnapshot(id: string): OptionChainSnapshot | null;
   listSnapshots(configId?: string, fromMs?: number, toMs?: number): OptionChainSnapshot[];
 }
@@ -100,14 +100,20 @@ export class OptionChainSnapshotService {
         const envelope = await provider.fetchOptionChain(request);
         const capturedAt = new Date(this.now()).toISOString();
         const snapshot: OptionChainSnapshot = {
-          id: `snap-${this.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          id: crypto.randomUUID(),
           configId,
           capturedAt,
           provider: provider.id,
           envelope: { ...envelope, capturedAt }, // local capture time is authoritative
           provenance: { source: "provider-feed", provider: provider.id, receivedAt: capturedAt }
         };
-        this.options.snapshots.putSnapshot(snapshot);
+        if (!this.options.snapshots.putSnapshot(snapshot)) {
+          // Collision on the unique id — regenerate once rather than surface a 500.
+          snapshot.id = crypto.randomUUID();
+          if (!this.options.snapshots.putSnapshot(snapshot)) {
+            return { snapshot: null, error: "snapshot_id_collision" };
+          }
+        }
         return { snapshot, error: null };
       } catch (error) {
         // Try next configured provider; report sanitized error if none succeed.

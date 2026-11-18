@@ -261,6 +261,19 @@ describe("M5 storage", () => {
     } finally { removeTempDir(dir); }
   });
 
+  test("duplicate snapshot id insert is idempotent (no constraint error)", () => {
+    const { dir, path } = tempDbPath("m5-snapshot-idempotent.sqlite");
+    try {
+      const handle = openDatabase({ dbPath: path, migrate: true });
+      const repo = new SnapshotRepository(handle.db, handle.sqlite);
+      repo.putCaptureConfig(captureConfig()); // satisfy the config_id FK
+      expect(repo.putSnapshot(snapshot())).toBe(true);
+      expect(repo.putSnapshot(snapshot())).toBe(false); // duplicate is a no-op
+      expect(repo.listSnapshots().length).toBe(1);
+      closeDatabaseHandle(handle);
+    } finally { removeTempDir(dir); }
+  });
+
   test("retention cleanup deletes in bounded batches until all expired rows are gone", () => {
     const { dir, path } = tempDbPath("m5-batch-cleanup.sqlite");
     try {

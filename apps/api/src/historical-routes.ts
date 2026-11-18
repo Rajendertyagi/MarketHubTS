@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import {
   apiErrorSchema,
   candleGapSchema,
+  candleRangeNoteSchema,
   candleRangeRequestSchema,
   historicalCandleSchema,
   historicalSyncConfigSchema,
@@ -80,8 +81,10 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
   app.get("/api/historical/coverage", (c) => {
     const request = parseRange(c);
     if (!request) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "canonicalId, interval, from and to are required" }), 400);
-    const gaps = deps.service.getCoverage(request).map((gap) => candleGapSchema.parse(gap));
-    return c.json({ gaps, basis: gaps[0]?.basis ?? null, confirmed: false });
+    const status = deps.service.getCoverageStatus(request);
+    const gaps = status.gaps.map((gap) => candleGapSchema.parse(gap));
+    const unavailableNotes = status.unavailableNotes.map((note) => candleRangeNoteSchema.parse(note));
+    return c.json({ gaps, basis: gaps[0]?.basis ?? null, confirmed: false, unavailableNotes });
   });
 
   // On-demand fetch. In M5 no live providers are wired (Phase 4B/Stage G), so
