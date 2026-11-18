@@ -3,7 +3,7 @@
 > **Status:** Planning only. No implementation, source/test modification, commit, push, merge, or DB change performed for M5. Awaiting independent review and explicit implementation authorization.
 > **Baseline:** M5 planning baseline `2e7ec2799ef73401f355075088501cd6dfdc2195` (the commit on which M5 planning began); `main` @ `865d86f393a29bc1ec8d455a51d9efa82d722c48`. Final reviewed Stage C state `e8ce409eddbaf50c1363dfa0d4e5bc9e82d31ddd`; original Stage C implementation `e236e254b90b390077613c7f055ae1bb070bd13e`. The active `develop` HEAD is intentionally not recorded here — re-check with `git log -1`.
 > **Governing docs:** `AGENTS.md`, `PROJECT_MANAGER_PROTOCOL.md`, `ENGINEERING_STANDARDS.md` (canonical), `PRODUCT_REQUIREMENTS.md` §6.2–6.4, `DATA_LIFECYCLE_AND_STORAGE.md` §3–4, `IMPLEMENTATION_ROADMAP.md` M5, `ARCHITECTURE.md`, `MULTI_PROVIDER_STREAMING_ARCHITECTURE.md` §6.2/§7.1, `REFERENCES.md`.
-> **Revision:** optimized after independent architecture review — five tables (not six), derived coverage, offline adapter code, weekday-only gap heuristic, resolved v2 deprecation question.
+> **Revision:** optimized after independent architecture review — five tables (not six), derived coverage, offline adapter code, resolved v2 deprecation question. Final refinement adds interval/session-aware gap labeling, manual-review conflict policy, explicit Stage G REST verification scenarios (§3A), exact test-file allocation, and a fail-closed retention fallback.
 
 ## 1. Settled direction (do not re-litigate)
 
@@ -59,6 +59,31 @@ Preserved without change: Stage C structural-adapter seam, AD-024 foundation, `i
 - Upstox exposes Option Contracts and Put/Call Option chain endpoints; **detail field shape unverified** (only index page fetched) — gate mapping on Stage G.
 - FYERS OI/IV/Greeks are **not** Data Socket fields (AD-024 §6.2); they are REST-only and belong to M5, never to a live tick.
 
+## 3A. Stage G — M5 REST verification scenarios (prerequisite)
+
+Successful Stage G **streaming** verification does **not** prove historical or option-chain REST support. These scenarios are separate, explicitly authorized Stage G work. Each requires real credentials and live requests — **none is authorized by this plan**. For every scenario record: preconditions/entitlement, request + response evidence (sanitized), expected result, pass criteria, fail criteria, sanitized fixture capture, and what remains unverified if it cannot run. Sanitized fixtures must strip tokens, account identifiers and request signatures; only response shape, field names, status/error codes and non-sensitive metadata are retained for offline tests.
+
+**Upstox**
+| Scenario | Preconditions / entitlement | Evidence | Expected / pass | Fail | Fixture | Unverified if not run |
+|---|---|---|---|---|---|---|
+| Active-contract V3 historical candles | Analytics Token with Historical Data category | `GET /v3/historical-candle/...` request + response | 200, `data.candles` 7-element arrays, requested interval/window honored | 4xx/5xx, wrong shape, silent truncation | Candle arrays, interval/window params, status | Actual account entitlement, live field delivery |
+| Expired-contract v2 historical candles | **Upstox Plus** | `GET /v2/expired-instruments/historical-candle/...` with a known `expired_instrument_key` | 200, same 7-element shape, expired key accepted | 403/entitlement error, v2 retired, wrong shape | Candle arrays, expired-key format, status | Plus entitlement, v2 endpoint current status, duration limits |
+| Option Contracts + Put/Call Option Chain fields | Analytics Token (Option Chain category) | Both endpoint responses | Documented per-strike fields present; unknown fields reported, not fabricated | Missing/unexpected fields, entitlement error | Field names, sample values (no account data) | Detail field shape (only index page fetched) |
+| Entitlement behavior (Analytics Token vs Plus) | Both token types available | Responses from a Plus-gated and a non-gated endpoint | Plus-gated call succeeds only with Plus; non-gated works with Analytics Token | Gating not as documented | Status codes, error codes | Account-specific plan state |
+| Date-range / interval / rate limits | Valid token | Requests at documented boundaries and just beyond | Documented windows honored; over-limit returns documented error | Silent truncation or undocumented error | Status/error codes, window params | Actual per-account limits |
+
+**FYERS**
+| Scenario | Preconditions / entitlement | Evidence | Expected / pass | Fail | Fixture | Unverified if not run |
+|---|---|---|---|---|---|---|
+| Regular historical candles | Market Data permission; Standard sufficient | `range_from`/`range_to`, `oi_flag`, `cont_flag` responses | Candle arrays, OI when flagged, 100-day/366-day limits honored | 422/`-50`, wrong shape, silent truncation | Candle arrays, params, status | Live field delivery, partial-candle behavior |
+| Expired F&O daily | Standard (last 2 yrs) | Expired F&O daily response | 200, `columns`-named optional fields, `no_data` handled | Entitlement error, wrong shape | `columns`, candle arrays, `s` status | Standard entitlement, live availability dates |
+| Expired F&O intraday | Standard (10 req/day) | Expired F&O intraday response | 200 within 10/day; 11th request returns documented limit error | Undocumented limit behavior | Status/error codes, request count | Live 10/day enforcement |
+| Option-chain fields (OI/IV/Greeks) | Market Data permission | `optionchain` response with `greeks=1` | Per-strike fields + nested greeks; `null` Greeks preserved as null | Missing fields, zero-filled nulls | Field names, null positions, `strikecount` | Live null-Greek behavior, `greeks_at` semantics |
+| Standard vs Prime entitlement | Both plan states available | Same request under each plan | Standard/Prime coverage matches documented limits | Plan behavior differs from docs | Status codes, coverage metadata | Actual account plan |
+| Request limits / error semantics | Valid token | Requests at 5/s, 50/min, 5,000/day boundaries | `-429` on breach; `no_data` = empty result, not failure | Silent failure or wrong code | Error codes, `s` values | Live rate-limit enforcement |
+
+Each scenario's pass/fail is recorded in the Stage G report; capability status in M5 stays `UNVERIFIED` until the relevant scenario passes. A scenario that cannot run leaves its specific facts explicitly unverified — never assumed.
+
 ## 4. Lean storage design — five tables + validated `app_meta`
 
 Every table is justified by a distinct, non-derivable responsibility. Nothing else is created.
@@ -73,6 +98,8 @@ Every table is justified by a distinct, non-derivable responsibility. Nothing el
 
 **Retention lives in `app_meta`** under key `retention_settings` as a Zod-validated JSON value, read/written through a small `AppSettings` service that mirrors `readGeneration()`'s validated-read pattern. It is **not** a new table and **not** `provider_settings` (which is provider-specific non-secret config). Retention applies by data class (`CANDLE`, `SNAPSHOT`) with user-controlled bounds; no hidden fixed policy.
 
+**Retention fail-safe (critical):** validation happens on every read. If the stored value is missing, malformed, or fails Zod validation, the service reports an explicit invalid/unavailable status and **disables all retention cleanup** — it must never substitute an arbitrary default duration and must never delete rows. Cleanup resumes only after valid user-controlled settings are restored through the WebUI. This differs from `readGeneration()`'s fallback-to-zero: a bad retention value fails closed toward *no deletion*. Cleanup itself is bounded (per-class batch limits) and foreign-key-safe.
+
 **Why not six tables:** `app_settings` was a generic 4th KV store; `candle_coverage_ranges` duplicated information already in `historical_candles` and could drift (a `COVERED` row for provider B while the stored candles are provider A's, because first-write-wins). Deriving coverage from candle rows makes provenance truthful by construction and removes a whole write path that had to be kept transactionally consistent with candle writes.
 
 **Why not merge the two config tables:** they have different validation schemas, different consumers (candle service vs snapshot service), and different lifecycles. A discriminated JSON blob would weaken DB constraints and clarity for no real gain at the expected (small, user-authored) row counts.
@@ -81,9 +108,17 @@ Every table is justified by a distinct, non-derivable responsibility. Nothing el
 
 - **Coverage is derived**, never stored as a claim: for `(canonical_id, interval)`, the covered timestamps are exactly the `ts_ms` values in `historical_candles`, each with its own `provider`. A requested window minus covered timestamps minus `UNAVAILABLE` notes = candidate gaps.
 - **`UNAVAILABLE` notes are authoritative**: written only from a provider response that explicitly reports entitlement failure, date-range limit, or `no_data`. They carry a stable `reason_code` (`ENTITLEMENT`, `DATE_LIMIT`, `NO_DATA`, `RATE_LIMITED`) and a sanitized detail. They are not retried against the same provider until config/entitlement changes.
-- **Candidate gaps are explicitly approximate in M5.** No exchange-calendar source exists in this repo and calendars are a later-phase market-wide source. Gap derivation uses a **weekday-only** filter (weekends excluded) and labels every gap with `gapBasis: "WEEKDAY_ONLY"`. Exchange holidays are therefore *not* asserted as missing candles; calendar-backed detection is deferred until a verified calendar source exists. **No candle is ever fabricated to fill a gap.**
-- **Alternate-provider fill**: a candidate gap or `UNAVAILABLE` range may be fetched from another provider per the configured policy. Successful fills write candles attributed to that provider; the original `UNAVAILABLE` note is retained (so we do not pointlessly retry the first provider).
-- **Conflicts**: PK is provider-agnostic. **First valid write wins** — an existing candle is never overwritten by an alternate fill or duplicate response. Same-provider refresh replaces only on explicit re-sync with a newer `received_at`, and is idempotent for identical payloads. A differing value from another provider is **not applied**; a `CONFLICT` note records the competing provider and values for visibility. Stored provenance is never changed by a rejected conflict.
+- **Gap assessment is interval-aware and explicitly labeled.** No verified exchange-calendar or session source exists in this repo (calendars are a later-phase market-wide source), so M5 must not assert confirmed missing candles from weekday-only logic. The contract:
+  - **Daily and coarser intervals (`1D`/`1W`/`1M`):** a weekday-only filter is usable as a *hint*. Every assessment carries `gapBasis: "WEEKDAY_ONLY"` and is reported as **approximate/indeterminate**, never as a confirmed missing candle. Weekends and exchange holidays are never asserted as missing; holiday detection is deferred until a verified calendar source exists.
+  - **Intraday intervals (minutes/hours):** session boundaries cannot be established without a calendar/session source. Overnight gaps, pre-open and post-market periods, and different exchange/segment sessions (e.g. NSE vs BSE, equity vs F&O) cannot be distinguished from genuine missing candles. Therefore intraday gaps are **indeterminate** (`gapBasis: "SESSION_UNKNOWN"`) and are reported only as "no candle stored in this window; session status unverified" — never as a confirmed missing candle. No candle is fabricated to fill any gap.
+  - **Every gap result carries its basis** (`WEEKDAY_ONLY` | `SESSION_UNKNOWN` | later `CALENDAR_BACKED`) and an explicit `confirmed: false` in M5. A future calendar-backed mode is a separate, justified change — no calendar dependency or new subsystem in M5.
+- **Alternate-provider fill**: a candidate gap or `UNAVAILABLE` range may be fetched from another provider per the configured policy. Successful fills write candles attributed to that provider; the original `UNAVAILABLE` note is retained (so we do not pointlessly retry the first provider). Filling never converts an indeterminate gap into a confirmed one.
+- **Conflicts — smallest safe policy (manual review, no automated re-resolution in M5):**
+  - PK is provider-agnostic. **First valid write wins** — an existing candle is never overwritten by an alternate fill, a duplicate, or a late-arriving response.
+  - A **differing value** from another provider is **not applied**. A `CONFLICT` note records the competing provider, the competing values, and the timestamp, while the stored candle and its original provenance (`provider`, `provenance_json`, `received_at`) remain unchanged. Conflicts are surfaced for **manual review** through the local API/WebUI; M5 does **not** implement automated re-resolution or an owner-authorized "make provider X authoritative" operation.
+  - **Duplicate** (identical payload) responses are idempotent — no new row, no new note. **Late-arriving** responses for an already-stored key are treated as duplicates/conflicts under the same rule; `received_at` ordering never silently replaces stored data.
+  - **Same-provider refresh** replaces only on an explicit re-sync with a newer `received_at`, and is idempotent for identical payloads. This is the only replacement path, and it is owner-initiated, not automatic.
+  - If automated re-resolution is ever needed, it requires a separately authorized operation with explicit provenance handling — not a silent provider priority.
 - **Automatic selection** uses the configured provider policy plus existing capability/availability/freshness logic — no hardcoded priority.
 
 ## 6. Snapshot envelope and field semantics
@@ -123,16 +158,33 @@ MCP exposure is M6. M5 only guarantees the service-level on-demand immutability 
 - **New:** `apps/web/src/lib/historical.ts`, `lib/snapshots.ts`, `components/HistoricalPanel.tsx`, `components/SnapshotPanel.tsx`.
 - **New tests:** `tests/market/historical.test.ts`, `tests/market/snapshots.test.ts`; **extend** `tests/database.test.ts` for migration `0004→0005` upgrade preserving `app_meta`/catalog/subscriptions.
 
+### Test-file allocation (exact paths and harness)
+
+| Test file | Boundary | Harness |
+|---|---|---|
+| `tests/market/historical.test.ts` | `HistoricalCandleService` + pure `gaps.ts` | fake provider seam, in-memory/temp DB |
+| `tests/market/snapshots.test.ts` | `OptionChainSnapshotService` | fake provider seam, in-memory/temp DB |
+| `tests/providers/upstox-historical.test.ts` | Upstox historical adapter (V3 active + v2 expired) | mocked `fetchImpl`, no network |
+| `tests/providers/upstox-option-chain.test.ts` | Upstox option-chain adapter | mocked `fetchImpl`, no network |
+| `tests/providers/fyers-historical.test.ts` | FYERS historical adapter (regular + expired F&O) | mocked `fetchImpl`, no network |
+| `tests/providers/fyers-option-chain.test.ts` | FYERS option-chain adapter | mocked `fetchImpl`, no network |
+| `tests/market/historical-routes.test.ts` | API historical/snapshot/config routes | fake services, `isLocalPeer` local/non-local requests |
+| `tests/web/historical.test.ts` | WebUI historical client | fake fetch, deterministic |
+| `tests/web/snapshots.test.ts` | WebUI snapshot client | fake fetch, deterministic |
+| `tests/database.test.ts` (extend) | migration `0004→0005` upgrade | temp DB, preserves `app_meta`/catalog/subscriptions |
+
+All M5 tests are offline: fake providers, mocked `fetchImpl`, temp/in-memory DB, or fake fetch. **No test uses live credentials or network.** Stage G live verification is a separate, authorized activity recorded in §3A — it is not part of the M5 test suite. Follows existing `tests/market/`, `tests/providers/`, `tests/web/` organization; no generic test framework.
+
 ## 10. Required deterministic regression tests (name the scenario)
 
 1. **Disjoint coverage**: two non-contiguous fetched windows; gap between them reported with `gapBasis`; no candle fabricated in the gap.
-2. **Provider conflict**: same key from A and B with different OHLC → first write wins, `CONFLICT` note recorded, stored provenance unchanged; duplicate identical response is idempotent; explicit same-provider refresh only with newer `received_at`.
-3. **Alternate fill**: A returns `UNAVAILABLE` for a range; B fills it; candles attributed to B; A's note retained; no overwrite of A's valid candles.
-4. **Weekday-only gaps**: weekend dates never reported as gaps; a weekday with no candle is reported as approximate (`WEEKDAY_ONLY`), never as a definite missing candle; no calendar dependency introduced.
+2. **Provider conflict / resolution**: same key from A and B with different OHLC → first write wins, `CONFLICT` note records competing provider + values + timestamp, stored provenance unchanged, conflict surfaced for manual review; duplicate identical response is idempotent (no new row/note); late-arriving response for a stored key is treated as duplicate/conflict and never silently replaces; explicit same-provider refresh only with newer `received_at`; no automated re-resolution or fixed provider priority in M5.
+3. **Alternate fill**: A returns `UNAVAILABLE` for a range; B fills it; candles attributed to B; A's note retained; no overwrite of A's valid candles; an indeterminate gap is never converted into a confirmed one by a fill.
+4. **Gap/session semantics**: daily weekday with no candle → approximate `WEEKDAY_ONLY`, `confirmed: false`; weekend and exchange-holiday dates never asserted as missing; intraday window with no candle (including overnight, pre-open, post-market, and cross-session boundaries) → `SESSION_UNKNOWN`, `confirmed: false`, reported only as "no candle stored; session status unverified"; different exchange/segment sessions (NSE vs BSE, equity vs F&O) are not conflated; every gap result carries its basis; no calendar dependency introduced.
 5. **Snapshot field semantics**: provider `null` Greek → key present with `null`; omitted field → key absent; provider `0` → stored as `0`; `observation_timestamp` absent → `null` (never `captured_at`); optional FYERS column mapped by name from `columns` despite doc inconsistency.
 6. **Config immutability**: on-demand fetch/capture with a config-shaped payload creates/modifies no config rows; only `runSync()`/scheduled capture reads config.
 7. **Deletion safety**: candles survive provider removal and catalog/expiry removal; snapshots survive capture-config deletion (`config_id` nulled); retention cleanup bounded, FK-safe, no cascade history loss.
-8. **Retention**: user-configured values in `app_meta` validated on read; invalid value falls back safely; no hidden fixed policy.
+8. **Retention fail-safe (invalid config deletes nothing)**: user-configured values in `app_meta` validated on read; a missing, malformed or schema-invalid value reports an explicit invalid/unavailable status and **disables all cleanup** — assert zero rows deleted (candles and snapshots) after a cleanup attempt with invalid config; no arbitrary default duration is substituted; cleanup resumes only after valid user-controlled settings are restored; cleanup is bounded and FK-safe when enabled.
 9. **Restart persistence**: candles, snapshots, configs, retention survive close + reopen.
 10. **Local-owner-only**: non-loopback PUT to config routes → 403 via `isLocalPeer`.
 11. **Migration**: `0005` applies on a fresh DB and on upgrade from `0004` without touching `app_meta`, catalog, or subscriptions.
@@ -141,10 +193,10 @@ MCP exposure is M6. M5 only guarantees the service-level on-demand immutability 
 ## 11. Acceptance criteria
 
 - Cached candles survive provider disconnect/removal and restart; disjoint coverage, unavailable periods, and partial failures reported explicitly, never fabricated.
-- Gap derivation is weekday-only and labeled approximate; calendar-backed detection is explicitly deferred; alternate fill respects policy and never overwrites valid candles.
-- Provider conflicts deterministic (first-valid-wins), provenance preserved, conflicts visible via `candle_range_notes`.
+- Gap assessment is interval-aware and labeled: daily gaps `WEEKDAY_ONLY`, intraday gaps `SESSION_UNKNOWN`, all `confirmed: false` in M5; overnight/non-session/weekend/holiday periods are never asserted as missing candles; calendar-backed detection is explicitly deferred; alternate fill respects policy and never overwrites valid candles or converts an indeterminate gap into a confirmed one.
+- Provider conflicts deterministic (first-valid-wins), provenance preserved, competing values recorded in `candle_range_notes` for manual review; no automated re-resolution or fixed provider priority; duplicates and late responses never silently replace stored data.
 - Snapshots use the canonical envelope with provider extensions; missing/null/unsupported/zero distinguishable; observation and capture timestamps distinct; manual/scheduled capture works; streaming independent of capture.
-- Retention user-configurable in validated `app_meta`; deletion rules in §7 hold; cleanup bounded and FK-safe.
+- Retention user-configurable in validated `app_meta`; invalid/missing retention config disables all cleanup and deletes nothing (no arbitrary default); cleanup resumes only after valid settings are restored; deletion rules in §7 hold; cleanup bounded and FK-safe.
 - On-demand retrieval never mutates saved config; operational config writes local-owner-only.
 - Capabilities/limits stay `UNKNOWN`/`UNVERIFIED` until Stage G; no live claim without verification.
 - Focused + full suite, typecheck, build, `git diff --check` pass locally; independent diff review before any merge. Report actual commands/results; do not claim unexecuted tests.
@@ -165,7 +217,7 @@ MCP exposure is M6. M5 only guarantees the service-level on-demand immutability 
 ## 13. Approval required before implementation
 
 1. M5 implementation authorization (this plan is study-only).
-2. Stage G verification/authorization before Phase 4B activation (no live auth/socket/network in M5).
+2. Stage G verification/authorization before Phase 4B activation (no live auth/socket/network in M5), **including the separate M5 REST verification scenarios in §3A** — streaming verification alone does not satisfy this prerequisite.
 3. Any dependency or schema decision beyond generated migration `0005`.
 
 ## 14. Bounded items to verify during implementation (offline where possible)
@@ -173,12 +225,13 @@ MCP exposure is M6. M5 only guarantees the service-level on-demand immutability 
 - Upstox v2 expired duration limits (SDK figures unconfirmed on endpoint page); account entitlements (Upstox Plus, FYERS plan).
 - Upstox Put/Call option-chain detail field shape (only index page fetched).
 - FYERS live `null`-Greeks / field-omission vs explicit-zero behavior and `greeks_at` semantics.
-- Any verified exchange-calendar source before enabling calendar-backed gap detection (deferred).
+- Any verified exchange-calendar / session source before enabling calendar-backed gap detection (deferred); until then intraday gaps remain `SESSION_UNKNOWN`.
+- All §3A Stage G REST scenarios (Upstox V3 active, v2 expired, option chain, entitlements, limits; FYERS regular/expired history, option chain, Standard vs Prime, limits/errors) — each run only under separate Stage G authorization with sanitized fixture capture.
 - Re-run the full suite and record actual counts; the prior baseline was not re-verified in this review.
 
 ## Steps
 
-- [ ] Obtain M5 implementation authorization and Stage G authorization for Phase 4B
+- [ ] Obtain M5 implementation authorization and Stage G authorization for Phase 4B, including the separate M5 REST verification scenarios in §3A
 - [ ] Phase 1: contracts (`historical.ts`, `snapshots.ts`), migration `0005`, five tables + validated `app_meta` retention, repositories
 - [ ] Phase 2: `HistoricalCandleService` + pure `gaps.ts` + `OptionChainSnapshotService` with fake-provider tests
 - [ ] Phase 3: Upstox/FYERS REST + option-chain adapters with mocked-fetch tests (offline; status stays UNVERIFIED)
