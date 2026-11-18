@@ -140,6 +140,18 @@ interface DriverInstance {
   callbacksEnabled: boolean;
   underlyingSettled: boolean;
   currentOperation: Operation | null;
+  /** Generation last successfully applied by this driver; owns callbacks after
+   * the operation settles and currentOperation is cleared. */
+  lastAppliedGeneration: number | null;
+}
+
+/** Identity-bearing reconnect timer record. The token lets a late callback
+ * verify it still owns the timer before touching the timer reference. */
+interface ReconnectTimerRecord {
+  readonly token: symbol;
+  readonly generation: number;
+  readonly epoch: number;
+  readonly handle: ReturnType<typeof setTimeout>;
 }
 
 interface Operation {
@@ -212,10 +224,12 @@ export class StreamSupervisor {
   private lockedDriver = false;
   private readonly operations = new Set<Operation>();
   private readonly quiescenceWaiters = new Set<(force: boolean) => void>();
+  /** Number of queued/in-flight reconciliations; guards duplicate enqueues. */
+  private pendingReconciles = 0;
   /** Epoch of the active driver instance; incremented on every retirement. */
   private epoch = 0;
   private stopped = false;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReconnectTimerRecord | null = null;
   private reconnectAttempts = 0;
   private lastOutcome: OperationOutcome | null = null;
   /** Typed terminal failure (e.g. LIMITED) captured before the connection failure callback. */
@@ -232,6 +246,11 @@ export class StreamSupervisor {
   /** Diagnostic seam: the most recently resolved logical operation outcome. */
   getLastOperationOutcome(): OperationOutcome | null {
     return this.lastOutcome;
+  }
+
+  /** Diagnostic seam: generation currently marked terminal, if any. */
+  getLimitedGeneration(): number | null {
+    return this.limitedGeneration;
   }
 
   /** Load persisted desired state and reconcile once at startup. */
@@ -255,6 +274,9 @@ export class StreamSupervisor {
       throw new Error("applyDesiredState requires a coordinated provider runtime");
     }
     if (this.stopped) return;
+    // A genuinely newer desired generation invalidates any retry timer owned
+    // by an older generation before the new reconciliation is queued.
+    if (generation > this.generation) this.cancelReconnectTimer();
     this.generation = generation;
     this.selections = selections.map((s) => ({ ...s }));
     await this.enqueueReconcile(generation);
@@ -326,8 +348,12 @@ export class StreamSupervisor {
         this.lastError = errorMessage(error);
       }
     };
+    this.pendingReconciles++;
     const queued = this.queue.then(run, run);
-    this.queue = queued.then(() => undefined, () => undefined);
+    this.queue = queued.then(
+      () => { this.pendingReconciles--; },
+      () => { this.pendingReconciles--; }
+    );
     return queued;
   }
 
@@ -413,7 +439,8 @@ export class StreamSupervisor {
       retired: false,
       callbacksEnabled: true,
       underlyingSettled: false,
-      currentOperation: null
+      currentOperation: null,
+      lastAppliedGeneration: null
     };
     this.currentInstance = instance;
     this.lockedDriver = instance.locked;
@@ -445,6 +472,9 @@ export class StreamSupervisor {
   private resolveOperation(op: Operation, outcome: OperationOutcome): void {
     this.clearOperationTimeout(op);
     op.state = outcome.kind === "applied" ? "settled" : "retired";
+    // Record ownership BEFORE clearing currentOperation so post-settlement
+    // callbacks can still be attributed to the generation this driver applied.
+    if (outcome.kind === "applied") op.instance.lastAppliedGeneration = op.generation;
     op.instance.currentOperation = null;
     this.operations.delete(op);
     this.lastOutcome = outcome;
@@ -581,6 +611,16 @@ export class StreamSupervisor {
   }
 
   /**
+   * Generation that owns a driver's callback: the active operation's generation
+   * while one exists, otherwise the generation this driver last applied. Never
+   * falls back to mutable this.generation — a stale driver must not be treated
+   * as belonging to a newer desired generation.
+   */
+  private instanceGeneration(instance: DriverInstance): number | null {
+    return instance.currentOperation?.generation ?? instance.lastAppliedGeneration;
+  }
+
+  /**
    * Record a failure message. When a typed terminal failure is active for the
    * current generation, its reason is authoritative and must not be overwritten
    * by the paired connection-failure callback or promise rejection.
@@ -627,12 +667,12 @@ export class StreamSupervisor {
       },
       onTerminalFailure: (failure) => {
         if (!instance.callbacksEnabled || this.stopped || epoch !== this.epoch) return;
-        // Attribute the failure to the generation of the operation that owns
-        // this driver, NOT the mutable this.generation: a newer generation may
-        // have been committed while this driver was still connecting. Using the
-        // operation's generation keeps the block scoped to the generation that
-        // actually hit the limit, so a newer generation is never wrongly blocked.
-        const generation = instance.currentOperation?.generation ?? this.generation;
+        // Attribute to the owning operation, or to the generation this driver
+        // last applied once its operation has settled. Never fall back to the
+        // mutable this.generation: a stale driver's limit must not mark a newer
+        // desired generation terminal or attach stale capabilities to it.
+        const generation = this.instanceGeneration(instance);
+        if (generation === null) return; // no valid owner: do not attribute
         // Capture the typed terminal failure and its capability results. This is
         // recorded BEFORE the paired connection-failure callback, so recordError
         // preserves this reason. It does NOT retire or resolve anything: the
@@ -666,8 +706,20 @@ export class StreamSupervisor {
             if (op && op.state === "active") {
               void this.retireFromCallback(instance, op, cause, state);
             } else {
+              // No active operation: attribute to the generation this driver
+              // owns (its last applied generation), never to mutable this.generation.
+              const generation = this.instanceGeneration(instance);
               this.retireInstance(instance, `callback:${state.toLowerCase()}`);
-              this.scheduleReconnect(this.epoch, cause);
+              if (generation === this.generation) {
+                this.scheduleGenerationRetry(generation, cause);
+              } else if (generation !== null && this.pendingReconciles === 0) {
+                // Stale driver failure: do not schedule a generation-attributed
+                // retry for the newer desired generation. Its own reconciliation
+                // owns recovery; only when none is queued/in-flight, trigger it
+                // directly (serialized, no new timer) so a failed earlier
+                // reconciliation can still recover without a duplicate.
+                this.enqueueReconcile(this.generation);
+              }
             }
             return;
           }
@@ -735,10 +787,12 @@ export class StreamSupervisor {
 
   /** Cancel a pending reconnect timer so it cannot suppress a newer retry. */
   private cancelReconnectTimer(): void {
-    if (this.reconnectTimer) {
-      (this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler).clear(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    const record = this.reconnectTimer;
+    if (!record) return;
+    // Invalidate synchronously BEFORE clearing so a late callback sees it no
+    // longer owns the timer and cannot clear/suppress a newer one.
+    this.reconnectTimer = null;
+    (this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler).clear(record.handle);
   }
 
   /**
@@ -748,13 +802,14 @@ export class StreamSupervisor {
    * otherwise acquire a second driver while the newer start is still pending
    * (driverStarted stays false until the driver confirms start).
    */
-  private scheduleGenerationRetry(generation: number, cause: string): void {
+  private scheduleGenerationRetry(generation: number | null, cause: string): void {
+    if (generation === null) return; // no owning generation: no retry
     if (generation !== this.generation) return;
     if (this.isCurrentGenerationTerminal()) return;
-    this.scheduleReconnect(this.epoch, cause);
+    this.scheduleReconnect(generation, this.epoch, cause);
   }
 
-  private scheduleReconnect(epoch: number, cause: string): void {
+  private scheduleReconnect(generation: number, epoch: number, cause: string): void {
     // Terminal failures (e.g. LIMITED) are non-retryable: never schedule an
     // automatic reconnect for a generation blocked by a typed terminal failure.
     if (this.isCurrentGenerationTerminal()) return;
@@ -773,12 +828,32 @@ export class StreamSupervisor {
     this.reconnectAttempts++;
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const scheduler = this.opts.reconnectTimerScheduler ?? defaultReconnectTimerScheduler;
-    this.reconnectTimer = scheduler.set(() => {
-      this.reconnectTimer = null;
-      if (epoch !== this.epoch || this.stopped) return;
-      void sleep(0).then(() => this.enqueueReconcile(this.generation));
-    }, delay);
-    this.reconnectTimer.unref?.();
+    const token = Symbol("reconnect");
+    const fire = (): void => {
+      // A cancelled/late callback must not clear or suppress a newer timer.
+      const current = this.reconnectTimer;
+      if (!current || current.token !== token) return;
+      if (this.stopped || generation !== this.generation || epoch !== this.epoch || this.isCurrentGenerationTerminal()) {
+        this.reconnectTimer = null; // consume only the timer we still own
+        return;
+      }
+      this.reconnectTimer = null; // consume before the async delay
+      void sleep(0).then(() => {
+        // Repeat every relevant check after the delay, and never enqueue for a
+        // generation other than the one captured when this timer was scheduled.
+        if (this.stopped) return;
+        if (generation !== this.generation || epoch !== this.epoch) return;
+        if (this.isCurrentGenerationTerminal()) return;
+        if (this.reconnectTimer !== null) return; // a newer timer owns recovery
+        // A driver that confirmed STREAMING during the delay already recovered;
+        // do not enqueue a redundant reconcile against the healthy instance.
+        if (this.driverStarted && this.currentInstance && !this.currentInstance.retired) return;
+        this.enqueueReconcile(generation);
+      });
+    };
+    const handle = scheduler.set(fire, delay);
+    this.reconnectTimer = { token, generation, epoch, handle };
+    handle.unref?.();
   }
 
   private setConnectionState(state: ProviderConnectionState, error: string | null): void {
@@ -797,8 +872,10 @@ export class StreamSupervisor {
         connectionState: this.connectionState,
         resolutions: this.resolutions.map((r) => ({ ...r })),
         lastError: this.lastError,
-        // Structured capability results (e.g. FYERS LIMITED) survive retirement.
-        ...(this.capabilities.length > 0 ? { capabilities: this.capabilities.map((c) => ({ ...c })) } : {})
+        // Structured capability results (e.g. FYERS LIMITED) survive retirement,
+        // but only belong to the view while their owning generation is current.
+        ...(this.capabilities.length > 0 && this.limitedGeneration === this.generation
+          ? { capabilities: this.capabilities.map((c) => ({ ...c })) } : {})
       }
     };
   }

@@ -54,6 +54,7 @@ These rules apply to any supervisor, reconciler or bounded delivery buffer. They
 - **Full payloads must respect the same memory budget as incremental events.** An initial snapshot is not exempt from per-client byte/count bounds. Account for it explicitly and, when it exceeds the bound, return a deterministic resync signal (REST retrieval) rather than queueing an unbounded payload. Keep control events coalesced and bounded.
 - **Provider-native identifiers stay internal.** Public subscription/status views expose canonical IDs, state and safe reasons only. Native provider identifiers belong in mapping resolution and the driver handoff, never in externally exposed contracts.
 - **Telemetry counters must be maintained where the event occurs.** A cumulative drop counter must be incremented on every drop (including for clients that later disconnect); do not derive a "total" from currently connected clients unless the metric is explicitly named and documented as such.
+- **Generation ownership must remain explicit after operations settle.** Attribute callbacks to their active operation or the driver's last successfully applied generation, never to mutable desired state. Scope reconnect timers to both desired generation and driver epoch, invalidate stale timers when the desired generation changes, and prevent late timer callbacks from affecting newer timer ownership.
 
 ## 4. Code quality
 

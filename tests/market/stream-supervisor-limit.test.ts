@@ -74,6 +74,15 @@ class LimitDriver implements StreamingDriver {
     this.deferredResolve?.();
   }
 
+  /** Emit the typed terminal failure + paired ERROR outside any active operation. */
+  emitTerminalAfterSettled(): void { this.emitLimit(); }
+
+  /** Emit an ordinary DISCONNECTED outside any active operation. */
+  emitOrdinaryDisconnect(): void {
+    this.callOrder.push("connection-error");
+    this.callbacks?.onConnectionState("DISCONNECTED", "ordinary disconnect");
+  }
+
   /** True once start() has been entered and the deferred promise is armed. */
   get deferredArmed(): boolean { return this.deferredReject !== null; }
 
@@ -419,6 +428,206 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(h.instances[0]!.stopCount).toBe(1);
       expect(h.supervisor.getView().runtime.capabilities).toBeDefined();
     } finally { h.cleanup(); }
+  });
+});
+
+describe("Stage C — generation ownership and retry timer lifecycle", () => {
+  test("A: terminal callback after successful start belongs to gen1, not gen2", async () => {
+    const h = await harness("none");
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]); // gen1 starts
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      expect(h.instances[0]!.stopCount).toBe(0); // op settled, driver still owned
+
+      // gen2 is committed (this.generation becomes 2 synchronously) but its
+      // reconciliation is queued behind the current microtask.
+      const gen2 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      const apply2 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen2);
+
+      // Old driver emits terminal + ERROR after its operation settled. It owns
+      // gen1, so gen2 must not be marked terminal or inherit stale capabilities.
+      h.instances[0]!.emitTerminalAfterSettled();
+      expect(h.supervisor.getView().runtime.capabilities).toBeUndefined();
+
+      await apply2;
+      const view = h.supervisor.getView();
+      expect(view.runtime.connectionState).toBe("STREAMING");
+      expect(view.runtime.generation).toBe(2);
+      expect(view.runtime.capabilities).toBeUndefined();
+      expect(h.instances.length).toBe(2); // gen2 got a fresh driver
+      expect(h.timers.active.length).toBe(0); // stale callback scheduled no retry
+      // gen2's reconciliation was already queued; the stale callback must not
+      // enqueue a duplicate that would update the recovered driver.
+      await Bun.sleep(0); // let any duplicate queued reconcile run
+      expect(h.instances[1]!.updates).toHaveLength(0);
+    } finally { h.cleanup(); }
+  });
+
+  test("B: terminal callback after successful update belongs to gen2, not gen3", async () => {
+    const h = await harness("none");
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]); // gen1 start
+      await h.commitAndApply([{ canonicalId: A, enabled: true }, { canonicalId: B, enabled: true }]); // gen2 update
+      expect(h.instances.length).toBe(1); // same driver applied gen2
+      expect(h.instances[0]!.updates).toHaveLength(1);
+
+      // gen3 is committed (this.generation becomes 3 synchronously) but its
+      // reconciliation is queued. The driver owns gen2 via its last applied
+      // generation, advanced by the successful update above.
+      const gen3 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      const apply3 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen3);
+      h.instances[0]!.emitTerminalAfterSettled(); // must attribute to gen2, not gen3
+      // Directly observable attribution: the terminal generation is gen2, not
+      // the mutable current generation 3 and not the original start gen1.
+      expect(h.supervisor.getLimitedGeneration()).toBe(2);
+      expect(h.supervisor.getView().runtime.capabilities).toBeUndefined(); // gen3 not blocked
+      expect(h.timers.active.length).toBe(0); // terminal generation never retries
+
+      // A genuinely newer generation clears the stale limitation and recovers.
+      await apply3;
+      const view = h.supervisor.getView();
+      expect(view.runtime.connectionState).toBe("STREAMING");
+      expect(view.runtime.generation).toBe(3);
+      expect(view.runtime.capabilities).toBeUndefined();
+      expect(h.instances.length).toBe(2);
+    } finally { h.cleanup(); }
+  });
+
+  test("C: stale non-operation disconnect schedules no retry for gen2", async () => {
+    const h = await harness("none");
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]); // gen1 applied
+
+      const gen2 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      const apply2 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen2);
+      h.instances[0]!.emitOrdinaryDisconnect(); // stale gen1 callback, no active op
+
+      // The stale callback must not schedule a retry for gen2.
+      expect(h.timers.active.length).toBe(0);
+      await apply2;
+      const view = h.supervisor.getView();
+      expect(view.runtime.connectionState).toBe("STREAMING");
+      expect(view.runtime.generation).toBe(2);
+      expect(h.instances.length).toBe(2); // gen2's queued reconcile recovered
+      // The stale callback must not enqueue a duplicate reconcile that would
+      // update the recovered gen2 driver.
+      await Bun.sleep(0); // let any duplicate queued reconcile run
+      expect(h.instances[1]!.updates).toHaveLength(0);
+    } finally { h.cleanup(); }
+  });
+
+  test("D: stale retry timer cannot enqueue, create a driver, or clear a newer timer", async () => {
+    const h = await harness("start", true); // gen1 ordinary failure
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]);
+      expect(h.timers.active.length).toBe(1); // gen1 retry scheduled
+      const oldTask = h.timers.tasks.find((t) => !t.cancelled)!;
+
+      // gen2 committed before the timer fires: the old timer is invalidated
+      // synchronously when applyDesiredState commits the newer generation.
+      const gen2 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      h.driverConfig.ordinaryFailure = false;
+      h.driverConfig.failOn = "none";
+      h.driverConfig.deferredStart = true; // gen2's fresh driver stays pending
+      const apply2 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen2);
+      expect(h.timers.active.length).toBe(0); // cancelled synchronously on commit
+      for (let i = 0; i < 100 && !h.instances[1]?.deferredArmed; i++) await Bun.sleep(1);
+      expect(h.instances.length).toBe(2);
+
+      // Manually invoke the cancelled gen1 timer callback.
+      oldTask.fn();
+      await Bun.sleep(0);
+      expect(h.instances.length).toBe(2); // no third driver / no duplicate reconcile
+      expect(h.timers.active.length).toBe(0); // did not create or clear a timer
+
+      h.instances[1]!.resolveDeferred();
+      await apply2;
+      await Bun.sleep(0); // let any duplicate queued reconcile run
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      expect(h.supervisor.getView().runtime.generation).toBe(2);
+      // A stale timer that enqueued a duplicate gen2 reconcile would cause an
+      // extra updateSubscriptions on the recovered driver.
+      await Bun.sleep(0); // let any duplicate queued reconcile run
+      expect(h.instances[1]!.updates).toHaveLength(0);
+    } finally { h.cleanup(); }
+  });
+
+  test("E: stale timer cannot affect a newer generation's own retry", async () => {
+    const h = await harness("start", true); // gen1 ordinary failure
+    try {
+      await h.seed(A, "key-A");
+      await h.seed(B, "key-B");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]);
+      const oldTask = h.timers.tasks.find((t) => !t.cancelled)!;
+
+      // gen2 committed: gen1 timer cancelled. gen2's driver fails ordinarily.
+      const gen2 = await h.subscriptions.replace([{ canonicalId: B, enabled: true }]);
+      h.driverConfig.ordinaryFailure = true; // gen2's driver also fails
+      const apply2 = h.supervisor.applyDesiredState([{ canonicalId: B, enabled: true }], gen2);
+      await apply2;
+      expect(h.timers.active.length).toBe(1); // gen2's own retry
+      const newTask = h.timers.active[0]!;
+      expect(newTask.handle).not.toBe(oldTask.handle);
+
+      // Make gen2's next driver deferred so a driver start is observable.
+      h.driverConfig.ordinaryFailure = false;
+      h.driverConfig.failOn = "none";
+      h.driverConfig.deferredStart = true;
+
+      // Invoke gen1's stale timer: it must not enqueue a reconcile or create a
+      // driver, and must not clear/suppress gen2's still-owned timer.
+      oldTask.fn();
+      await Bun.sleep(0);
+      expect(h.instances.length).toBe(2); // no driver from the stale timer
+      expect(h.timers.active.length).toBe(1);
+      expect(h.timers.active[0]!.handle).toBe(newTask.handle);
+      expect(h.timers.active[0]!.cancelled).toBe(false);
+
+      // gen2 recovers normally through its own timer.
+      newTask.fn();
+      for (let i = 0; i < 100 && !h.instances[2]?.deferredArmed; i++) await Bun.sleep(1);
+      expect(h.instances.length).toBe(3); // only gen2's own timer created a driver
+      h.instances[2]!.resolveDeferred();
+      await Bun.sleep(0);
+      for (let i = 0; i < 100 && h.supervisor.getView().runtime.connectionState !== "STREAMING"; i++) await Bun.sleep(1);
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      expect(h.supervisor.getView().runtime.generation).toBe(2);
+    } finally { h.cleanup(); }
+  });
+
+  test("F: current-generation retries remain bounded and LIMITED never retries", async () => {
+    // Ordinary current-generation failure retries through the timer and recovers.
+    const h = await harness("start", true);
+    try {
+      await h.seed(A, "key-A");
+      await h.commitAndApply([{ canonicalId: A, enabled: true }]);
+      expect(h.timers.active.length).toBe(1);
+      const task = h.timers.active[0]!;
+      h.driverConfig.ordinaryFailure = false;
+      h.driverConfig.failOn = "none";
+      task.fn();
+      await Bun.sleep(0);
+      for (let i = 0; i < 100 && h.supervisor.getView().runtime.connectionState !== "STREAMING"; i++) await Bun.sleep(1);
+      expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
+      expect(h.instances.length).toBe(2);
+    } finally { h.cleanup(); }
+
+    // Current-generation LIMITED failure schedules no retry.
+    const limited = await harness();
+    try {
+      await limited.seed(A, "key-A");
+      await limited.commitAndApply([{ canonicalId: A, enabled: true }]);
+      expect(limited.timers.active.length).toBe(0);
+      expect(limited.supervisor.getView().runtime.capabilities).toBeDefined();
+    } finally { limited.cleanup(); }
   });
 });
 
