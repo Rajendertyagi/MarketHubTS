@@ -135,6 +135,24 @@ describe("HistoricalCandleService", () => {
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 
+  test("a provider with an existing permanent UNAVAILABLE note is not retried", async () => {
+    const a = new FakeProvider("UPSTOX", [], "ENTITLEMENT denied");
+    const b = new FakeProvider("FYERS", [candle(Date.parse("2026-01-05T00:00:00Z"), 105, "FYERS")]);
+    const h = harness([a, b]);
+    try {
+      const first = await h.service.fetchOnDemand(request());
+      expect(first.providersTried).toEqual(["UPSTOX", "FYERS"]);
+      expect(a.calls.length).toBe(1);
+
+      // Second call for the same range: UPSTOX has a permanent note, so it is
+      // skipped; FYERS is still attempted (alternate fill remains available).
+      const second = await h.service.fetchOnDemand(request());
+      expect(second.providersTried).toEqual(["FYERS"]);
+      expect(a.calls.length).toBe(1); // not retried
+      expect(b.calls.length).toBe(2);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
   test("explicit provider no_data is recorded as an authoritative NO_DATA note", async () => {
     const noDataProvider: HistoricalProvider = {
       id: "FYERS",
@@ -147,6 +165,25 @@ describe("HistoricalCandleService", () => {
       expect(result.unavailable.some((u) => u.reasonCode === "NO_DATA" && u.provider === "FYERS")).toBe(true);
       const notes = h.candles.getRangeNotes(CANON, "1D", 0, 9999999999999);
       expect(notes.some((n) => n.kind === "UNAVAILABLE" && n.reasonCode === "NO_DATA")).toBe(true);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("runSync rejects invalid parsed date bounds instead of propagating NaN", async () => {
+    const p = new FakeProvider("UPSTOX", [candle(Date.parse("2026-01-05T00:00:00Z"), 100)]);
+    const h = harness([p]);
+    try {
+      const config: HistoricalSyncConfig = {
+        id: "cfg-1", canonicalId: CANON, interval: "1D", enabled: true,
+        dateRangeJson: JSON.stringify({ from: "not-a-date", to: "also-invalid" }),
+        scheduleJson: null, providerPolicyJson: null,
+        createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+      };
+      await h.service.runSync(config);
+      expect(p.calls.length).toBe(1);
+      const sent = p.calls[0]!;
+      expect(Number.isFinite(sent.fromMs)).toBe(true);
+      expect(Number.isFinite(sent.toMs)).toBe(true);
+      expect(sent.fromMs).toBeLessThanOrEqual(sent.toMs);
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 

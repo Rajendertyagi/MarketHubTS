@@ -30,12 +30,6 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
     return c.json({ snapshots });
   });
 
-  app.get("/api/snapshots/:id", (c) => {
-    const snapshot = deps.service.getSnapshot(c.req.param("id"));
-    if (!snapshot) return c.json(apiErrorSchema.parse({ error: "not_found", message: "Snapshot not found" }), 404);
-    return c.json({ snapshot: optionChainSnapshotSchema.parse(snapshot) });
-  });
-
   // --- Capture config CRUD (WebUI-owned, local-owner only) ---
   app.get("/api/snapshots/configs", (c) => {
     return c.json({ configs: deps.service.listCaptureConfigs().map((config) => optionChainCaptureConfigSchema.parse(config)) });
@@ -83,5 +77,14 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
       return c.json(apiErrorSchema.parse({ error: "capture_unavailable", message: result.error ?? "Capture unavailable" }), 422);
     }
     return c.json({ snapshot: optionChainSnapshotSchema.parse(result.snapshot) });
+  });
+
+  // Dynamic :id route MUST be registered after all static /api/snapshots/*
+  // routes — Hono matches in registration order, so an earlier :id would
+  // shadow /api/snapshots/configs and /api/snapshots/capture.
+  app.get("/api/snapshots/:id", (c) => {
+    const snapshot = deps.service.getSnapshot(c.req.param("id"));
+    if (!snapshot) return c.json(apiErrorSchema.parse({ error: "not_found", message: "Snapshot not found" }), 404);
+    return c.json({ snapshot: optionChainSnapshotSchema.parse(snapshot) });
   });
 }

@@ -39,6 +39,9 @@ export interface HistoricalServiceOptions {
 }
 
 export interface HistoricalFetchResult {
+  /** Provider-returned candles for this call (including any that conflicted
+   * with stored values). `conflicts` reports how many were not applied; the
+   * authoritative stored set is available via `getCached()`. */
   candles: HistoricalCandle[];
   gaps: CandleGap[];
   unavailable: DataUnavailableReport[];
@@ -82,6 +85,15 @@ export class HistoricalCandleService {
     let conflicts = 0;
 
     for (const provider of providers) {
+      // Authoritative UNAVAILABLE notes are permanent: do not retry the same
+      // provider for a range it already reported as permanently unavailable
+      // (no config/entitlement-change signal exists in M5). Alternate providers
+      // are still tried, and an existing note is retained.
+      const existingNotes = this.options.candles.getRangeNotes(
+        request.canonicalId, request.interval, request.fromMs, request.toMs
+      );
+      if (existingNotes.some((n) => n.kind === "UNAVAILABLE" && n.provider === provider.id)) continue;
+
       providersTried.push(provider.id);
       try {
         const outcome = await provider.fetchCandles(request);
@@ -126,15 +138,24 @@ export class HistoricalCandleService {
     if (!config.enabled) {
       return { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] };
     }
-    let fromMs = this.now() - 30 * 24 * 60 * 60 * 1000;
-    let toMs = this.now();
+    const defaultFrom = this.now() - 30 * 24 * 60 * 60 * 1000;
+    const defaultTo = this.now();
+    let fromMs = defaultFrom;
+    let toMs = defaultTo;
     if (config.dateRangeJson) {
       try {
         const parsed = JSON.parse(config.dateRangeJson) as { from?: string; to?: string };
-        if (parsed.from) fromMs = Date.parse(parsed.from);
-        if (parsed.to) toMs = Date.parse(parsed.to);
+        const parsedFrom = typeof parsed.from === "string" ? Date.parse(parsed.from) : NaN;
+        const parsedTo = typeof parsed.to === "string" ? Date.parse(parsed.to) : NaN;
+        // Only accept finite, non-negative, ordered bounds. NaN/invalid values
+        // must never propagate into provider requests or DB range queries.
+        if (Number.isFinite(parsedFrom) && parsedFrom >= 0) fromMs = parsedFrom;
+        if (Number.isFinite(parsedTo) && parsedTo >= 0) toMs = parsedTo;
+        if (fromMs > toMs) { fromMs = defaultFrom; toMs = defaultTo; }
       } catch {
         // Invalid saved range: fall back to a bounded default, never an unbounded query.
+        fromMs = defaultFrom;
+        toMs = defaultTo;
       }
     }
     const request: CandleRangeRequest = { canonicalId: config.canonicalId, interval: config.interval, fromMs, toMs };

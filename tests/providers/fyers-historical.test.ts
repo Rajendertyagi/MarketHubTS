@@ -25,6 +25,9 @@ describe("FyersHistoricalAdapter", () => {
     expect(url).toBe("https://api-t1.fyers.in/data/history");
     expect(body.date_format).toBe("0");
     expect(body.oi_flag).toBe("1");
+    // Canonical interval is passed through as FYERS resolution. Live token
+    // correctness remains a Stage G verification item; this pins the mapping.
+    expect(body.resolution).toBe("1D");
     expect(candles.length).toBe(1);
     expect(candles[0]!.tsMs).toBe(1767225600000);
     expect(candles[0]!.close).toBe(101);

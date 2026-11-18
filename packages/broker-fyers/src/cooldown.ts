@@ -44,8 +44,12 @@ export function applyFyersDataThrottle(
   state: FyersRestCooldown, retryAfter: string | null, status: number, now: number, detail: string
 ): void {
   const delay = parseRetryAfter(retryAfter, now);
-  if (delay !== null && delay > 0) state.dataApi.notBeforeMs = now + delay;
-  else state.dataApi.unknownReset = true; // advisory only, never blocks
+  if (delay !== null && delay > 0) {
+    state.dataApi.notBeforeMs = now + delay;
+    state.dataApi.unknownReset = false; // a trustworthy reset supersedes a stale advisory marker
+  } else {
+    state.dataApi.unknownReset = true; // advisory only, never blocks
+  }
   state.dataApi.reason = sanitizeError(detail);
 }
 
@@ -64,7 +68,7 @@ export function clearFyersDataThrottle(state: FyersRestCooldown): void {
 export function markFyersAccountBlock(state: FyersRestCooldown, resetAtMs: number | null, detail: string): void {
   if (resetAtMs !== null && Number.isFinite(resetAtMs)) {
     state.accountBlock.notBeforeMs = resetAtMs;
-    state.accountBlock.unknownReset = false;
+    state.accountBlock.unknownReset = false; // trustworthy reset supersedes stale advisory marker
   } else {
     state.accountBlock.notBeforeMs = null;
     state.accountBlock.unknownReset = true; // advisory only; no invented reset boundary

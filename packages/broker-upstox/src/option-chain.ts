@@ -99,9 +99,18 @@ export class UpstoxOptionChainAdapter implements OptionChainProvider {
         }
         if (greeks) {
           const iv = num(greeks.iv); if (iv !== null) strikeRecord.iv = iv;
-          strikeRecord.greeks = {
-            delta: num(greeks.delta), gamma: num(greeks.gamma), theta: num(greeks.theta), vega: num(greeks.vega)
-          };
+          // Preserve missing vs explicit null: only emit keys the provider
+          // actually supplied. An absent key stays absent; an explicit null
+          // stays null. Never zero-fill or invent a Greek.
+          const mapped: NonNullable<OptionChainStrike["greeks"]> = {};
+          for (const key of ["delta", "gamma", "theta", "vega"] as const) {
+            if (key in greeks) {
+              const value = num(greeks[key]);
+              if (value !== null) mapped[key] = value;
+              else mapped[key] = null; // explicit provider null preserved
+            }
+          }
+          strikeRecord.greeks = mapped;
         }
         strikes.push(strikeRecord);
       }

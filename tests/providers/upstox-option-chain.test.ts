@@ -48,6 +48,27 @@ describe("UpstoxOptionChainAdapter", () => {
     expect(envelope.observationTimestamp).toBeNull();
   });
 
+  test("missing greek keys stay absent; explicit provider null stays null", async () => {
+    const payload = {
+      status: "success",
+      data: [{
+        strike_price: 25000,
+        call_options: {
+          market_data: { ltp: 100 },
+          // delta omitted, gamma explicitly null, theta/vega present
+          option_greeks: { gamma: null, theta: -2, vega: 1 }
+        }
+      }]
+    };
+    const adapter = new UpstoxOptionChainAdapter({ token: "t", fetchImpl: async () => json(payload) });
+    const envelope = await adapter.fetchOptionChain(request());
+    const ce = envelope.strikes.find((s) => s.optionType === "CE")!;
+    expect("delta" in ce.greeks!).toBe(false); // missing key absent
+    expect(ce.greeks!.gamma).toBeNull(); // explicit null preserved
+    expect(ce.greeks!.theta).toBe(-2);
+    expect(ce.greeks!.vega).toBe(1);
+  });
+
   test("malformed HTTP 200 is rejected", async () => {
     const adapter = new UpstoxOptionChainAdapter({ token: "t", fetchImpl: async () => json({ status: "success", data: {} }) });
     await expect(adapter.fetchOptionChain(request())).rejects.toThrow("MALFORMED_200");

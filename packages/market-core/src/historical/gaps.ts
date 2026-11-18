@@ -59,7 +59,6 @@ export function assessGaps(
     : cls === "MONTHLY" ? "MONTHLY_BUCKET"
     : "SESSION_UNKNOWN";
 
-  const covered = new Set(coveredTimestamps);
   const coveredBuckets = new Set(coveredTimestamps.map((ts) => bucketStart(ts, basis)));
   const unavailable = notes.filter((n) => n.kind === "UNAVAILABLE");
 
@@ -90,9 +89,4 @@ export function assessGaps(
     cursor = nextBucket(cursor, basis);
   }
   return gaps;
-}
-
-/** True when a provider response supplies no candles for a requested range. */
-export function isEmptyCoverage(candles: HistoricalCandle[]): boolean {
-  return candles.length === 0;
 }

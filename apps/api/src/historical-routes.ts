@@ -114,8 +114,8 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     }
     const parsed = historicalSyncConfigSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid sync config" }), 400);
-    deps.candles.putSyncConfig(parsed.data);
-    return c.json({ config: historicalSyncConfigSchema.parse(deps.candles.getSyncConfig(parsed.data.id)!) });
+    const stored = deps.candles.putSyncConfig(parsed.data);
+    return c.json({ config: historicalSyncConfigSchema.parse(stored) });
   });
 
   app.delete("/api/historical/sync-configs/:id", (c) => {

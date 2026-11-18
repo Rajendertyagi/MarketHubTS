@@ -58,7 +58,9 @@ export class SnapshotRepository {
   }
 
   listCaptureConfigs(): OptionChainCaptureConfig[] {
-    return this.db.select().from(optionChainCaptureConfigs).all().map((r) => ({
+    return this.db.select().from(optionChainCaptureConfigs)
+      .orderBy(asc(optionChainCaptureConfigs.underlyingCanonicalId), asc(optionChainCaptureConfigs.expiryDate))
+      .all().map((r) => ({
       id: r.id,
       underlyingCanonicalId: r.underlyingCanonicalId,
       expiryDate: r.expiryDate,

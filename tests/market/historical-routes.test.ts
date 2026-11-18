@@ -126,6 +126,26 @@ describe("M5 historical/snapshot API routes", () => {
     } finally { h.cleanup(); }
   });
 
+  test("saving a second config for the same instrument/interval merges instead of 500", async () => {
+    const h = harness();
+    try {
+      const first = await h.app.request("/api/historical/sync-configs", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(syncConfig())
+      }, h.localEnv);
+      expect(first.status).toBe(200);
+
+      const duplicate = { ...syncConfig(), id: "sync-2", enabled: false };
+      const second = await h.app.request("/api/historical/sync-configs", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(duplicate)
+      }, h.localEnv);
+      expect(second.status).toBe(200);
+      const body = await json(second);
+      expect(body.config.id).toBe("sync-1"); // existing identity preserved
+      expect(body.config.enabled).toBe(false); // values merged
+      expect((await json(await h.app.request("/api/historical/sync-configs", {}, h.localEnv))).configs.length).toBe(1);
+    } finally { h.cleanup(); }
+  });
+
   test("retention is validated and local-owner only; cleanup fails closed", async () => {
     const h = harness();
     try {
@@ -158,6 +178,18 @@ describe("M5 historical/snapshot API routes", () => {
       const after = await json(await h.app.request("/api/retention", {}, h.localEnv));
       expect(after.valid).toBe(true);
       expect(after.settings.classes.CANDLE.maxAgeDays).toBe(30);
+    } finally { h.cleanup(); }
+  });
+
+  test("GET /api/snapshots/configs is not shadowed by the :id route", async () => {
+    const h = harness();
+    try {
+      await h.app.request("/api/snapshots/configs", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(captureConfig())
+      }, h.localEnv);
+      const res = await h.app.request("/api/snapshots/configs", {}, h.localEnv);
+      expect(res.status).toBe(200);
+      expect((await json(res)).configs.length).toBe(1);
     } finally { h.cleanup(); }
   });
 

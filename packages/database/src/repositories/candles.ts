@@ -208,7 +208,7 @@ export class CandleRepository {
         gte(candleRangeNotes.rangeEndMs, fromMs),
         lte(candleRangeNotes.rangeStartMs, toMs)
       )
-    ).all();
+    ).orderBy(asc(candleRangeNotes.rangeStartMs), asc(candleRangeNotes.provider)).all();
     return rows.map((r) => ({
       canonicalId: r.canonicalId,
       interval: r.interval as CandleRangeNote["interval"],
@@ -244,7 +244,28 @@ export class CandleRepository {
 
   // --- Historical sync configuration (WebUI-owned) ---
 
-  putSyncConfig(config: HistoricalSyncConfig): void {
+  /**
+   * Upsert by the (canonicalId, interval) identity — the table's unique index.
+   * A different submitted id for the same instrument/interval merges into the
+   * existing row instead of raising a constraint error. Returns the stored row.
+   */
+  putSyncConfig(config: HistoricalSyncConfig): HistoricalSyncConfig {
+    const existing = this.db.select().from(historicalSyncConfigs).where(
+      and(
+        eq(historicalSyncConfigs.canonicalId, config.canonicalId),
+        eq(historicalSyncConfigs.interval, config.interval)
+      )
+    ).get();
+    if (existing) {
+      this.db.update(historicalSyncConfigs).set({
+        enabled: config.enabled,
+        dateRangeJson: config.dateRangeJson,
+        scheduleJson: config.scheduleJson,
+        providerPolicyJson: config.providerPolicyJson,
+        updatedAt: config.updatedAt
+      }).where(eq(historicalSyncConfigs.id, existing.id)).run();
+      return this.toSyncConfig({ ...existing, ...config, id: existing.id, createdAt: existing.createdAt });
+    }
     this.db.insert(historicalSyncConfigs).values({
       id: config.id,
       canonicalId: config.canonicalId,
@@ -255,18 +276,8 @@ export class CandleRepository {
       providerPolicyJson: config.providerPolicyJson,
       createdAt: config.createdAt,
       updatedAt: config.updatedAt
-    }).onConflictDoUpdate({
-      target: historicalSyncConfigs.id,
-      set: {
-        canonicalId: config.canonicalId,
-        interval: config.interval,
-        enabled: config.enabled,
-        dateRangeJson: config.dateRangeJson,
-        scheduleJson: config.scheduleJson,
-        providerPolicyJson: config.providerPolicyJson,
-        updatedAt: config.updatedAt
-      }
     }).run();
+    return config;
   }
 
   getSyncConfig(id: string): HistoricalSyncConfig | null {
@@ -275,7 +286,9 @@ export class CandleRepository {
   }
 
   listSyncConfigs(): HistoricalSyncConfig[] {
-    return this.db.select().from(historicalSyncConfigs).all().map((r) => this.toSyncConfig(r));
+    return this.db.select().from(historicalSyncConfigs)
+      .orderBy(asc(historicalSyncConfigs.canonicalId), asc(historicalSyncConfigs.interval))
+      .all().map((r) => this.toSyncConfig(r));
   }
 
   deleteSyncConfig(id: string): void {

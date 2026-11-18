@@ -55,6 +55,11 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     if (blocked === "DATA_API_COOLDOWN") throw new Error("FYERS_DATA_API_COOLDOWN");
     const native = request.nativeIdentifier;
     if (!native) throw new Error("MISSING_NATIVE_IDENTIFIER");
+    // FYERS selects the chain via the symbol (which encodes the underlying /
+    // expiry); `request.expiryDate` is carried into the canonical envelope as
+    // metadata. Whether a multi-expiry response must be narrowed to the
+    // requested expiry is a Stage G verification item — no filtering is
+    // invented here.
     const body: Record<string, string> = { symbol: native, greeks: "1", strikecount: "50", timestamp: "" };
     const response = await fetchWithRetry(
       (u, init, t) => this.fetchImpl(u, init, t),
