@@ -75,6 +75,22 @@ describe("FyersHistoricalAdapter", () => {
     expect(c.dataApi.notBeforeMs).toBeNull(); // unaffected
   });
 
+  test("FYERS Data API unknown reset clears a stale timed block (advisory never blocks)", async () => {
+    const { applyFyersDataThrottle, fyersBlockReason, createFyersRestCooldown } = await import("../../packages/broker-fyers/src/cooldown");
+    const state = createFyersRestCooldown();
+
+    // Trustworthy reset sets a timed block.
+    applyFyersDataThrottle(state, "5", 429, NOW, "throttle");
+    expect(state.dataApi.notBeforeMs).toBe(NOW + 5000);
+    expect(fyersBlockReason(state, NOW)).toBe("DATA_API_COOLDOWN");
+
+    // Later unknown/unusable reset clears the stale block — advisory only.
+    applyFyersDataThrottle(state, "0", 429, NOW, "throttle");
+    expect(state.dataApi.notBeforeMs).toBeNull();
+    expect(state.dataApi.unknownReset).toBe(true);
+    expect(fyersBlockReason(state, NOW)).toBeNull(); // never blocks
+  });
+
   test("shared cooldown: a Data API throttle on history suppresses option chain, and account block suppresses both", async () => {
     const shared = createFyersRestCooldown();
     const history = new FyersHistoricalAdapter({

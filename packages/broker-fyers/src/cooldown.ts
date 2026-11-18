@@ -48,7 +48,10 @@ export function applyFyersDataThrottle(
     state.dataApi.notBeforeMs = now + delay;
     state.dataApi.unknownReset = false; // a trustworthy reset supersedes a stale advisory marker
   } else {
-    state.dataApi.unknownReset = true; // advisory only, never blocks
+    // Unknown/unusable reset: clear any stale timed block so the advisory
+    // marker never blocks (plan §5: unknown reset is advisory only).
+    state.dataApi.notBeforeMs = null;
+    state.dataApi.unknownReset = true;
   }
   state.dataApi.reason = sanitizeError(detail);
 }
