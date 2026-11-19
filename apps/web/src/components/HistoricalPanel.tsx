@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { parseIstDateRange } from "@markethub/contracts";
 import type {
   CandleGap, CandleInterval, CandleRangeNote, HistoricalCandle, HistoricalSyncConfig, RetentionSettings
 } from "@markethub/contracts";
@@ -53,11 +54,14 @@ export function HistoricalPanel() {
   useEffect(() => { loadConfigs(); loadRetention(); }, []);
 
   const readCached = async () => {
-    const fromMs = Date.parse(from), toMs = Date.parse(to);
-    if (!canonicalId.trim() || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) {
+    // Date-only inputs are India-local calendar dates: inclusive local midnight
+    // at the start date through the end of the selected final date.
+    const range = parseIstDateRange(from, to);
+    if (!canonicalId.trim() || !range) {
       setError("Enter a canonical ID and a valid from/to range.");
       return;
     }
+    const { fromMs, toMs } = range;
     setLoading(true);
     setError(null);
     setCandles(null);

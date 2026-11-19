@@ -1,6 +1,7 @@
 import type {
   CandleRangeRequest, HistoricalCandle, ProviderId
 } from "@markethub/contracts";
+import { istDateString } from "@markethub/contracts";
 import {
   fetchWithTimeout, fetchWithRetry, parseRetryAfter, sanitizeError,
   type FetchLike, type HistoricalProvider, type HistoricalFetchOutcome
@@ -61,8 +62,9 @@ function mapExpiredInterval(interval: string): string | null {
   }
 }
 
+/** Date-only path params use the India-local exchange calendar date, not UTC. */
 function datePart(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
+  return istDateString(ms);
 }
 
 export class UpstoxHistoricalAdapter implements HistoricalProvider {

@@ -43,6 +43,21 @@ describe("UpstoxHistoricalAdapter", () => {
     expect(url).toContain("/day/");
   });
 
+  test("date-only path params use India-local calendar dates, not UTC", async () => {
+    let url = "";
+    const adapter = new UpstoxHistoricalAdapter({
+      token: "t", now: () => NOW,
+      fetchImpl: async (u) => { url = String(u); return json({ status: "success", data: { candles: [] } }); }
+    });
+    // 2026-01-04T18:30:00Z is 2026-01-05 00:00 IST (Monday) but 2026-01-04 in UTC.
+    await adapter.fetchCandles(request({
+      fromMs: Date.parse("2026-01-04T18:30:00.000Z"),
+      toMs: Date.parse("2026-01-05T18:30:00.000Z")
+    }));
+    expect(url).toContain("/2026-01-06/2026-01-05"); // to_date/from_date in IST
+    expect(url).not.toContain("/2026-01-05/2026-01-04");
+  });
+
   test("unsupported expired interval is rejected rather than silently mis-mapped", async () => {
     const adapter = new UpstoxHistoricalAdapter({
       token: "t", fetchImpl: async () => json({ status: "success", data: { candles: [] } })

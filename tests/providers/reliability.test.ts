@@ -101,9 +101,11 @@ describe("M3 reliability under failure", () => {
   });
 
   test("5. temporary 5xx outage recovers within bounded retries", async () => {
+    // 503 now requires a usable Retry-After and stops without one; use 500 to
+    // exercise the bounded backoff path for other 5xx statuses.
     let calls = 0;
     const result = await fetchWithRetry(
-      async () => { calls++; return calls < 3 ? new Response("{}", { status: 503 }) : new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 }); },
+      async () => { calls++; return calls < 3 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ status: "success", data: { exchange: "NSE", status: "NORMAL_OPEN" } }), { status: 200 }); },
       "http://example.test", {}, 100, { sleep: async () => {} }
     );
     expect(result.status).toBe(200);
@@ -249,26 +251,19 @@ describe("fetchWithRetry Retry-After (429 and 503)", () => {
     }
   });
 
-  test("429 without Retry-After stops; 503 without Retry-After keeps bounded backoff", async () => {
-    let calls429 = 0;
-    const r429 = await fetchWithRetry(
-      async () => { calls429++; return response(429); },
-      "https://example.test", {}, 1000,
-      { attempts: 5, now: () => NOW, sleep: async () => {} }
-    );
-    expect(r429.status).toBe(429);
-    expect(calls429).toBe(1);
-
-    let calls503 = 0;
-    const slept: number[] = [];
-    const r503 = await fetchWithRetry(
-      async () => { calls503++; return response(503); },
-      "https://example.test", {}, 1000,
-      { attempts: 3, baseDelayMs: 50, maxDelayMs: 200, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
-    );
-    expect(r503.status).toBe(503);
-    expect(calls503).toBe(3);
-    expect(slept.length).toBe(2);
+  test("429 and 503 without a usable Retry-After both stop (no backoff fallback)", async () => {
+    for (const status of [429, 503]) {
+      let calls = 0;
+      const slept: number[] = [];
+      const result = await fetchWithRetry(
+        async () => { calls++; return response(status); },
+        "https://example.test", {}, 1000,
+        { attempts: 5, baseDelayMs: 50, maxDelayMs: 200, now: () => NOW, sleep: async (ms) => { slept.push(ms); } }
+      );
+      expect(result.status).toBe(status);
+      expect(calls).toBe(1); // no retry without a trustworthy Retry-After
+      expect(slept.length).toBe(0);
+    }
   });
 
   test("other 5xx keep bounded exponential backoff", async () => {

@@ -1,49 +1,32 @@
 import type {
   CandleGap, CandleRangeNote, CandleRangeRequest, GapBasis, HistoricalCandle
 } from "@markethub/contracts";
-import { intervalClass } from "@markethub/contracts";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function startOfUtcDay(ms: number): number {
-  const d = new Date(ms);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
+import {
+  DAY_MS, istCalendarParts, istDayStartMs, istMonthStartMs, istWeekStartMs,
+  intervalClass, nextIstMonthStartMs
+} from "@markethub/contracts";
 
 function isWeekend(ms: number): boolean {
-  const day = new Date(ms).getUTCDay();
-  return day === 0 || day === 6;
-}
-
-function startOfIsoWeek(ms: number): number {
-  const day = startOfUtcDay(ms);
-  const weekday = new Date(day).getUTCDay(); // 0=Sun
-  const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
-  return day + mondayOffset * DAY_MS;
-}
-
-function startOfMonth(ms: number): number {
-  const d = new Date(ms);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  const weekday = istCalendarParts(ms).weekday; // India-local calendar day
+  return weekday === 0 || weekday === 6;
 }
 
 function nextBucket(ms: number, basis: GapBasis): number {
   if (basis === "WEEKLY_BUCKET") return ms + 7 * DAY_MS;
-  if (basis === "MONTHLY_BUCKET") {
-    const d = new Date(ms);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
-  }
+  if (basis === "MONTHLY_BUCKET") return nextIstMonthStartMs(ms);
   return ms + DAY_MS;
 }
 
 function bucketStart(ms: number, basis: GapBasis): number {
-  if (basis === "WEEKLY_BUCKET") return startOfIsoWeek(ms);
-  if (basis === "MONTHLY_BUCKET") return startOfMonth(ms);
-  return startOfUtcDay(ms);
+  if (basis === "WEEKLY_BUCKET") return istWeekStartMs(ms);
+  if (basis === "MONTHLY_BUCKET") return istMonthStartMs(ms);
+  return istDayStartMs(ms);
 }
 
 /**
- * Derive candidate gaps from actual stored candle timestamps. No exchange
+ * Derive candidate gaps from actual stored candle timestamps. Calendar dates,
+ * weekend status and period buckets use the India-local (Asia/Kolkata) market
+ * calendar; stored timestamps remain absolute epoch milliseconds. No exchange
  * calendar or session source exists in M5, so every result is approximate and
  * `confirmed: false`. Weekends are excluded for daily candidates; holidays
  * cannot be identified and are never asserted as missing.

@@ -29,6 +29,24 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Canonical interval -> FYERS resolution token. Official FYERS uses bare
+ * minute numbers (1, 5, 60, 120, 240 …) and 1D/1W/1M, not canonical `1m`/`5m`
+ * tokens. 180 minutes is supported only by the expired F&O endpoint.
+ */
+function mapFyersResolution(interval: string, expired: boolean): string | null {
+  const minute = /^(\d+)m$/.exec(interval);
+  if (minute) {
+    const n = Number(minute[1]);
+    const allowed = expired
+      ? [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 180, 240]
+      : [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 240];
+    return allowed.includes(n) ? String(n) : null;
+  }
+  if (interval === "1D" || interval === "1W" || interval === "1M") return interval;
+  return null;
+}
+
 /** FYERS category-scoped cooldown (Data APIs) plus a separate account-level REST block. */
 export type FyersCooldown = FyersRestCooldown;
 
@@ -57,29 +75,33 @@ export class FyersHistoricalAdapter implements HistoricalProvider {
     const native = request.nativeIdentifier;
     if (!native) throw new Error("MISSING_NATIVE_IDENTIFIER");
 
+    const resolution = mapFyersResolution(request.interval, Boolean(request.expired));
+    if (!resolution) throw new Error(`UNSUPPORTED_RESOLUTION:${request.interval}`);
+
     const path = request.expired ? "/history/fno/expired/historical-data" : "/history";
-    const body: Record<string, string> = {
+    const params = new URLSearchParams({
       symbol: native,
-      resolution: request.interval,
-      date_format: "0",
+      resolution,
+      date_format: "0", // epoch seconds
       range_from: String(Math.floor(request.fromMs / 1000)),
       range_to: String(Math.floor(request.toMs / 1000))
-    };
+    });
     if (request.expired) {
-      body.include_oi = "1";
-      body.include_greeks = "0";
+      params.set("include_oi", "1");
+      params.set("include_greeks", "0");
     } else {
-      body.cont_flag = "1";
-      body.oi_flag = "1";
+      params.set("cont_flag", "1");
+      params.set("oi_flag", "1");
     }
 
+    // Official FYERS data endpoints are GET with query parameters (confirmed
+    // in the official SDK: session.get(generateUrl(url, req))).
     const response = await fetchWithRetry(
       (u, init, t) => this.fetchImpl(u, init, t),
-      `${DATA_BASE}${path}`,
+      `${DATA_BASE}${path}?${params.toString()}`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: this.options.token },
-        body: JSON.stringify(body)
+        method: "GET",
+        headers: { Accept: "application/json", Authorization: this.options.token }
       },
       this.timeoutMs,
       { now: this.now }

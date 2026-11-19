@@ -28,6 +28,37 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+interface ExpiryEntry {
+  date: string; // DD-MM-YYYY
+  expiry: string; // provider epoch seconds
+  flag?: number;
+}
+
+/** Strictly parse `expiryData`; null means malformed/incomplete metadata. */
+function parseExpiryData(value: unknown): ExpiryEntry[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out: ExpiryEntry[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") return null;
+    const r = row as Record<string, unknown>;
+    if (typeof r.date !== "string" || !/^\d{2}-\d{2}-\d{4}$/.test(r.date)) return null;
+    if (typeof r.expiry !== "string" || !/^\d+$/.test(r.expiry)) return null;
+    out.push({
+      date: r.date,
+      expiry: r.expiry,
+      ...(typeof r.expiry_flag === "number" ? { flag: r.expiry_flag } : {})
+    });
+  }
+  return out;
+}
+
+/** Convert requested YYYY-MM-DD to the provider's DD-MM-YYYY expiry date. */
+function toProviderDate(date: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
 export class FyersOptionChainAdapter implements OptionChainProvider {
   readonly id: ProviderId = "FYERS";
   private readonly fetchImpl: FetchLike;
@@ -49,26 +80,17 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     markFyersAccountBlock(this.cooldown, resetAtMs, detail);
   }
 
-  async fetchOptionChain(request: OptionChainRequest): Promise<OptionChainSnapshotEnvelope> {
-    const blocked = fyersBlockReason(this.cooldown, this.now());
-    if (blocked === "ACCOUNT_BLOCK") throw new Error("FYERS_ACCOUNT_BLOCK");
-    if (blocked === "DATA_API_COOLDOWN") throw new Error("FYERS_DATA_API_COOLDOWN");
-    const native = request.nativeIdentifier;
-    if (!native) throw new Error("MISSING_NATIVE_IDENTIFIER");
-    // FYERS selects the chain via the symbol (which encodes the underlying /
-    // expiry); `request.expiryDate` is carried into the canonical envelope as
-    // metadata. Whether a multi-expiry response must be narrowed to the
-    // requested expiry is a Stage G verification item — no filtering is
-    // invented here.
-    const body: Record<string, string> = { symbol: native, greeks: "1", strikecount: "50", timestamp: "" };
+  private async get(timestamp: string, native: string): Promise<unknown> {
+    const params = new URLSearchParams({
+      symbol: native,
+      strikecount: "50",
+      greeks: "1",
+      timestamp // "" for discovery, exact expiry epoch for selection
+    });
     const response = await fetchWithRetry(
       (u, init, t) => this.fetchImpl(u, init, t),
-      OPTION_CHAIN_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: this.options.token },
-        body: JSON.stringify(body)
-      },
+      `${OPTION_CHAIN_URL}?${params.toString()}`,
+      { method: "GET", headers: { Accept: "application/json", Authorization: this.options.token } },
       this.timeoutMs,
       { now: this.now }
     );
@@ -82,19 +104,56 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     if (!response.ok) throw new Error(`FYERS_HTTP_${response.status}`);
     let payload: unknown;
     try { payload = await response.json(); } catch { throw new Error("MALFORMED_200"); }
-    const envelope = this.parseBody(payload, request);
+    if (!payload || typeof payload !== "object") throw new Error("MALFORMED_200");
+    const obj = payload as { s?: unknown; code?: unknown };
+    if (obj.s !== "ok") throw new Error(`FYERS_ERROR_${String(obj.code ?? "unknown")}`);
+    return payload;
+  }
+
+  async fetchOptionChain(request: OptionChainRequest): Promise<OptionChainSnapshotEnvelope> {
+    const blocked = fyersBlockReason(this.cooldown, this.now());
+    if (blocked === "ACCOUNT_BLOCK") throw new Error("FYERS_ACCOUNT_BLOCK");
+    if (blocked === "DATA_API_COOLDOWN") throw new Error("FYERS_DATA_API_COOLDOWN");
+    const native = request.nativeIdentifier;
+    if (!native) throw new Error("MISSING_NATIVE_IDENTIFIER");
+    const providerDate = toProviderDate(request.expiryDate);
+    if (!providerDate) throw new Error("INVALID_EXPIRY_DATE");
+
+    // Request 1: discovery — returns available expiries (date DD-MM-YYYY, epoch expiry).
+    const discovery = await this.get("", native) as { data?: { expiryData?: unknown } };
+    const expiries = parseExpiryData(discovery.data?.expiryData);
+    if (!expiries) throw new Error("EXPIRY_METADATA_INVALID");
+
+    const matches = expiries.filter((e) => e.date === providerDate);
+    if (matches.length === 0) throw new Error("EXPIRY_NOT_AVAILABLE");
+    if (matches.length > 1) throw new Error("EXPIRY_AMBIGUOUS");
+    const selected = matches[0]!;
+
+    // Request 2: fetch the chain for the exact requested expiry timestamp.
+    const selectedPayload = await this.get(selected.expiry, native) as {
+      data?: { expiryData?: unknown; optionsChain?: unknown; callOi?: unknown; putOi?: unknown; indiavixData?: unknown }
+    };
+    const returnedExpiries = parseExpiryData(selectedPayload.data?.expiryData);
+    if (!returnedExpiries) throw new Error("EXPIRY_METADATA_INVALID");
+    const stillPresent = returnedExpiries.some((e) => e.expiry === selected.expiry);
+    const flagged = returnedExpiries.filter((e) => e.flag === 1);
+    const flagMismatch = flagged.length > 0 && !flagged.some((e) => e.expiry === selected.expiry);
+    if (!stillPresent || flagMismatch) throw new Error("EXPIRY_MISMATCH");
+
+    const envelope = this.parseBody(selectedPayload, request);
     clearFyersDataThrottle(this.cooldown);
     return envelope;
   }
 
-  private parseBody(payload: unknown, request: OptionChainRequest): OptionChainSnapshotEnvelope {
-    if (!payload || typeof payload !== "object") throw new Error("MALFORMED_200");
-    const obj = payload as { s?: unknown; code?: unknown; data?: { optionsChain?: unknown; expiryData?: unknown; indiavixData?: unknown; callOi?: unknown; putOi?: unknown } };
-    if (obj.s !== "ok") throw new Error(`FYERS_ERROR_${String(obj.code ?? "unknown")}`);
-    if (!obj.data || !Array.isArray(obj.data.optionsChain)) throw new Error("MALFORMED_200");
+  private parseBody(
+    payload: { data?: { optionsChain?: unknown; expiryData?: unknown; indiavixData?: unknown; callOi?: unknown; putOi?: unknown } },
+    request: OptionChainRequest
+  ): OptionChainSnapshotEnvelope {
+    const data = payload.data;
+    if (!data || !Array.isArray(data.optionsChain)) throw new Error("MALFORMED_200");
     const strikes: OptionChainStrike[] = [];
     let underlyingLtp: number | null = null;
-    for (const row of obj.data.optionsChain) {
+    for (const row of data.optionsChain) {
       if (!row || typeof row !== "object") continue;
       const r = row as Record<string, unknown>;
       const strike = num(r.strike_price);
@@ -127,16 +186,16 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     }
     return {
       underlyingCanonicalId: request.underlyingCanonicalId,
-      expiryDate: request.expiryDate,
+      expiryDate: request.expiryDate, // verified against provider expiry metadata above
       capturedAt: new Date(this.now()).toISOString(),
       observationTimestamp: null, // no per-snapshot observation time in the response
       underlyingLtp,
       strikes,
       providerExtensions: {
-        callOi: obj.data.callOi ?? null,
-        putOi: obj.data.putOi ?? null,
-        expiryData: obj.data.expiryData ?? null,
-        indiavixData: obj.data.indiavixData ?? null
+        callOi: data.callOi ?? null,
+        putOi: data.putOi ?? null,
+        expiryData: data.expiryData ?? null,
+        indiavixData: data.indiavixData ?? null
       }
     };
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CandleRangeRequest } from "../../packages/contracts/src/index";
-import { createFyersRestCooldown, FyersHistoricalAdapter, FyersOptionChainAdapter } from "../../packages/broker-fyers/src/index";
+import { createFyersRestAdapters, createFyersRestCooldown, FyersHistoricalAdapter, FyersOptionChainAdapter } from "../../packages/broker-fyers/src/index";
 
 const NOW = Date.parse("2026-01-10T00:00:00.000Z");
 const request = (overrides: Partial<CandleRangeRequest> = {}): CandleRangeRequest => ({
@@ -14,38 +14,76 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 }
 
 describe("FyersHistoricalAdapter", () => {
-  test("regular history: /data/history, epoch range, 6-element candles", async () => {
+  test("regular history: GET /data/history with query params and mapped resolution", async () => {
     let url = "";
-    let body: Record<string, unknown> = {};
+    let method = "";
+    let body: string | undefined;
     const adapter = new FyersHistoricalAdapter({
       token: "appid:token", now: () => NOW,
-      fetchImpl: async (u, init) => { url = String(u); body = JSON.parse(String(init?.body ?? "{}")); return json({ s: "ok", code: 200, candles: [[1767225600, 100, 102, 99, 101, 1000]] }); }
+      fetchImpl: async (u, init) => {
+        url = String(u); method = String(init?.method ?? "GET"); body = init?.body as string | undefined;
+        return json({ s: "ok", code: 200, candles: [[1767225600, 100, 102, 99, 101, 1000]] });
+      }
     });
     const candles = (await adapter.fetchCandles(request())).candles;
-    expect(url).toBe("https://api-t1.fyers.in/data/history");
-    expect(body.date_format).toBe("0");
-    expect(body.oi_flag).toBe("1");
-    // Canonical interval is passed through as FYERS resolution. Live token
-    // correctness remains a Stage G verification item; this pins the mapping.
-    expect(body.resolution).toBe("1D");
+    const parsed = new URL(url);
+    expect(method).toBe("GET"); // official SDK uses GET with query parameters
+    expect(body).toBeUndefined(); // no JSON body
+    expect(`${parsed.origin}${parsed.pathname}`).toBe("https://api-t1.fyers.in/data/history");
+    expect(parsed.searchParams.get("date_format")).toBe("0");
+    expect(parsed.searchParams.get("oi_flag")).toBe("1");
+    expect(parsed.searchParams.get("cont_flag")).toBe("1");
+    expect(parsed.searchParams.get("resolution")).toBe("1D");
+    expect(parsed.searchParams.get("symbol")).toBe("NSE:SBIN-EQ");
+    expect(parsed.searchParams.get("range_from")).toBe(String(Math.floor(Date.parse("2026-01-01T00:00:00Z") / 1000)));
+    expect(parsed.searchParams.get("range_to")).toBe(String(Math.floor(Date.parse("2026-01-05T00:00:00Z") / 1000)));
     expect(candles.length).toBe(1);
     expect(candles[0]!.tsMs).toBe(1767225600000);
     expect(candles[0]!.close).toBe(101);
     expect(candles[0]!.provider).toBe("FYERS");
   });
 
-  test("expired F&O uses distinct endpoint and reads optional columns by name", async () => {
-    let url = "";
+  test("canonical intraday intervals map to FYERS bare-number resolutions", async () => {
+    const seen: string[] = [];
     const adapter = new FyersHistoricalAdapter({
       token: "t", now: () => NOW,
-      fetchImpl: async (u) => { url = String(u); return json({
-        s: "ok", code: 200,
-        columns: ["timestamp", "open", "high", "low", "close", "volume", "open_interest", "iv", "delta", "gamma", "theta", "vega"],
-        candles: [[1767225600, 100, 102, 99, 101, 1000, 500, 18, 0.5, null, null, null]]
-      }); }
+      fetchImpl: async (u) => {
+        seen.push(new URL(String(u)).searchParams.get("resolution") ?? "");
+        return json({ s: "ok", candles: [] });
+      }
     });
-    const candles = (await adapter.fetchCandles(request({ expired: true, nativeIdentifier: "NSE:NIFTY25MAR23000CE" }))).candles;
-    expect(url).toBe("https://api-t1.fyers.in/data/history/fno/expired/historical-data");
+    for (const interval of ["1m", "5m", "15m", "60m", "120m", "240m", "1D", "1W", "1M"] as const) {
+      await adapter.fetchCandles(request({ interval }));
+    }
+    expect(seen).toEqual(["1", "5", "15", "60", "120", "240", "1D", "1W", "1M"]);
+  });
+
+  test("unsupported regular-history resolution is rejected explicitly", async () => {
+    const adapter = new FyersHistoricalAdapter({ token: "t", fetchImpl: async () => json({ s: "ok", candles: [] }) });
+    await expect(adapter.fetchCandles(request({ interval: "180m" }))).rejects.toThrow("UNSUPPORTED_RESOLUTION");
+  });
+
+  test("expired F&O uses GET with query params, distinct endpoint and columns by name", async () => {
+    let url = "";
+    let method = "";
+    const adapter = new FyersHistoricalAdapter({
+      token: "t", now: () => NOW,
+      fetchImpl: async (u, init) => {
+        url = String(u); method = String(init?.method ?? "GET");
+        return json({
+          s: "ok", code: 200,
+          columns: ["timestamp", "open", "high", "low", "close", "volume", "open_interest", "iv", "delta", "gamma", "theta", "vega"],
+          candles: [[1767225600, 100, 102, 99, 101, 1000, 500, 18, 0.5, null, null, null]]
+        });
+      }
+    });
+    const candles = (await adapter.fetchCandles(request({ expired: true, nativeIdentifier: "NSE:NIFTY25MAR23000CE", interval: "60m" }))).candles;
+    const parsed = new URL(url);
+    expect(method).toBe("GET");
+    expect(`${parsed.origin}${parsed.pathname}`).toBe("https://api-t1.fyers.in/data/history/fno/expired/historical-data");
+    expect(parsed.searchParams.get("resolution")).toBe("60");
+    expect(parsed.searchParams.get("include_oi")).toBe("1");
+    expect(parsed.searchParams.get("include_greeks")).toBe("0");
     expect(candles[0]!.oi).toBe(500);
   });
 
@@ -114,5 +152,32 @@ describe("FyersHistoricalAdapter", () => {
     history.markAccountBlock(NOW + 60000, "daily REST block");
     await expect(chain.fetchOptionChain(chainRequest)).rejects.toThrow("FYERS_ACCOUNT_BLOCK");
     await expect(history.fetchCandles(request())).rejects.toThrow("FYERS_ACCOUNT_BLOCK");
+  });
+
+  test("supported composition shares one cooldown; independent runtimes do not", async () => {
+    const chainRequest = {
+      underlyingCanonicalId: "v1|NSE|INDEX|INDEX|CODE:NIFTY50", expiryDate: "2026-01-29",
+      nativeIdentifier: "NSE:NIFTY50-INDEX"
+    };
+    const runtime = createFyersRestAdapters({
+      token: "t", now: () => NOW,
+      fetchImpl: async () => json({}, 429, { "retry-after": "5" })
+    });
+    // Data API throttle on history suppresses option chain in the same runtime.
+    await expect(runtime.history.fetchCandles(request())).rejects.toThrow("TRANSIENT_THROTTLE_429");
+    await expect(runtime.optionChain.fetchOptionChain(chainRequest)).rejects.toThrow("FYERS_DATA_API_COOLDOWN");
+    // Account block set on the runtime suppresses both adapters.
+    runtime.markAccountBlock(NOW + 60000, "daily REST block");
+    await expect(runtime.history.fetchCandles(request())).rejects.toThrow("FYERS_ACCOUNT_BLOCK");
+    await expect(runtime.optionChain.fetchOptionChain(chainRequest)).rejects.toThrow("FYERS_ACCOUNT_BLOCK");
+
+    // A second, independent runtime has fresh state — no accidental sharing.
+    const other = createFyersRestAdapters({
+      token: "t", now: () => NOW,
+      fetchImpl: async () => json({ s: "ok", candles: [] })
+    });
+    expect(other.cooldown.dataApi.notBeforeMs).toBeNull();
+    expect(other.cooldown.accountBlock.notBeforeMs).toBeNull();
+    expect((await other.history.fetchCandles(request())).candles.length).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { HistoricalCandle, HistoricalSyncConfig } from "../../packages/contracts/src/index";
+import { parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig } from "../../packages/contracts/src/index";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
@@ -29,6 +29,23 @@ const config: HistoricalSyncConfig = {
 };
 
 const request = { canonicalId: "A", interval: "1D" as const, fromMs: 1, toMs: 2 };
+
+describe("India-local date-only range", () => {
+  test("date-only selection maps to inclusive IST boundaries", () => {
+    const range = parseIstDateRange("2026-01-05", "2026-01-05");
+    expect(range).not.toBeNull();
+    // 2026-01-05 00:00 IST = 2026-01-04 18:30Z; end = 23:59:59.999 IST
+    expect(range!.fromMs).toBe(Date.parse("2026-01-04T18:30:00.000Z"));
+    expect(range!.toMs).toBe(Date.parse("2026-01-05T18:29:59.999Z"));
+  });
+
+  test("multi-day selection covers the full final date and rejects inverted ranges", () => {
+    const range = parseIstDateRange("2026-01-05", "2026-01-06");
+    expect(range!.toMs).toBe(Date.parse("2026-01-06T18:29:59.999Z"));
+    expect(parseIstDateRange("2026-01-06", "2026-01-05")).toBeNull();
+    expect(parseIstDateRange("not-a-date", "2026-01-05")).toBeNull();
+  });
+});
 
 describe("historical web client", () => {
   test("cached candles are validated with the contracts schema", async () => {

@@ -6,7 +6,7 @@ import type {
   CandleRangeRequest, HistoricalCandle, HistoricalSyncConfig, ProviderId
 } from "../../packages/contracts/src/index";
 import { AppSettings, CandleRepository, openDatabase } from "../../packages/database/src/index";
-import { HistoricalCandleService, type HistoricalProvider, type HistoricalFetchOutcome } from "../../packages/market-core/src/index";
+import { HistoricalCandleService, assessGaps, type HistoricalProvider, type HistoricalFetchOutcome } from "../../packages/market-core/src/index";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 
 const CANON = "v1|NSE|EQ|EQ|CODE:SBIN";
@@ -102,6 +102,47 @@ describe("HistoricalCandleService", () => {
       const gaps = h.service.getCoverage(request({ fromMs: Date.parse("2026-01-03T00:00:00Z"), toMs: Date.parse("2026-01-04T00:00:00Z") })); // Sat/Sun
       expect(gaps.length).toBe(0);
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("India-local calendar: Monday just after midnight IST is a weekday candidate", () => {
+    // 2026-01-05T00:00:30+05:30 = 2026-01-04T18:30:30Z (Sunday in UTC, Monday in IST)
+    const mondayIst = Date.parse("2026-01-04T18:30:30.000Z");
+    const gaps = assessGaps(request({ fromMs: mondayIst, toMs: mondayIst + 1000 }), []);
+    expect(gaps.length).toBe(1);
+    expect(gaps[0]!.basis).toBe("WEEKDAY_ONLY");
+    expect(gaps[0]!.confirmed).toBe(false);
+  });
+
+  test("India-local calendar: Saturday and Sunday IST are excluded from daily candidates", () => {
+    // Sat 2026-01-03 00:30 IST = Fri 2026-01-02 19:00Z; Sun 2026-01-04 12:00 IST = 06:30Z
+    const satIst = Date.parse("2026-01-02T19:00:00.000Z");
+    const sunIst = Date.parse("2026-01-04T06:30:00.000Z");
+    expect(assessGaps(request({ fromMs: satIst, toMs: satIst + 1000 }), []).length).toBe(0);
+    expect(assessGaps(request({ fromMs: sunIst, toMs: sunIst + 1000 }), []).length).toBe(0);
+  });
+
+  test("India-local weekly and monthly buckets use IST calendar boundaries", () => {
+    // 2026-02-01T00:30 IST = 2026-01-31T19:00Z (January in UTC, February in IST).
+    // Start before the IST month boundary so the February bucket is not clipped.
+    const monthly = assessGaps(request({
+      interval: "1M",
+      fromMs: Date.parse("2026-01-31T18:00:00.000Z"), // 2026-01-31 23:30 IST
+      toMs: Date.parse("2026-01-31T19:00:00.000Z")  // 2026-02-01 00:30 IST
+    }), []);
+    expect(monthly.length).toBe(2); // January + February buckets
+    expect(monthly.every((g) => g.basis === "MONTHLY_BUCKET" && g.confirmed === false)).toBe(true);
+    expect(monthly[1]!.fromMs).toBe(Date.parse("2026-01-31T18:30:00.000Z")); // 2026-02-01 00:00 IST
+
+    // 2026-01-05 (Monday) 01:00 IST = 2026-01-04 19:30Z (Sunday in UTC).
+    // Start before the IST week boundary so the Monday bucket is not clipped.
+    const weekly = assessGaps(request({
+      interval: "1W",
+      fromMs: Date.parse("2026-01-04T18:00:00.000Z"), // 2026-01-04 23:30 IST (Sunday)
+      toMs: Date.parse("2026-01-04T19:30:00.000Z")  // 2026-01-05 01:00 IST (Monday)
+    }), []);
+    expect(weekly.length).toBe(2); // Sunday's week + Monday's week
+    expect(weekly.every((g) => g.basis === "WEEKLY_BUCKET" && g.confirmed === false)).toBe(true);
+    expect(weekly[1]!.fromMs).toBe(Date.parse("2026-01-04T18:30:00.000Z")); // Monday 00:00 IST
   });
 
   test("on-demand fetch never reads or mutates sync config", async () => {
