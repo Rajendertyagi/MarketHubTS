@@ -61,7 +61,7 @@ Expose comprehensive market data via shared services (all subject to availabilit
 - MarketHub may fetch requested data from connected providers.
 - **Must not silently modify operational settings** (streaming selections, historical sync settings, option-chain capture settings, etc.).
 - Successfully retrieved historical candles may be cached (per caching/retention rules).
-- Option-chain snapshot persistence remains governed by **WebUI capture configuration**.
+- **On-demand option-chain capture persists a snapshot with `configId = null`** and does not read or write saved capture configuration. WebUI capture configuration governs **scheduled/manual capture only**; it does not govern on-demand capture. The resulting snapshot is visible in the WebUI Snapshot panel. This preserves M5 semantics (see [M6_PLAN.md](M6_PLAN.md) §5.2).
 
 ## 6. AI workflow management (permitted)
 
@@ -122,6 +122,7 @@ All operational configuration belongs in WebUI.
 - Never expose credentials or access tokens via MCP tools/resources/events.
 - Graceful shutdown; client isolation; bounded resource usage.
 - LAN HTTP exposure without app-level user login is a confirmed deployment model; protect sensitive operations/data appropriately and document risks (see [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md)).
+- **Traceability (M6 target):** important MCP operations are recorded in a small durable SQLite activity table with correlation IDs, sanitized outcomes and safe summaries; the WebUI is the main inspection surface. Data persistence and notification delivery are separate outcomes. See [M6_PLAN.md](M6_PLAN.md) §9.1–§9.2.
 
 ## 11. Parity requirement
 
@@ -133,6 +134,6 @@ MCP, REST/SSE, and WebUI must present consistent canonical instrument and data s
 
 **Verified protocol/SDK behavior (official sources, not assumptions):** 2026-07-28 is stateless per request and explicit opt-in; `createMcpHandler` (HTTP) and `serveStdio` (STDIO) are the opt-in entries; `subscriptions/listen` is the only notification channel; supported notifications are tools/prompts/resources `list_changed` and `resources/updated`; `resources/subscribe` is 2025-only; Host/Origin validation is the application's responsibility; legacy HTTP+SSE and Roots/Sampling/Logging are deprecated. Installed SDK is 2.4.0 (lockfile + package metadata). See [M6_PLAN.md](M6_PLAN.md) §3 and [REFERENCES.md](REFERENCES.md) §8.
 
-**Implementation decisions (recommended, not yet implemented):** mount `createMcpHandler` on the existing Hono app at `/mcp` with `handler.fetch(c.req.raw)`; one `createMcpServer()` factory for HTTP and STDIO; default `legacy: 'stateless'` for dual-era compatibility; `InMemoryServerEventBus` (single process); read-after-notify with cursor-based resources; no new dependencies. Full rationale in [M6_PLAN.md](M6_PLAN.md) §4–§7.
+**Implementation decisions (recommended, not yet implemented):** mount `createMcpHandler` on the existing Hono app at `/mcp` with `handler.fetch(c.req.raw)`; one `createMcpServer(ctx, services)` factory with an `McpServices` seam (HTTP direct services, STDIO local-API client); default `legacy: 'stateless'` for dual-era compatibility; `InMemoryServerEventBus` (single process); read-after-notify with cursor-based resources; one small additive `mcp_activity` table for durable traceability with WebUI inspection; no new third-party dependencies. Full rationale in [M6_PLAN.md](M6_PLAN.md) §4–§9.2.
 
 **Unresolved implementation-time questions (not product scope):** exact resource URI shapes/cursor encoding; whether to offer a strict `legacy: 'reject'` endpoint; LAN Host/Origin allow-list policy; `requestState` key management if multi-round flows are added; conformance-test tooling. Durable alert-event feeds depend on M7. None of these block the plan; they are resolved during authorized implementation against the cited official docs.

@@ -23,6 +23,7 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 | **Installed version** | **2.4.0 confirmed** — `bun.lock` resolves `@modelcontextprotocol/server@2.4.0` and `@modelcontextprotocol/core@2.4.0`; installed package at `node_modules/.bun/@modelcontextprotocol+server@2.4.0/.../server/package.json` reports `2.4.0`. Not assumed from the manifest alone. |
 | Current transport | `serveStdio(() => new McpServer(...))` from `@modelcontextprotocol/server/stdio` |
 | Current tool | `markethub_health` (no inputs): fetches `${MARKETHUB_API_URL}/health`, validates with `healthStatusSchema`, returns text + structured content; stdout reserved for protocol, diagnostics to stderr |
+| STDIO service path | **Already a thin local-API client** — STDIO does not instantiate a market-data service or open the application DB. M6 generalizes this pattern; it must not create a second application or database state. |
 | HTTP app | Hono + Bun in `apps/api`; `createApp(deps)` registers provider, M5 historical/snapshot and market routes; M5 services composed with **empty provider collections** (`apps/api/src/app.ts`) |
 | Shared services available | `MarketDataService`, `LiveEventHub` (`packages/realtime`), `HistoricalCandleService`, `OptionChainSnapshotService`, `CatalogSyncService`, repositories, `ProviderRegistry` (`packages/market-core`, `packages/database`) |
 | Shared contracts available | `liveSnapshotSchema`/`LiveSnapshot`, `providerStatusMapSchema`, `subscriptionStateViewSchema`, historical/snapshot schemas, `market-dates` IST helpers (`packages/contracts`) |
@@ -71,7 +72,45 @@ apps/api           ->  packages/mcp-core  (calls createMcpHandler(createMcpServe
 
 **Why an existing boundary cannot support this:** `packages/contracts` is schema/type-only with no runtime dependencies; `packages/market-core` is the canonical domain/service layer and adding an MCP SDK dependency there would invert the consumer→domain dependency direction; `packages/database` is persistence-only; `packages/shared` is a generic utility package with no service dependencies. Placing `createMcpServer()` in either app and importing it from the other violates the explicit "no app imports another app" constraint. A new thin package is therefore the smallest valid boundary that both apps can depend on without duplication or inversion.
 
-**Factory contract:** `createMcpServer(ctx: McpRequestContext)` is a pure registration function — it constructs an `McpServer`, registers the tool/resource/prompt set, and returns it. It must not create background subscriptions, timers, listeners or process-level event consumers (see §4.2). The SDK calls it once per HTTP request (and once per STDIO connection plus a discarded `server/discover` probe), so any side effect in the factory would be multiplied per request.
+**Factory contract:** `createMcpServer(ctx: McpRequestContext, services: McpServices)` is a pure registration function — it constructs an `McpServer`, registers the tool/resource/prompt set against the supplied `services`, and returns it. It must not create background subscriptions, timers, listeners or process-level event consumers (see §4.2). The SDK calls it once per HTTP request (and once per STDIO connection plus a discarded `server/discover` probe), so any side effect in the factory would be multiplied per request.
+
+#### 4.1.1 Canonical service path for both transports (Finding A)
+
+Both transports must reach the **same canonical capabilities** without duplicating market interpretation or application state. Introduce a small `McpServices` interface — the seam through which shared registration calls application capabilities. It is a thin adapter boundary, not a plugin framework.
+
+```
+                    packages/mcp-core
+              createMcpServer(ctx, services)
+              registerTools/Resources/Prompts(services)
+                          |
+              +-----------+-----------+
+              |                       |
+      McpServicesHttp          McpServicesStdio
+      (apps/api)               (apps/mcp-server)
+      direct injected          thin local-API client
+      services/repos           fetch -> existing /api routes
+              |                       |
+      +-------+-------+               |
+      | canonical services            |
+      MarketDataService, LiveEventHub,|
+      HistoricalCandleService,        |
+      OptionChainSnapshotService,     |
+      CatalogRepository, ProviderRegistry
+      (packages/market-core, database)|
+              |                       |
+              +-----------+-----------+
+                          |
+                  one local application instance
+                  (single SQLite DB, single canonical state)
+```
+
+- **HTTP implementation (`McpServicesHttp`):** lives in `apps/api`, backed by the existing injected services and repositories (`createApp(deps)`). No separate application state; it uses the same instances as REST/SSE/WebUI.
+- **STDIO implementation (`McpServicesStdio`):** lives in `apps/mcp-server`, backed by a thin client to the existing local API (`MARKETHUB_API_URL`, default `http://localhost:3001`) — the same pattern the current `markethub_health` tool already uses. It must **not** instantiate a second `MarketDataService`, open the application SQLite DB, or manage provider state. Where the local API does not yet expose a capability, the STDIO tool reports it unavailable rather than reimplementing it locally.
+- **Shared registration:** one implementation of tool/resource/prompt registration in `packages/mcp-core`, parameterised by `McpServices`. Both transports register identical capabilities; response shapes use the same canonical contracts. Capabilities are available wherever the underlying API provides them; STDIO honestly reports gaps.
+- **Error handling:** both implementations map failures to the same canonical error/availability semantics; STDIO wraps HTTP status/transport errors, HTTP wraps service errors. No credential or raw argument leakage in either path.
+- **Offline behavior:** constructing either implementation makes no provider calls. With M5 Phase 4B gated, on-demand tools return honest empty/unavailable results from the shared services.
+
+**Why this interface is justified:** without it, shared registration would either import one app into the other (forbidden) or duplicate the tool set per transport. `McpServices` is the smallest seam that lets one registration implementation serve both transports while keeping dependency direction acyclic. It is not a general-purpose plugin system.
 
 - **HTTP (primary LAN transport):** in `apps/api`, register a single route (e.g. `POST/GET/DELETE /mcp`) that delegates to `createMcpHandler(createMcpServer).fetch(c.req.raw)`. The handler is web-standard and explicitly supports Hono's `c.req.raw`. It serves 2026-07-28 per request; default `legacy: 'stateless'` keeps 2025-era clients working through the same factory. Choose `legacy: 'reject'` only if a strict modern-only endpoint is required — default to dual-era for compatibility.
 - **Validation in front:** the SDK entry is deliberately validation-free. Add `hostHeaderValidationResponse`/`originValidationResponse` (with `localhostAllowedHostnames`/`localhostAllowedOrigins`) before `handler.fetch`, and respect the existing `isLocalPeer`/LAN policy for sensitive operations.
@@ -121,7 +160,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 - **Pagination/cursor semantics:** keyset cursor on the last returned `canonical_id` (opaque to clients), with `nextCursor` returned when more results exist. Avoid offset pagination over a changing catalog.
 - **No accidental full-catalog reads:** the `markethub://catalog/instruments` resource must also require a query filter and a page bound; an unfiltered listing resource is not exposed.
 
-**Smallest repository-level extension needed:** add one method to `CatalogRepository` and `SqliteCatalogRepository`, e.g. `searchInstruments(query: { text: string; limit: number; afterCanonicalId?: string }): Promise<CanonicalInstrument[]>`. Implement with a bounded `LIKE` filter over canonical symbol/display name/identity key, `ORDER BY canonical_id ASC`, `LIMIT ?`, and a `canonical_id > afterCanonicalId` keyset predicate. This is a repository interface + implementation extension only — no new service layer, no new table, no migration. It is **not implemented in this task**.
+**Smallest repository-level extension needed:** add one method to `CatalogRepository` and `SqliteCatalogRepository`, e.g. `searchInstruments(query: { text: string; limit: number; afterCanonicalId?: string }): Promise<CanonicalInstrument[]>`. Implement with a bounded `LIKE` filter over canonical symbol/display name/identity key, `ORDER BY canonical_id ASC`, `LIMIT ?`, and a `canonical_id > afterCanonicalId` keyset predicate. This is a repository interface + implementation extension only — no new service layer, no new table or migration **for catalog search**. It is **not implemented in this task**.
 
 #### 5.2 Data side effects and tool annotations (Finding F)
 
@@ -141,7 +180,11 @@ Group related capabilities; do not create one tool per field. All capabilities g
 
 **Verified annotation fields (installed 2.4.0 `ToolAnnotationsSchema`):** `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` (all optional). Use them honestly: category 1 may set `readOnlyHint: true`; categories 2 and 3 must not claim read-only. `destructiveHint`/`idempotentHint` are set per actual behavior (e.g. snapshot persistence is additive, not destructive).
 
-**WebUI-owned capture configuration reconciliation:** on-demand capture does **not** read or write `option_chain_capture_configs`; it stores the snapshot with `configId = null`. WebUI capture configuration governs scheduled/manual capture only. This preserves existing M5 semantics — M6 must not silently change M5 behavior to make on-demand capture "read-only" or to attach it to a saved config.
+**WebUI-owned capture configuration reconciliation:** on-demand capture does **not** read or write `option_chain_capture_configs`; it stores the snapshot with `configId = null`. WebUI capture configuration governs scheduled/manual capture only. This preserves existing M5 semantics — M6 must not silently change M5 behavior to make on-demand capture "read-only" or to attach it to a saved config. The earlier MCP_INTERFACE statement that "option-chain snapshot persistence remains governed by WebUI capture configuration" is corrected in this task: it is true for scheduled/manual capture, but on-demand capture persists a snapshot with no config and is still visible in the WebUI Snapshot panel.
+
+**LAN queries:** legitimate private-LAN MCP clients may perform side-effect-free reads and on-demand retrieval/capture through the shared services. Do not block them merely because the operation is not configuration management (§8.1). Only operational configuration writes remain local-owner-only.
+
+**WebUI visibility of results:** candles cached by on-demand retrieval and snapshots persisted by on-demand capture appear in the existing History & snapshots tab through the canonical stores; the MCP Activity section (§9.2) links to them via `data_result_ref`. The owner can inspect what was stored without SQL.
 
 **Resources (discoverable, cursor-based):**
 - `markethub://catalog/instruments` (filterable), `markethub://market/snapshot`, `markethub://historical/{canonicalId}/{interval}` with `from`/`to`, `markethub://snapshots/{configId?}` with cursor, `markethub://events/live` and `markethub://events/alerts` (feeds with stable event IDs/cursors). Resource URIs are implementation details to finalize against shared contracts; keep them stable and documented.
@@ -149,7 +192,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 **Prompts (guided workflows, no hidden actions):**
 - `explain_market_snapshot`, `interpret_coverage_gaps`, `how_to_capture_snapshot` — read-only guidance that calls the tools above; no operational changes.
 
-**Boundary with M7:** M6 provides the **event-delivery foundation** (listen streams, supported notifications, discoverable feeds with cursors, read-after-notify) and read-only data access. Alert/scanner/watchlist definition, evaluation, trigger history and delivery-channel management are **M7** services; M6 does not implement them or invent alert-trigger notification types.
+**Boundary with M7:** M6 provides the **event-delivery foundation** (listen streams, supported notifications, discoverable feeds with cursors, read-after-notify) and read/on-demand data access (§5.2). Alert/scanner/watchlist definition, evaluation, trigger history and delivery-channel management are **M7** services; M6 does not implement them or invent alert-trigger notification types.
 
 ## 6. Subscription and event-delivery design
 
@@ -199,7 +242,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 
 **Correct separation:**
 - **Host/Origin validation** protects the MCP HTTP handler against DNS rebinding and invalid-origin requests. Use the SDK's `hostHeaderValidationResponse(req, allowedHostnames)` and `originValidationResponse(req, allowedOriginHostnames)` (verified signatures in installed 2.4.0). The convenience helpers `localhostAllowedHostnames()` / `localhostAllowedOrigins()` are **localhost-only** and therefore insufficient for LAN clients — build the allowlist from validated config (`config.host`, configured LAN host/IP, and the API/Web origins) at startup.
-- **Existing loopback-only management controls remain intact.** MCP tools must not call credential/config management routes or bypass `isLocalPeer`; MCP capabilities are read-only reads plus on-demand retrieval through shared services (§5.2), never management operations.
+- **Existing loopback-only management controls remain intact.** MCP tools must not call credential/config management routes or bypass `isLocalPeer`; MCP capabilities are side-effect-free reads plus on-demand retrieval/capture through shared services (§5.2), never management operations.
 - **Do not apply `isLocalPeer()` to all read-only MCP requests** — that would incorrectly reject legitimate private LAN MCP clients. Apply it only where the existing application already requires local-owner management.
 - **Do not weaken credential/configuration protection**, and do not introduce application login/authentication or a new security framework. LAN exposure without app-level login remains the confirmed deployment model; document the risk.
 
@@ -219,12 +262,60 @@ Group related capabilities; do not create one tool per field. All capabilities g
 
 No new service layer: MCP is a thin adapter over these.
 
+## 9.1 Durable MCP activity history and traceability (Finding B)
+
+**Problem:** `apps/api/src/lib/logger.ts` emits structured JSON to stdout only. It is useful for diagnostics but is not persistent, queryable history. An operation's outcome is lost when the process restarts or a client disconnects. The owner needs durable, inspectable activity records without terminal/SQL access.
+
+**Persistence decision (preferred order evaluated):**
+1. **Reuse existing table?** No. `catalog_sync_runs` is catalog-sync-specific (source/completeness/counts/conflicts); `app_meta` is a settings KV store; the console logger is ephemeral; M5 tables hold market data, not operations. None genuinely fits MCP tool activity without polluting its semantics.
+2. **One small additive SQLite table + repository.** This is the recommended, simplest correct option. It reuses the existing SQLite/Drizzle foundation, migration conventions, repository pattern and WebUI-owned retention. **One additive migration is therefore genuinely needed** — the original M6 "no migrations" restriction is revised for this single table (see §13). No event store, audit framework, telemetry platform or new dependency.
+
+**Proposed record structure (`mcp_activity` table, conceptual):**
+| Field | Purpose |
+|---|---|
+| `id` (PK) | Stable operation/record ID |
+| `operation_id` | Correlation ID shared by start and completion records |
+| `tool_name` | Tool/resource/prompt identifier |
+| `transport` | `HTTP` or `STDIO` |
+| `started_at`, `finished_at` | Timestamps; `finished_at` null while in progress |
+| `duration_ms` | Derived on completion |
+| `client_name`, `client_version` | From request envelope where available; nullable |
+| `status` | `started` / `succeeded` / `failed` / `interrupted` |
+| `error_category` | Sanitized category (e.g. `validation`, `unavailable`, `provider`, `internal`); nullable |
+| `error_message` | Sanitized useful message; nullable |
+| `summary_json` | Safe operation summary: canonical instrument ID, interval, provider attempts, snapshot ID, record counts — **no credentials, tokens, raw arguments or full market payloads** |
+| `data_result_ref` | Optional reference to the resulting stored record (e.g. snapshot ID / canonical ID + range) for WebUI navigation |
+
+**Lifecycle and correlation:** write a `started` record at operation entry and update it to a terminal status on completion (or mark `interrupted` on shutdown). A restart can therefore identify operations that never completed. Use one row per operation with `operation_id` for correlation rather than two rows, unless implementation evidence favours append-only start/finish rows — decide at implementation time and document.
+
+**Separate outcomes — critical:** a successful data operation that persists candles/snapshots must remain `succeeded` even if a subsequent notification publish fails. Notification delivery is a distinct outcome: record it in `summary_json` (e.g. `notification: "failed"`) or a separate optional field, never by flipping the data operation's status. Notification failures must not make persisted data appear failed.
+
+**Ownership:** an `McpActivityRepository` in `packages/database` owns writes/reads; the shared registration in `packages/mcp-core` records through `McpServices` (both HTTP and STDIO implementations write to the same local application DB via the API — STDIO records through an API endpoint, never by opening the DB itself). Bounded writes: one record per operation, no per-tick/per-notification rows.
+
+**Retention:** activity retention is configurable through the existing WebUI-owned `app_meta` retention settings, extended with an `ACTIVITY` class (max age days). Reuse `AppSettings` validated-read and the existing fail-closed cleanup pattern: missing/malformed/invalid settings disable cleanup and delete nothing. No hidden deletion policy; no silent discard of useful records. Cleanup is bounded and batched like the existing candle/snapshot cleanup.
+
+## 9.2 WebUI activity inspection and management (Finding C)
+
+**Verified current WebUI (2026-11-19):** `apps/web/src/App.tsx` already has three tabs — Overview, Live data, History & snapshots — with `ProviderPanel`, `LivePanel`, `SubscriptionPanel`, `HistoricalPanel` and `SnapshotPanel`. It is **not** a minimal health shell. `docs/WEBUI_AND_CONFIGURATION.md` is stale on this point and is corrected in this task.
+
+**Target addition — one "MCP / Activity" section integrated into the existing navigation** (no separate admin app or dashboard framework):
+- **Transport availability:** show whether HTTP MCP and STDIO MCP are configured/available, with honest "not implemented / not connected" states until M6-A lands.
+- **Recent tool calls:** a bounded, paginated list from `mcp_activity` with tool name, transport, timestamp, duration, status and client name/version.
+- **Filters:** by operation/tool, time window and outcome (`succeeded`/`failed`/`interrupted`/`started`).
+- **Detail view:** correlation/operation ID, sanitized error category and message, safe summary, and whether the data was stored even if notification delivery failed.
+- **Incomplete operations:** highlight `started`/`interrupted` records so the owner can see operations that never completed (e.g. after a restart).
+- **Navigation to stored data:** links from an activity record to the corresponding historical candles or snapshot in the existing History & snapshots tab (via `data_result_ref`).
+- **Notification/subscription activity:** where useful, show recent listen-stream/notification outcomes as a distinct sub-view; never conflate notification failure with data-operation failure.
+
+**UX expectations:** clear loading/empty/error/partial states and plain-language explanations, not raw logs as the only interface. Reuse existing components/tokens and the established panel pattern. The WebUI is the main inspection surface; no terminal or SQL required for ordinary operation.
+
 ## 10. Implementation phases and dependencies
 
-- **M6-A — Transport and server lifecycle.** Add `createMcpServer()` factory; mount `createMcpHandler` on Hono `/mcp` with Host/Origin validation; retain `serveStdio(factory)`; wire `handler.close()` into shutdown; explicit opt-in/era tests. Depends on: existing app lifecycle. No provider dependency.
+- **M6-A — Transport and server lifecycle.** Add `createMcpServer(ctx, services)` factory and the `McpServices` seam (§4.1.1); mount `createMcpHandler` on Hono `/mcp` with Host/Origin validation; retain `serveStdio(factory)` with the local-API `McpServicesStdio`; wire `handler.close()` into shutdown; explicit opt-in/era tests. Depends on: existing app lifecycle. No provider dependency.
 - **M6-B — Tools and resources over shared services.** Implement the tool/resource/prompt inventory; bounded catalog search (§5.1); on-demand retrieval/capture with accurate side-effect annotations (§5.2) and config immutability; honest unavailable states. Depends on: M6-A, M2/M4/M5 services (already present).
-- **M6-C — Subscription/listen and event delivery.** Wire `ServerEventBus`/`notify`, listen filters, resource URIs, cursor-based feeds, read-after-notify, graceful close/reconnect. Depends on: M6-B, `LiveEventHub`; alert feeds are contract-only until M7.
-- **M6-D — Parity, multi-client, security and conformance acceptance.** Cross-interface parity, multi-client isolation, permission-boundary tests, 2026/2025-era conformance, bounded-resource and shutdown tests. Depends on: M6-A–C.
+- **M6-C — Durable activity history and WebUI inspection.** Add the single additive `mcp_activity` table + repository + `ACTIVITY` retention class (§9.1); record start/completion/correlation through `McpServices`; add the WebUI MCP/Activity section with filters, detail view and navigation to stored data (§9.2). Depends on: M6-A/B. This is the smallest correct way to make operations durable and inspectable.
+- **M6-D — Subscription/listen and event delivery.** Wire `ServerEventBus`/`notify`, listen filters, resource URIs, cursor-based feeds, read-after-notify, graceful close/reconnect; record notification outcomes separately from data outcomes (§9.1). Depends on: M6-B/C, `LiveEventHub`; alert feeds are contract-only until M7.
+- **M6-E — Parity, multi-client, security and conformance acceptance.** Cross-interface parity, multi-client isolation, permission-boundary tests, 2026/2025-era conformance, bounded-resource, activity-durability and shutdown tests. Depends on: M6-A–D.
 
 Ordering may be adjusted if SDK behavior or repository architecture proves a dependency wrong; record the reason before changing it.
 
@@ -235,8 +326,9 @@ New `tests/mcp/` suite (mirrors source areas; no live network):
 - `tools.test.ts` — each tool over fake/shared services (including on-demand retrieval/capture side effects); input validation; bounded catalog search limits/ordering/cursor; honest unavailable/empty states; on-demand config immutability; annotation accuracy.
 - `resources.test.ts` — resource URIs, cursor pagination, provenance/freshness fields, read-after-notify payloads.
 - `subscriptions.test.ts` — listen filter, supported notifications only, `resourceUpdated(uri)`, graceful vs remote close, reconnect from cursor, multi-client isolation, `maxSubscriptions` bound.
-- `parity.test.ts` — MCP vs REST/SSE vs WebUI canonical state from the same services.
-- `security.test.ts` — no operational config mutation, no credential leakage, `isLocalPeer`/LAN boundary, bounded inputs, cancellation/timeout.
+- `parity.test.ts` — MCP vs REST/SSE vs WebUI canonical state from the same services; **both transports** (HTTP direct services and STDIO local-API client) reach the same capabilities with identical response semantics.
+- `security.test.ts` — no operational config mutation, no credential leakage, `isLocalPeer`/LAN boundary (LAN reads allowed, management still loopback-only), bounded inputs, cancellation/timeout.
+- `activity.test.ts` — durable activity records: start/completion correlation, status transitions (`started`/`succeeded`/`failed`/`interrupted`), sanitized error category/message, safe summary with no secrets or full payloads, restart recovery of incomplete operations, **data success preserved when notification delivery fails**, `ACTIVITY` retention fail-closed and bounded cleanup, WebUI query/filter/navigation reads.
 
 All tests use fakes/mocked fetch/temp DBs; no live provider, socket or network.
 
@@ -247,7 +339,10 @@ All tests use fakes/mocked fetch/temp DBs; no live provider, socket or network.
 - Tool/resource inventory is grouped, discoverable, correctly annotated for side effects (§5.2), and reports availability/freshness/provenance honestly; no fabricated fields.
 - On-demand retrieval never mutates operational config; permission boundary tests pass.
 - `subscriptions/listen` delivers only supported notifications; clients read data from resources/feeds; no custom standard notification types; graceful close/reconnect and multi-client isolation pass.
-- Parity with REST/SSE/WebUI over the same canonical state; bounded resources and clean shutdown verified.
+- Parity with REST/SSE/WebUI over the same canonical state; **both transports** reach the same capabilities without a second application or DB state; bounded resources and clean shutdown verified.
+- Durable activity records survive restart; outcomes and failures are traceable with sanitized summaries and no secrets/full payloads; data success is distinct from notification-delivery failure; incomplete operations are identifiable.
+- WebUI MCP/Activity section exposes transport availability, recent calls, filters, detail, incomplete operations and navigation to stored data; WebUI documentation matches the real panels.
+- On-demand persistence semantics are accurately described (cached candles / `configId = null` snapshot); LAN read queries are not blocked; operational config remains WebUI-owned and local-owner-only.
 - Focused + full suite, typecheck, build, `git diff --check` pass locally; independent diff review before any merge. Results reported as local, not CI.
 
 ## 13. Risks, unresolved questions and explicit gates
@@ -257,11 +352,12 @@ All tests use fakes/mocked fetch/temp DBs; no live provider, socket or network.
 - **SDK/spec evolution:** 2026-07-28 deprecates Roots/Sampling/Logging and legacy HTTP+SSE (12-month window); avoid building on deprecated surfaces. Re-verify against current docs before implementation.
 - **Unresolved:** exact resource URI shapes and cursor encoding; whether to offer `legacy: 'reject'` for a strict endpoint (default to dual-era); Host/Origin allow-list policy for LAN clients; `requestState` key management if multi-round flows are added; conformance-test tooling selection. These are implementation-time decisions grounded in the cited official docs, not product-scope questions.
 - **No new third-party dependencies** without separate justification; `@modelcontextprotocol/node` is only needed for Node framework adapters, not for Hono/Bun web-standard mounting. The thin `packages/mcp-core` workspace package in §4.1 is a **recommendation for authorized M6-A implementation**, not something created by this documentation task; it reuses the existing SDK 2.4.0 and requires separate implementation authorization.
+- **Migration decision (revised):** the original M6 plan excluded database migrations. Durable, inspectable activity history (§9.1) cannot be delivered by the ephemeral console logger or by misusing catalog-sync/app_meta tables, so **one small additive SQLite migration for `mcp_activity` is the simplest correct solution** and is now proposed, not excluded. It reuses the existing Drizzle migration/repository/retention conventions; no event store, audit framework or new dependency. This is a design recommendation only — no migration is created in this documentation task.
 
 ## 14. Non-goals
 
 - M6 source implementation, transport code or dependency upgrades (this document is a plan).
 - Provider activation, live auth/network/sockets, Stage G verification, production-driver unlock.
 - Watchlist/alert/scanner workflow services (M7) or MCP mutation of operational config.
-- New database migrations, microservices, Redis/brokers, or a second frontend/API architecture.
+- Microservices, Redis/brokers, event stores, audit/telemetry platforms, or a second frontend/API architecture. (One small additive `mcp_activity` migration is proposed in §9.1/§13 as the minimal durable-history mechanism; it is not implemented here.)
 - Inventing standard MCP notification types or duplicating market-data calculations in MCP.

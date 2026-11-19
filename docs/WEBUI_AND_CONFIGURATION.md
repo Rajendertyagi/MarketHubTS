@@ -1,8 +1,8 @@
 # WebUI and Configuration
 
-> **Status:** Confirmed requirements and target design; current WebUI is a minimal health-display shell only.
-> **Last updated:** 2026-11-16
-> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
+> **Status:** Confirmed requirements and target design. Current WebUI already includes system overview, provider status, live-data, streaming-selection, historical-candle and option-chain-snapshot panels; MCP/Activity inspection is a planned M6 addition.
+> **Last updated:** 2026-11-19 (WebUI implementation reconciliation; no behavior change)
+> **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [M6_PLAN.md](M6_PLAN.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
 
 ## 1. Role
 
@@ -10,11 +10,14 @@ WebUI is the **human-facing interface** and the **operational control centre** f
 
 **Guiding principle:** keep the application simple to configure. Avoid hidden fixed policies and unnecessary technical complexity. Everything relevant to normal operation should be configurable through clearly organized WebUI settings, with sensible initial defaults. Follow [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) for UI separation of concerns, reusable components/tokens, and clear state ownership.
 
-## 2. Current implementation (verified scaffold)
+## 2. Current implementation (verified 2026-11-19)
 
-- `apps/web`: React 19 + Vite 8 shell, TanStack Router/Query, Tailwind CSS, Zustand dependency available.
-- Displays backend `/health` (status/service/version/database/timestamp) via dev proxy to API.
-- No operational configuration, no market data views, no charts/tables/watchlists/alerts/scanners UI.
+- `apps/web`: React 19 + Vite 8, TanStack Router/Query, Tailwind CSS, Zustand store.
+- **Tabs:** Overview, Live data, History & snapshots (`apps/web/src/App.tsx`).
+- **Overview:** real backend `/api/status` health/readiness with loading/error/retry states; connection info; **ProviderPanel** with Upstox/FYERS auth/streaming status and local-owner credential controls.
+- **Live data:** `LivePanel` (canonical-field-only live views over the SSE client) and `SubscriptionPanel` (streaming selections with local-owner PUT guard).
+- **History & snapshots:** `HistoricalPanel` (cached candles, derived coverage/gaps, unavailable periods, sync config, retention settings/cleanup) and `SnapshotPanel` (stored snapshots, capture config, manual capture).
+- All panels consume the local API and shared canonical contracts; no duplicate market interpretation. No charts, watchlists, alerts/scanners, full operational settings UI, or MCP/Activity inspection yet.
 
 ## 3. Operational configuration ownership (WebUI-owned)
 
@@ -50,6 +53,7 @@ AI/MCP **must not** modify these; all belong in WebUI:
 | Market-wide | Indices, VIX, breadth, sectors, FII/DII, participant OI, reports/bhavcopies, calendars/status (as available) |
 | Settings | All operational configuration areas listed above |
 | Diagnostics | Provider/system health, logs, connectivity, data freshness/availability |
+| MCP / Activity **(M6 planned)** | MCP transport availability; recent tool calls with filters (operation, time, outcome); duration and sanitized error detail; incomplete/interrupted operations; on-demand retrieval attempts and outcomes; navigation to stored candles/snapshots; notification/subscription activity shown separately from data-operation success |
 
 All modules consume **shared application services** and canonical data (no duplicate business logic).
 
@@ -93,4 +97,6 @@ Data-heavy views should use efficient rendering patterns (e.g. TanStack Table/Vi
 
 ## 9. Current gaps (to be implemented)
 
-All operational settings, market modules, customization persistence, charts, alerts/scanners/watchlists UI, diagnostics, and backup/restore UI are pending per roadmap.
+Operational settings, market modules, customization persistence, charts, alerts/scanners/watchlists UI, full diagnostics, backup/restore UI, and the M6 MCP/Activity inspection section are pending per roadmap. The existing Overview/Provider, Live data and History & snapshots panels are implemented (§2).
+
+**M6 MCP/Activity design:** a single section integrated into the existing navigation (no separate admin app) backed by a small durable `mcp_activity` SQLite table and WebUI-owned `ACTIVITY` retention class. It must show transport availability, recent calls with filters, detail with sanitized errors, incomplete operations, and links to stored data; data persistence and notification-delivery outcomes are shown separately. See [`M6_PLAN.md`](M6_PLAN.md) §9.1–§9.2.
