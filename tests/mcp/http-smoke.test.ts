@@ -65,6 +65,25 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "server/discover", params: {} })
       });
       expect(rejected.status).toBe(403);
+
+      // Real browser preflight: allowed origin, POST method and the three
+      // required modern MCP headers must be accepted by the existing CORS layer.
+      const preflight = await fetch(url, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type, mcp-protocol-version, mcp-method, mcp-name"
+        }
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+      const allowedMethods = preflight.headers.get("access-control-allow-methods") ?? "";
+      expect(allowedMethods).toContain("POST");
+      const allowedHeaders = (preflight.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+      for (const header of ["mcp-protocol-version", "mcp-method", "mcp-name"]) {
+        expect(allowedHeaders).toContain(header);
+      }
     } finally {
       if (client) await client.close();
       // Shutdown order: handler -> HTTP server -> DB.

@@ -144,6 +144,8 @@ async function main() {
     logger.error("startup_failed", { stage: "server", message });
     try { coordinator?.stop(); } catch {}
     try { hub?.stop(); } catch {}
+    // Close the MCP handler before the DB so no handler outlives its database.
+    try { if (mcpHandler) await mcpHandler.close(); } catch {}
     try { db?.close(); } catch {}
     process.exitCode = 1;
     return;
