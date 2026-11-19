@@ -131,6 +131,13 @@ This is a composition-only change; it must not alter M6-A transport, CORS, Host/
 
 Parameter translation (normative, from `M6_PLAN.md` §5.1): tool/resource `query` → service/repo `text`; external opaque `cursor`/`nextCursor` ↔ `afterCanonicalId` (last returned `canonical_id`); `limit` identical across layers.
 
+**Next-page detection (normative, all paginated seams):** catalog search, snapshot pages and event-feed reads use a **`limit + 1` lookahead** to decide whether `nextCursor` exists — never infer it from `results.length === limit`. Each seam fetches at most `limit + 1` rows/events in its declared order, returns only the first `limit` to the client, and sets `nextCursor` from the last returned item **iff** the extra `(limit + 1)`-th row exists; otherwise `nextCursor` is `null`. The lookahead row is discarded, not returned. This applies uniformly to:
+- `searchInstruments` (SQL `LIMIT limit + 1`, keyset on `canonical_id`);
+- `listSnapshotsPage` (SQL `LIMIT limit + 1`, keyset on `(capturedAt, id)`);
+- `readEventFeed` (bounded replay read of `limit + 1` events from retained history, keyset on revision).
+
+An empty page with `nextCursor: null` means end-of-results; a `snapshot-required` outcome is distinct and never conflated with an empty page. Tests must assert both cases: a full page with a following row yields `nextCursor`, and a full page that is the last yields `nextCursor: null`.
+
 ## 6. File scope
 
 **Modified in `packages/mcp-core`:**
@@ -185,7 +192,8 @@ Do not start a sub-phase without its own authorization. M6-B is not complete unt
 - Side-effect annotations and descriptions match §5.2 of `M6_PLAN.md`; on-demand operations never mutate operational config.
 - Cache hints present on all six cacheable results; deterministic `tools/list` order; opaque cursors; no extensions advertised; no MRTR/server-initiated requests.
 - `futures_chain`, `market_information` and `markethub://events/alerts` are discoverable and return an explicit `unavailable` result (no fabricated data, no empty success); they are documented as deferred to M7/later services.
-- Focused tests, `bun test`, `bun run typecheck`, `bun run build`, `git diff --check` pass; independent diff review before any merge.
+- Focused tests, `bun run typecheck`, `bun run build`, `git diff --check` pass; independent diff review before any merge.
+- **Full-suite acceptance (`bun test`):** require **no new failures compared with the documented Windows baseline**, not a zero-failure run. The verified baseline at the M6-A commit (`7860c7f`) has two unrelated `EBUSY` temp-dir cleanup failures in `tests/market/stage-f-timeout.test.ts` and `tests/market/supervisor.test.ts` (confirmed present on the parent commit `58036b7` too; those files contain no MCP imports and pass in isolation). M6-B passes this criterion when the full suite shows no failures beyond that baseline. Any new failure must be fixed before exit; fixing the baseline `EBUSY` failures is a separate, optional task and is not required for M6-B. Report the exact failure list and compare it to the baseline in the implementation report.
 - No provider activation, Stage G, M6-C/D/E work, new runtime dependency, or new infrastructure.
 
 ## 10. Risks and implementation-time decisions
