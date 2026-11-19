@@ -50,7 +50,7 @@ flowchart TB
   end
 
   subgraph Interfaces[Consumer Interfaces]
-    MCP[MCP Server\nStreamable HTTP + SSE events (planned)\nSTDIO (scaffold/compat)]
+    MCP[MCP Server\nStreamable HTTP + SSE events (mandatory M6 deliverable)\nSTDIO (retained for compatibility)]
     API[REST + SSE]
     UI[WebUI]
   end
@@ -168,9 +168,10 @@ flowchart TB
 ## 12. MCP service and transport architecture
 
 - MCP is a primary interface backed by **shared application services** (no separate market calculations).
-- **Planned transports (verify against current official MCP spec/SDK):** Streamable HTTP as primary network transport; SSE-based event/subscription delivery under current spec (including supported `subscriptions/listen` notifications such as `resources/updated` / list changes where applicable); assess legacy HTTP+SSE only for compatibility needs; retain/document STDIO per scaffold/compatibility.
+- **Transports (verified against current official MCP spec/SDK):** **Streamable HTTP is the primary network transport and a mandatory M6 deliverable** — it must be fully implemented and working at `/mcp` on the existing Hono/Bun app over localhost and the configured LAN interface, subject to Host/Origin security (M6-A). It is not optional or deferrable, and M6 cannot be declared complete without real-HTTP integration acceptance (M6-E). SSE-based event/subscription delivery under the current spec (including supported `subscriptions/listen` notifications such as `resources/updated` / list changes where applicable, read-after-notify, cursor/reconnect handling and multi-client isolation) is delivered **inside** Streamable HTTP (M6-D). **The deprecated legacy HTTP+SSE transport must not be implemented.** STDIO is retained for compatibility but is not a substitute for the HTTP transport. See [M6_PLAN.md](M6_PLAN.md) §1/§10–§12 and [MCP_INTERFACE.md](MCP_INTERFACE.md) §3.
 - **Alert/event delivery mechanism (target, verify):** durable MarketHub event records + discoverable resources/feeds + supported protocol notifications with read-after-notify, event IDs/cursors/sequence, reconnect recovery, independent multi-client consumption, and polling/tool fallback (see [MCP_INTERFACE.md](MCP_INTERFACE.md)).
 - Multiple simultaneous MCP clients; shared canonical data/services; one client’s subscriptions/disconnection must not corrupt another’s operation.
+- **Protocol target (mandatory product requirement):** MarketHub must support the **latest stable official MCP protocol**, not merely a working HTTP endpoint. Verified target `2026-07-28` / TypeScript SDK `2.4.0` (2026-11-19); re-verify at implementation start and retarget if a newer stable version exists. The complete mandatory server-side conformance matrix (C1–C21), optional-extension decisions and modern-vs-legacy policy are in [M6_PLAN.md](M6_PLAN.md) §3.1–§3.3. Modern behavior is mandatory; older compatibility is retained only where justified and tested. No deprecated feature (legacy HTTP+SSE, Roots, Sampling, Logging) is used for new functionality, and no unsupported extension is advertised. **M6 is not complete until the target revision's mandatory requirements are verified, Streamable HTTP works, and conformance tests pass.**
 - **Current scaffold:** STDIO server (`@modelcontextprotocol/server` 2.4.0, `serveStdio`) exposing `markethub_health` via local API. Verify exact v2.4.0 behavior for 2026-07-28 notification/listen support before implementation.
 
 ## 13. REST/SSE delivery architecture
