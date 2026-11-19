@@ -1,8 +1,12 @@
-import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@markethub/config";
+import { loadConfig, providerConfigFromAppConfig, redactConfigForLog, type AppConfig } from "@markethub/config";
 import {
   openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings,
-  SqliteSubscriptionRepository, SqliteCatalogRepository, type DatabaseHandle
+  SqliteSubscriptionRepository, SqliteCatalogRepository, checkDatabase, type DatabaseHandle
 } from "@markethub/database";
+import { healthStatusSchema } from "@markethub/contracts";
+import { nowIso } from "@markethub/shared";
+import { createMcpHandler } from "@modelcontextprotocol/server";
+import { createMcpServer, type McpServices } from "@markethub/mcp-core";
 import { MarketDataService, ProviderRegistry } from "@markethub/market-core";
 import { LiveEventHub } from "@markethub/realtime";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
@@ -20,6 +24,25 @@ let server: RunningServer | null = null;
 let db: DatabaseHandle | null = null;
 let hub: LiveEventHub | null = null;
 let coordinator: SubscriptionCoordinator | null = null;
+let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
+
+/** Build the HTTP-backed MCP services from the existing injected state. */
+function createHttpMcpServices(config: AppConfig, db: DatabaseHandle): McpServices {
+  return {
+    getHealth: async () => {
+      const parsed = healthStatusSchema.safeParse({
+        status: "ok",
+        service: "markethub-api",
+        timestamp: nowIso(),
+        version: config.version,
+        checks: { api: "ok", database: checkDatabase(db.sqlite) === "ok" ? "ok" : "error" }
+      });
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: { category: "internal", message: "Failed to build health status" } };
+    }
+  };
+}
 
 async function main() {
   const config = loadConfig();
@@ -102,10 +125,15 @@ async function main() {
   await fyersRuntime.start();
   await coordinator.start();
 
+  // M6-A: one handler for the process lifetime; its factory builds a fresh
+  // McpServer per request over the existing services. No second app/DB/provider.
+  const runtimeDb = db;
+  mcpHandler = createMcpHandler((ctx) => createMcpServer(ctx, createHttpMcpServices(config, runtimeDb)));
+
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
-    service, hub, coordinator
+    service, hub, coordinator, mcpHandler
   });
 
   try {
@@ -135,7 +163,12 @@ async function main() {
       try { hub?.stop(); } catch (error) {
         logger.warn("hub_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
-      // 5) close HTTP server; 6) close/checkpoint DB.
+      // 5) close the MCP handler and its in-flight exchanges before the HTTP
+      // server and DB go away — no MCP handler may outlive its database.
+      try { if (mcpHandler) await mcpHandler.close(); } catch (error) {
+        logger.warn("mcp_handler_close_error", { message: error instanceof Error ? error.message : String(error) });
+      }
+      // 6) close HTTP server; 7) close/checkpoint DB.
       try { if (server) await server.stop(true); } catch (error) {
         logger.warn("server_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }

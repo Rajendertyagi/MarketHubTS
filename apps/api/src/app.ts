@@ -25,6 +25,8 @@ import {
   type MarketDataService, type ProviderRegistry
 } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
+import type { McpHttpHandler } from "@modelcontextprotocol/server";
+import { registerMcpRoute } from "./mcp-routes";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
@@ -53,6 +55,8 @@ export interface AppDependencies {
   snapshotRepo?: SnapshotRepository;
   historicalService?: HistoricalCandleService;
   snapshotService?: OptionChainSnapshotService;
+  /** M6-A: the single application-owned MCP HTTP handler. */
+  mcpHandler?: McpHttpHandler;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -128,7 +132,7 @@ export function createApp(deps: AppDependencies) {
     cors({
       origin: corsOrigin(deps.config),
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowHeaders: ["Content-Type", "Authorization"],
+      allowHeaders: ["Content-Type", "Authorization", "MCP-Protocol-Version", "Mcp-Method", "Mcp-Name"],
       maxAge: 600
     })
   );
@@ -209,6 +213,12 @@ export function createApp(deps: AppDependencies) {
     return c.json(payload);
   });
 
+  // M6-A: register the MCP endpoint before static/SPA handlers so /mcp is never
+  // intercepted. The handler is created once by the application composition root.
+  if (deps.mcpHandler) {
+    registerMcpRoute(app, { handler: deps.mcpHandler, config: deps.config });
+  }
+
   const distDir = deps.webDistDir ?? resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
   const indexPath = resolve(distDir, "index.html");
   const serveWeb = deps.config.env === "production" && existsSync(indexPath);
@@ -218,7 +228,7 @@ export function createApp(deps: AppDependencies) {
     app.use("/*", serveStatic({ root: distDir }));
     app.get("*", async (c, next) => {
       const p = c.req.path;
-      if (p.startsWith("/api") || p === "/health" || p === "/ready") return next();
+      if (p.startsWith("/api") || p === "/health" || p === "/ready" || p === "/mcp") return next();
       if (c.req.method === "GET") {
         return c.html(await Bun.file(indexPath).text());
       }

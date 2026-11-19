@@ -1,0 +1,21 @@
+{
+    "name":  "@markethub/mcp-core",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "exports":  {
+                    ".":  "./src/index.ts"
+                },
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json --noEmit",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit"
+                },
+    "dependencies":  {
+                         "@markethub/contracts":  "workspace:*",
+                         "@modelcontextprotocol/server":  "2.4.0",
+                         "zod":  "4.6.7"
+                     },
+    "devDependencies":  {
+                            "typescript":  "7.0.2"
+                        }
+}

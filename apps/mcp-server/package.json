@@ -1,4 +1,4 @@
-﻿{
+{
     "name":  "@markethub/mcp-server",
     "version":  "0.1.0",
     "private":  true,
@@ -11,6 +11,7 @@
                 },
     "dependencies":  {
                          "@markethub/contracts":  "workspace:*",
+                         "@markethub/mcp-core":  "workspace:*",
                          "@modelcontextprotocol/server":  "2.4.0",
                          "zod":  "4.6.7"
                      },
