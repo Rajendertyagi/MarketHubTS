@@ -148,28 +148,32 @@
 ---
 
 ### M5 — Historical candles and option-chain snapshot persistence
+**Status:** **Offline implementation complete and published (Phases 1–4A); Phase 4B provider-backed activation is not activated and remains Stage-G gated.** Live REST verification has not been performed; live provider data availability is not established. See [`STAGE_5_PLAN.md`](STAGE_5_PLAN.md) §15 and [`PROJECT_STATUS.md`](PROJECT_STATUS.md) §3.12.
+
 **Objective:** reliable historical retrieval/caching and configurable option-chain snapshot capture/storage.
 
-**Prerequisites:** M2–M4 foundations as applicable; verified historical/expired/option-chain APIs and entitlements.
+**Prerequisites:** M2–M4 foundations as applicable; verified historical/expired/option-chain APIs and entitlements. **The offline phases did not require live verification**; provider capabilities/limits remain `UNVERIFIED` pending Stage G REST scenarios (plan §3A).
 
-**Key work:** historical request/sync workflows, local candle cache, gap fill from suitable provider, unavailable-period reporting; snapshot schema/store, WebUI capture config (underlying/expiry/strikes/capture independent of streaming), retention integration.
+**Key work (offline, implemented):** historical request/sync workflows, local candle cache, derived coverage and gap fill policy, unavailable-period reporting; snapshot schema/store, WebUI capture config (underlying/expiry/strikes/capture independent of streaming), retention integration; offline Upstox/FYERS REST adapters with mocked fetch; local API/WebUI (Phase 4A).
 
-**User-visible deliverables:** historical candle access/charts data source readiness; snapshot capture configuration and stored snapshot retrieval (per collected data).
+**User-visible deliverables (implemented):** cached historical reads and coverage status; snapshot capture configuration and stored snapshot retrieval (per collected data). No live provider data is exposed because no provider is connected.
 
-**Acceptance criteria:** cached candles preserved across disconnect/removal; missing periods handled/reported; snapshots stored separately per config; MCP on-demand does not mutate capture config; no pre-collection claims without provider support.
+**Acceptance criteria (offline portion met):** cached candles preserved across disconnect/removal; missing periods handled/reported; snapshots stored separately per config; on-demand requests do not mutate capture config; no pre-collection claims without provider support. **Provider-backed acceptance remains gated on Stage G.**
 
-**Verification:** persistence/restart tests, provider-unavailable tests, retention/cleanup tests.
+**Verification:** persistence/restart tests, provider-unavailable tests, retention/cleanup tests, mocked-fetch adapter tests — all offline and passing locally (see `PROJECT_STATUS.md` §3.12 for current figures; local verification, not CI).
 
-**Risks:** provider historical limits/entitlements, large data volumes, schema evolution.
+**Risks:** provider historical limits/entitlements, large data volumes, schema evolution — all remain unverified until Stage G.
 
-**Non-goals:** exhaustive broker DB replication.
+**Non-goals:** exhaustive broker DB replication; Phase 4B activation without Stage G authorization.
 
 ---
 
 ### M6 — MCP market-data and event interface (AI-first parity)
+**Status:** **Planned; research and execution-ready plan complete** in [`M6_PLAN.md`](M6_PLAN.md). Awaiting separate implementation authorization. No M6 source or transport implementation exists yet.
+
 **Objective:** comprehensive MCP access over shared services with correct transport/event behavior and permission boundaries.
 
-**Prerequisites:** M2–M5 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics (including `subscriptions/listen`, supported notifications, and `@modelcontextprotocol/server` v2.4.0 behavior).
+**Prerequisites:** M2–M5 service capabilities; verified MCP 2026-07-28 spec/SDK transport and subscription/event semantics (including `subscriptions/listen`, supported notifications, and the installed `@modelcontextprotocol/server` 2.4.0 behavior — confirmed from the lockfile and installed package, not assumed). M6 must work while M5 Phase 4B remains gated; it does not require provider activation.
 
 **Key work:** Streamable HTTP MCP endpoint (LAN), SSE-based event/subscription delivery as specified, STDIO compatibility, tool/resource/prompt set for discovery/quotes/depth/candles/option chains/futures/market-wide/freshness/on-demand, discoverable alert-event resources/feeds with cursor/sequence retrieval, multi-client support and isolation.
 

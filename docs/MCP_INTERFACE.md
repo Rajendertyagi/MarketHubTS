@@ -1,8 +1,8 @@
 # MCP Interface
 
-> **Status:** Target capability and transport design (confirmed requirements + established direction). Current implementation is a minimal STDIO health tool only. Items marked **(verify)** require official MCP spec/SDK verification.
-> **Last updated:** 2026-11-15
-> **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [REFERENCES.md](REFERENCES.md)
+> **Status:** Confirmed requirements + established direction. Current implementation remains a minimal STDIO health tool only. Official MCP 2026-07-28 / SDK 2.4.0 research is complete (2026-11-19) and recorded below and in [REFERENCES.md](REFERENCES.md) §8; the execution-ready plan is [M6_PLAN.md](M6_PLAN.md). Items still marked **(verify)** are implementation-time details, not unresolved product scope.
+> **Last updated:** 2026-11-19 (research reconciliation; no behavior change)
+> **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [REFERENCES.md](REFERENCES.md), [M6_PLAN.md](M6_PLAN.md)
 
 ## 1. Role and principles
 
@@ -16,23 +16,23 @@
 | Item | Status |
 |---|---|
 | App | `apps/mcp-server` |
-| SDK | `@modelcontextprotocol/server` 2.4.0 (v2), Zod 4 |
+| SDK | `@modelcontextprotocol/server` **2.4.0 (v2), Zod 4** — version confirmed 2026-11-19 from `bun.lock` and the installed package metadata, not assumed from the manifest |
 | Transport | STDIO via `serveStdio` from `@modelcontextprotocol/server/stdio` |
 | Tools | `markethub_health` (no inputs): fetches `${MARKETHUB_API_URL:-http://localhost:3001}/health`, validates against shared contract, returns result |
 | Behavior | Reuses local API (no duplicate logic); stdout reserved for protocol; diagnostics to stderr |
 
 **Not implemented:** Streamable HTTP, SSE event/subscription delivery, market data tools, watchlists/alerts/scanners tools, resources/prompts, multi-client HTTP serving, auth beyond local deployment model.
 
-## 3. Transport requirements (target, verify)
+## 3. Transport requirements (confirmed requirements + verified protocol behavior)
 
-| Transport | Requirement | Notes |
+| Transport | Requirement | Verified behavior (official docs / installed SDK, 2026-11-19) |
 |---|---|---|
-| Streamable HTTP | **Primary network transport** | For LAN/network access; **(verify)** exact 2026-07-28 semantics, headers, session/stateless behavior, multi-client operation |
-| SSE-based event/subscription delivery | **Required under current MCP spec** | For notifications/subscriptions/events as defined by current spec; **(verify)** mechanism (e.g. spec revisions evolved around subscriptions/streaming) |
-| Legacy HTTP+SSE | **Assess only if needed for existing client compatibility** | Do not confuse SSE notifications within Streamable HTTP with deprecated legacy HTTP+SSE transport; **(verify)** deprecation/compat status |
-| STDIO | **Retain/document** per scaffold and compatibility requirements | Useful for local hosts/process-spawned clients |
+| Streamable HTTP | **Primary network transport** for LAN access | 2026-07-28 is **stateless per request** (no `initialize`/`Mcp-Session-Id`); `createMcpHandler(factory)` serves it from a web-standard `{fetch, close, notify, bus}` handler, mountable on Hono via `c.req.raw`. Default `legacy: 'stateless'` also serves 2025-era traffic from the same factory; `legacy: 'reject'` is modern-only. Host/Origin validation must be added in front of the handler. |
+| SSE-based event/subscription delivery | **Required under current MCP spec** | In 2026-07-28, list_changed/resources/updated are delivered **only** on a client-opened `subscriptions/listen` stream; the server never sends unrequested notifications. Listen streams are SSE; clients then read data from resources/tools (read-after-notify). `resources/subscribe` is 2025-only; use the `resourceSubscriptions` listen filter on modern connections. |
+| Legacy HTTP+SSE | **Deprecated** (12-month offramp per spec announcement) | Do not confuse SSE notifications within Streamable HTTP with the deprecated legacy HTTP+SSE transport. No new implementation should adopt it. |
+| STDIO | **Retain** per scaffold and compatibility needs | `serveStdio(factory)` is the connection-pinned entry capable of 2026-07-28 (or both eras); the current code already uses it. A hand-built `server.connect(new StdioServerTransport())` would be 2025-era only. |
 
-**Verification required:** current official MCP specification (including 2026-07-28 revision where supported) and TypeScript SDK APIs/transport support before implementation claims.
+**Verified protocol/SDK facts** (see [M6_PLAN.md](M6_PLAN.md) §3 and [REFERENCES.md](REFERENCES.md) §8): installing SDK v2 does **not** enable 2026-07-28 by default — it is an explicit opt-in via `createMcpHandler`/`serveStdio`. The installed 2.4.0 exports `createMcpHandler`, `InMemoryServerEventBus`, `ServerEventBus`, `ServerNotifier`, `resourceUpdated(uri)`, `SubscriptionFilter`, `createRequestStateCodec` and Host/Origin validators. 2026-07-28 adds header routing (`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`), cache hints (`ttlMs`, `cacheScope`), MRTR (`inputRequired`), and cancellation by closing the request SSE stream. Roots/Sampling/Logging are deprecated. These are verified facts, not assumptions.
 
 ## 4. AI market-data capabilities (target)
 
@@ -109,7 +109,7 @@ All operational configuration belongs in WebUI.
 | Multi-client consumption | Multiple MCP clients consume independently with their own cursors/subscriptions; one client’s disconnect, lag, or cursor position must not affect others (client isolation). |
 | Polling/tool fallback | Clients that do not support required subscription/listen capability can poll/read alert-event resources or use ordinary MCP tools to retrieve history/events by cursor/time window. |
 
-**Protocol/SDK evidence (reviewed 2026-11-15):** MCP 2026-07-28 spec and TypeScript SDK v2 migration docs indicate `subscriptions/listen` delivers `tools/prompts/resources` `list_changed` and `resources/updated` notifications on client-opened streams; `createMcpHandler` provides `.notify.resourcesChanged()` / `.notify.resourceUpdated(uri)` over an event bus (custom `ServerEventBus` for multi-process deployments); `serveStdio` routes list-changed notifications onto active subscriptions; `resources/subscribe` is 2025-only on 2026 connections (use `resourceSubscriptions` in listen filter). **Verify exact `@modelcontextprotocol/server` v2.4.0 behavior and 2026-07-28 semantics before implementation.** See [REFERENCES.md](REFERENCES.md).
+**Protocol/SDK evidence (verified 2026-11-19):** MCP 2026-07-28 spec and the official TypeScript SDK support guide confirm `subscriptions/listen` delivers `tools/prompts/resources` `list_changed` and `resources/updated` **only** on client-opened streams; `createMcpHandler` returns `.notify.{toolsChanged,promptsChanged,resourcesChanged,resourceUpdated(uri)}` over an in-process `InMemoryServerEventBus` (custom `ServerEventBus` only for multi-process deployments — not needed for this monolith); `serveStdio` routes the pinned instance's list-changed calls onto active subscriptions; `resources/subscribe` is 2025-only on 2026 connections (use `resourceSubscriptions` in the listen filter). Graceful close sends the empty result before stream close (`McpSubscription.closed` resolves `graceful` vs `remote`). No arbitrary standard alert-trigger notification type should be invented. See [M6_PLAN.md](M6_PLAN.md) §6 and [REFERENCES.md](REFERENCES.md) §8.
 
 ## 9. Resources and prompts (target)
 
@@ -126,3 +126,13 @@ All operational configuration belongs in WebUI.
 ## 11. Parity requirement
 
 MCP, REST/SSE, and WebUI must present consistent canonical instrument and data state (same shared services/foundation). Acceptance tests must verify parity (see [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md)).
+
+## 12. Status separation (research reconciliation, 2026-11-19)
+
+**Confirmed requirements (product/owner):** MCP is a primary interface; one canonical service foundation; multiple isolated clients; no AI mutation of operational config; LAN HTTP without app-level login; parity with REST/SSE/WebUI; no fabricated market data. These are unchanged by the research.
+
+**Verified protocol/SDK behavior (official sources, not assumptions):** 2026-07-28 is stateless per request and explicit opt-in; `createMcpHandler` (HTTP) and `serveStdio` (STDIO) are the opt-in entries; `subscriptions/listen` is the only notification channel; supported notifications are tools/prompts/resources `list_changed` and `resources/updated`; `resources/subscribe` is 2025-only; Host/Origin validation is the application's responsibility; legacy HTTP+SSE and Roots/Sampling/Logging are deprecated. Installed SDK is 2.4.0 (lockfile + package metadata). See [M6_PLAN.md](M6_PLAN.md) §3 and [REFERENCES.md](REFERENCES.md) §8.
+
+**Implementation decisions (recommended, not yet implemented):** mount `createMcpHandler` on the existing Hono app at `/mcp` with `handler.fetch(c.req.raw)`; one `createMcpServer()` factory for HTTP and STDIO; default `legacy: 'stateless'` for dual-era compatibility; `InMemoryServerEventBus` (single process); read-after-notify with cursor-based resources; no new dependencies. Full rationale in [M6_PLAN.md](M6_PLAN.md) §4–§7.
+
+**Unresolved implementation-time questions (not product scope):** exact resource URI shapes/cursor encoding; whether to offer a strict `legacy: 'reject'` endpoint; LAN Host/Origin allow-list policy; `requestState` key management if multi-round flows are added; conformance-test tooling. Durable alert-event feeds depend on M7. None of these block the plan; they are resolved during authorized implementation against the cited official docs.

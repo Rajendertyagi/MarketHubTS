@@ -1,7 +1,7 @@
 # M5 (Stage 5) — Historical Candles and Option-Chain Snapshot Persistence Plan (Optimized)
 
-> **Status:** Planning only. No implementation, source/test modification, commit, push, merge, or DB change performed for M5. Awaiting independent review and explicit implementation authorization.
-> **Baseline:** M5 planning baseline `2e7ec2799ef73401f355075088501cd6dfdc2195` (the commit on which M5 planning began); `main` @ `865d86f393a29bc1ec8d455a51d9efa82d722c48`. Final reviewed Stage C state `e8ce409eddbaf50c1363dfa0d4e5bc9e82d31ddd`; original Stage C implementation `e236e254b90b390077613c7f055ae1bb070bd13e`. The active `develop` HEAD is intentionally not recorded here — re-check with `git log -1`.
+> **Status:** **M5 offline implementation complete and published.** Phases 1–4A (contracts/storage, canonical services, offline provider REST adapters with mocked fetch, and local API/WebUI) are implemented on `develop`. **Phase 4B (provider-backed activation) is NOT activated and remains Stage-G gated.** Live REST verification has not been performed; live provider data availability is not established. The current API composition deliberately wires empty provider collections — the existence of REST adapters does not mean providers are connected or that live historical/option-chain retrieval works in the running application. See §15 for the implementation-status record.
+> **Historical baseline (pre-implementation observations, not current state):** M5 planning baseline `2e7ec2799ef73401f355075088501cd6dfdc2195` (the commit on which M5 planning began); `main` @ `865d86f393a29bc1ec8d455a51d9efa82d722c48`. Final reviewed Stage C state `e8ce409eddbaf50c1363dfa0d4e5bc9e82d31ddd`; original Stage C implementation `e236e254b90b390077613c7f055ae1bb070bd13e`. The active `develop` HEAD is intentionally not recorded here — re-check with `git log -1`.
 > **Governing docs:** `AGENTS.md`, `PROJECT_MANAGER_PROTOCOL.md`, `ENGINEERING_STANDARDS.md` (canonical), `PRODUCT_REQUIREMENTS.md` §6.2–6.4, `DATA_LIFECYCLE_AND_STORAGE.md` §3–4, `IMPLEMENTATION_ROADMAP.md` M5, `ARCHITECTURE.md`, `MULTI_PROVIDER_STREAMING_ARCHITECTURE.md` §6.2/§7.1, `REFERENCES.md`.
 > **Revision:** optimized after independent architecture review — five tables (not six), derived coverage, offline adapter code, resolved v2 deprecation question. Refined with interval/session-aware gap labeling, manual-review conflict policy, explicit Stage G REST verification scenarios (§3A), exact test-file allocation, and a fail-closed retention fallback. Corrected daily/weekly/monthly/intraday gap semantics and separated transient throttling from permanent unavailability. Final corrections reconcile 503 `Retry-After` with the actual helper (minimal extension required), define `Retry-After: 0` and over-`max` handling, give known/unknown-reset cooldowns an exact non-blocking lifecycle, and scope quotas correctly — Upstox per API (not the "Other Standard APIs" heading), FYERS per documented category, with the repeated-limit daily block represented as a separate account-level REST restriction spanning all three REST categories (WebSocket impact and counter/reset details unverified, deferred to Stage G).
 
@@ -11,7 +11,9 @@ M5 delivers two persistent lifecycles — **historical candles** and **option-ch
 
 Preserved without change: Stage C structural-adapter seam, AD-024 foundation, `isLocalPeer` local-owner boundary, `fetchWithTimeout`/`fetchWithRetry`/`sanitizeError`, `app_meta` validated-read pattern, `SqliteProviderSettings` boundary, ComponentStore/service patterns, WebUI ownership of operational config, no fixed provider priority, MCP market tools are M6.
 
-## 2. Verified current state (inspected, not assumed)
+## 2. Historical baseline observations (pre-implementation; inspected at planning time, not current state)
+
+> The table below records what existed **before M5 implementation began**. It is preserved as the planning baseline and rationale for the design decisions in this plan; it is **not** a description of the current repository. Current status is in §15 and [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 | Area | Verified fact |
 |---|---|
@@ -286,12 +288,32 @@ All M5 tests are offline: fake providers, mocked `fetchImpl`, temp/in-memory DB,
 - FYERS repeated-limit daily account block: whether the >3 per-minute-breach counter aggregates across REST categories or is per-category, and the exact reset timezone/day boundary — official docs do not establish either; verify in Stage G before encoding. WebSocket (Data Socket/TBT) impact of the block is also unverified.
 - Re-run the full suite and record actual counts; the prior baseline was not re-verified in this review.
 
+## 15. Implementation status (verified from code, post-implementation)
+
+M5's offline implementation and corrective work are published on `develop`. This section records actual status; the architectural decisions, rationale, Stage G scenarios (§3A) and authorization requirements above are preserved unchanged.
+
+| M5 area | Status |
+|---|---|
+| Contracts and persistence (Phase 1) | **Implemented** — five tables + additive migration `0005`, repositories, validated `app_meta` retention |
+| Historical candle services and coverage (Phase 2) | **Implemented** — canonical service, derived coverage, interval-aware unconfirmed gaps, first-write-wins/conflicts |
+| Option-chain snapshot persistence and services (Phase 2) | **Implemented** — canonical envelope, capture config, on-demand immutability, deletion safety |
+| Upstox and FYERS offline REST adapters (Phase 3) | **Implemented with mocked fetch** — no live requests; documented contracts encoded; capabilities remain `UNVERIFIED` |
+| Local API and WebUI (Phase 4A) | **Implemented** — cached reads, config CRUD, retention, manual capture with fakes, local-owner-only writes |
+| Provider-backed activation (Phase 4B) | **Not activated; Stage G gated** — no live provider wiring, auth, sockets or network |
+| Live REST verification (§3A) | **Not performed** — all §3A scenarios remain pending separate authorization |
+| Live provider data availability | **Not established** — no live historical or option-chain data has been retrieved |
+
+**Important:** `apps/api/src/app.ts` composes `HistoricalCandleService` and `OptionChainSnapshotService` with **empty provider collections**. The REST adapters exist as offline, tested code, but no provider is connected in the running application; on-demand historical/capture requests honestly report no provider. This is deliberate: activation requires Stage G authorization and a separately reviewed change to the locked boundary. M6 must work against existing cached/stored data and honest empty/unavailable states without using MCP as a reason to activate providers.
+
+Post-implementation corrections (offline, no live access) addressed provider request contracts, exact option-chain expiry selection, India-local calendar-date handling, strict date validation, retry/cooldown semantics and shared FYERS cooldown ownership; each has deterministic regression tests. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) §3.12 and [`REFERENCES.md`](REFERENCES.md) for current verification figures and sources.
+
 ## Steps
 
-- [ ] Obtain M5 implementation authorization and Stage G authorization for Phase 4B, including the separate M5 REST verification scenarios in §3A
-- [ ] Phase 1: contracts (`historical.ts`, `snapshots.ts`), migration `0005`, five tables + validated `app_meta` retention, repositories
-- [ ] Phase 2: `HistoricalCandleService` + pure `gaps.ts` + `OptionChainSnapshotService` with fake-provider tests
-- [ ] Phase 3: Upstox/FYERS REST + option-chain adapters with mocked-fetch tests (offline; status stays UNVERIFIED)
-- [ ] Phase 4A: local API routes and WebUI config/capture panels with offline tests
-- [ ] Phase 4B: provider-backed activation + integration tests after Stage G verification
-- [ ] Run focused + full suite, typecheck, build, `git diff --check`; independent diff review before merge
+- [x] Obtain M5 implementation authorization (offline phases 1–4A implemented and published)
+- [ ] Stage G authorization for Phase 4B, including the separate M5 REST verification scenarios in §3A (still required; not performed)
+- [x] Phase 1: contracts (`historical.ts`, `snapshots.ts`), migration `0005`, five tables + validated `app_meta` retention, repositories
+- [x] Phase 2: `HistoricalCandleService` + pure `gaps.ts` + `OptionChainSnapshotService` with fake-provider tests
+- [x] Phase 3: Upstox/FYERS REST + option-chain adapters with mocked-fetch tests (offline; status stays UNVERIFIED)
+- [x] Phase 4A: local API routes and WebUI config/capture panels with offline tests
+- [ ] Phase 4B: provider-backed activation + integration tests after Stage G verification (gated; not started)
+- [x] Run focused + full suite, typecheck, build, `git diff --check`; independent diff review before merge
