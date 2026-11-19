@@ -66,8 +66,8 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
       });
       expect(rejected.status).toBe(403);
 
-      // Real browser preflight: allowed origin, POST method and the three
-      // required modern MCP headers must be accepted by the existing CORS layer.
+      // Real browser preflight: allowed origin, POST method, content-type and
+      // the three required modern MCP headers must be accepted by the CORS layer.
       const preflight = await fetch(url, {
         method: "OPTIONS",
         headers: {
@@ -81,7 +81,7 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
       const allowedMethods = preflight.headers.get("access-control-allow-methods") ?? "";
       expect(allowedMethods).toContain("POST");
       const allowedHeaders = (preflight.headers.get("access-control-allow-headers") ?? "").toLowerCase();
-      for (const header of ["mcp-protocol-version", "mcp-method", "mcp-name"]) {
+      for (const header of ["content-type", "mcp-protocol-version", "mcp-method", "mcp-name"]) {
         expect(allowedHeaders).toContain(header);
       }
     } finally {
