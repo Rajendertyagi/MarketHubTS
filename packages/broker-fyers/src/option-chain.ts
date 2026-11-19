@@ -34,12 +34,12 @@ interface ExpiryEntry {
 }
 
 /**
- * Strictly parse the documented `expiryData` fields: `date` (DD-MM-YYYY) and
- * `expiry` (epoch-seconds string). The official option-chain page mentions an
- * `expiry_flag` in prose but does not document its type or meaning, the sample
- * response omits it, and the official SDK does not interpret it. It is
- * therefore ignored here — no selection decision is based on it.
- * Null means malformed/incomplete metadata.
+ * Strictly parse the documented `expiryData` fields: `date` (DD-MM-YYYY,
+ * display-only) and `expiry` (epoch-seconds string, used as the `timestamp`
+ * request parameter). The first-party FYERS skills reference documents
+ * `expiry_flag` as a string classification ("W" weekly, "M" monthly) — it is
+ * NOT a selection indicator, so it is ignored here: selection is by exact
+ * requested date, never by flag. Null means malformed/incomplete metadata.
  */
 function parseExpiryData(value: unknown): ExpiryEntry[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;

@@ -134,8 +134,9 @@ describe("FyersOptionChainAdapter — exact expiry selection", () => {
       { date: "29-01-2026", expiry: "1769644200" },
       { date: "26-02-2026", expiry: "1772073300" }
     ];
-    // The docs mention expiry_flag but do not define its type/meaning and the
-    // sample omits it. Any representation must not affect exact-date selection.
+    // The first-party FYERS skills reference documents expiry_flag as a string
+    // classification ("W" weekly, "M" monthly), not a selection indicator.
+    // Whatever its representation, it must not affect exact-date selection.
     const fetchImpl = async (u: string | URL | Request, init?: RequestInit): Promise<Response> => {
       calls.push({ url: String(u), method: String(init?.method ?? "GET"), body: init?.body as string | undefined });
       const timestamp = new URL(String(u)).searchParams.get("timestamp") ?? "";

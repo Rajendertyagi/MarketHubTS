@@ -28,10 +28,23 @@ export function istCalendarParts(epochMs: number): IstCalendarParts {
   };
 }
 
+/**
+ * Epoch ms of 00:00:00 UTC for explicit calendar components (month is 0-based).
+ * Uses setUTCFullYear instead of Date.UTC so four-digit years 0-99 are not
+ * remapped to 1900+year. Month overflow (e.g. month 12) still rolls into the
+ * following year, which is the desired behavior for next-month helpers.
+ */
+function utcMidnightMs(year: number, month: number, day: number): number {
+  const d = new Date(0);
+  d.setUTCFullYear(year, month, day);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 /** Epoch ms of 00:00:00 India-local time on the calendar date containing epochMs. */
 export function istDayStartMs(epochMs: number): number {
   const p = istCalendarParts(epochMs);
-  return Date.UTC(p.year, p.month, p.day) - IST_OFFSET_MS;
+  return utcMidnightMs(p.year, p.month, p.day) - IST_OFFSET_MS;
 }
 
 /** Epoch ms of 00:00:00 India-local time on Monday of the week containing epochMs. */
@@ -45,21 +58,22 @@ export function istWeekStartMs(epochMs: number): number {
 /** Epoch ms of 00:00:00 India-local time on the 1st of the month containing epochMs. */
 export function istMonthStartMs(epochMs: number): number {
   const p = istCalendarParts(epochMs);
-  return Date.UTC(p.year, p.month, 1) - IST_OFFSET_MS;
+  return utcMidnightMs(p.year, p.month, 1) - IST_OFFSET_MS;
 }
 
 /** Epoch ms of 00:00:00 India-local time on the 1st of the following month. */
 export function nextIstMonthStartMs(epochMs: number): number {
   const p = istCalendarParts(epochMs);
-  return Date.UTC(p.year, p.month + 1, 1) - IST_OFFSET_MS;
+  return utcMidnightMs(p.year, p.month + 1, 1) - IST_OFFSET_MS;
 }
 
 /** `YYYY-MM-DD` India-local calendar date for an absolute epoch-ms timestamp. */
 export function istDateString(epochMs: number): string {
   const p = istCalendarParts(epochMs);
+  const yyyy = String(p.year).padStart(4, "0");
   const mm = String(p.month + 1).padStart(2, "0");
   const dd = String(p.day).padStart(2, "0");
-  return `${p.year}-${mm}-${dd}`;
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 /** Number of days in a month (month is 1-based). Leap years follow the Gregorian rule. */
@@ -80,10 +94,7 @@ export function parseIstDateOnly(date: string): number {
   if (!match) return NaN;
   const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
   if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return NaN;
-  const utcMidnight = new Date(0);
-  utcMidnight.setUTCFullYear(year, month - 1, day);
-  utcMidnight.setUTCHours(0, 0, 0, 0);
-  const ms = utcMidnight.getTime() - IST_OFFSET_MS;
+  const ms = utcMidnightMs(year, month - 1, day) - IST_OFFSET_MS;
   return Number.isFinite(ms) ? ms : NaN;
 }
 

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { istCalendarParts, parseIstDateOnly, parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig } from "../../packages/contracts/src/index";
+import {
+  istCalendarParts, istDateString, istDayStartMs, istMonthStartMs, nextIstMonthStartMs,
+  parseIstDateOnly, parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig
+} from "../../packages/contracts/src/index";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
@@ -85,6 +88,24 @@ describe("India-local date-only range", () => {
 
     expect(Number.isFinite(parseIstDateOnly("9999-12-31"))).toBe(true);
     expect(istCalendarParts(parseIstDateOnly("0000-01-01")).year).toBe(0); // year 0 is a valid four-digit year
+  });
+
+  test("all IST boundary helpers avoid Date.UTC 0-99 remapping", () => {
+    // A timestamp whose IST calendar date is 0005-01-15.
+    const ts = parseIstDateOnly("0005-01-15");
+    expect(istCalendarParts(istDayStartMs(ts))).toMatchObject({ year: 5, month: 0, day: 15 });
+    expect(istCalendarParts(istMonthStartMs(ts))).toMatchObject({ year: 5, month: 0, day: 1 });
+    expect(istCalendarParts(nextIstMonthStartMs(ts))).toMatchObject({ year: 5, month: 1, day: 1 });
+
+    // December of year 0099 rolls into year 0100 for the next-month helper.
+    const dec = parseIstDateOnly("0099-12-10");
+    expect(istCalendarParts(nextIstMonthStartMs(dec))).toMatchObject({ year: 100, month: 0, day: 1 });
+  });
+
+  test("istDateString zero-pads years below 1000", () => {
+    expect(istDateString(parseIstDateOnly("0005-01-15"))).toBe("0005-01-15");
+    expect(istDateString(parseIstDateOnly("0099-12-31"))).toBe("0099-12-31");
+    expect(istDateString(parseIstDateOnly("2026-01-05"))).toBe("2026-01-05");
   });
 });
 
