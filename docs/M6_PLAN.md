@@ -10,7 +10,7 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 
 **In scope:** transport/server lifecycle (Streamable HTTP on the existing Hono app + STDIO compatibility), tools/resources/prompts over shared services (mostly reads; on-demand retrieval/capture annotated per §5.2), `subscriptions/listen` event delivery with read-after-notify, multi-client behavior, parity/security/conformance acceptance.
 
-**Out of scope:** M6 source implementation (this is a plan), provider activation (M5 Phase 4B / Stage G), live provider auth/network/sockets, watchlist/alert/scanner workflow services (M7), new third-party dependencies (the thin shared workspace package in §4.1 reuses the existing SDK version), new database migrations, production-driver unlock, MCP mutation of operational configuration.
+**Out of scope:** M6 source implementation (this is a plan), provider activation (M5 Phase 4B / Stage G), live provider auth/network/sockets, watchlist/alert/scanner workflow services (M7), new third-party dependencies (the thin shared workspace package in §4.1 reuses the existing SDK version), production-driver unlock, MCP mutation of operational configuration. **Database migrations are out of scope except for one narrow exception:** a single additive SQLite migration for the `mcp_activity` table is permitted within M6-C (§9.1, §13). That exception does not authorize any other schema change; further migrations require separate justification. The activity table remains a design — no migration or schema is created in this documentation task.
 
 **M6 must work while M5 Phase 4B remains gated.** It operates on cached/stored data and honest empty/unavailable states; it is not a reason to connect providers.
 
@@ -40,7 +40,7 @@ Access date **2026-11-19** for all sources below.
 | Official spec announcement | https://blog.modelcontextprotocol.io/posts/2026-07-28/ | No handshake/session (`initialize`/`Mcp-Session-Id` retired); header routing (`Mcp-Method`, `Mcp-Name`); MRTR replaces server→client requests; cacheable list results (`ttlMs`, `cacheScope`); auth hardening; Tasks extension; Roots/Sampling/Logging and legacy HTTP+SSE deprecated with 12-month window; Tier-1 SDKs support the revision |
 | TypeScript SDK support guide | https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/support-2026-07-28.md | **Nothing in v2 puts 2026-07-28 on the wire by default** — explicit opt-in required. `createMcpHandler` serves 2026-07-28 per request (default `legacy: 'stateless'` also serves 2025; `legacy: 'reject'` modern-only). `serveStdio(factory)` is connection-pinned and serves 2026-07-28 or both eras. `subscriptions/listen` is the only channel for list_changed/resources/updated; `.notify.{toolsChanged,promptsChanged,resourcesChanged,resourceUpdated(uri)}`; `ServerEventBus`/`InMemoryServerEventBus`; `resources/subscribe` is 2025-only (use `resourceSubscriptions` listen filter). Cancellation closes the request SSE stream. `requestState` replaces session state (opaque/untrusted; seal with `createRequestStateCodec`). Origin/Host validation must be added in front of the handler. |
 | TypeScript SDK releases | https://github.com/modelcontextprotocol/typescript-sdk/releases | 2.4.0 is the latest release (23 Oct); `@modelcontextprotocol/server@2.4.0`, `core@2.4.0`, `node@2.1.2`; 2.4.0 notes include `ServerEvent` optional params for listen-router forwarding, `createMcpHandler` `Allow: POST` on 405, modern-revision binding fix for per-request transports |
-| Installed SDK source (local) | `node_modules/.bun/@modelcontextprotocol+server@2.4.0/.../dist/` | `FIRST_MODERN_PROTOCOL_VERSION = "2026-07-28"`, `MODERN_WIRE_REVISION = "2026-07-28"`; core `LATEST_PROTOCOL_VERSION = "2025-11-25"`, `DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"`, `SUPPORTED_PROTOCOL_VERSIONS = [2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07]`; `SUPPORTED_MODERN_PROTOCOL_VERSIONS = ["2026-07-28"]`. Exports include `createMcpHandler`, `McpServer`, `InMemoryServerEventBus`, `ServerEventBus`, `ServerNotifier`, `WebStandardStreamableHTTPServerTransport`, `PerRequestHTTPServerTransport`, `SubscriptionFilter`, `resourceUpdated` notifier, `hostHeaderValidationResponse`/`originValidationResponse`, `createRequestStateCodec`. |
+| Installed SDK source (local) | `node_modules/.bun/@modelcontextprotocol+server@2.4.0/.../dist/` and `@modelcontextprotocol+core@2.4.0/.../dist/` | **Server** dist (`src-*.mjs`, verified): `FIRST_MODERN_PROTOCOL_VERSION = "2026-07-28"`, `MODERN_WIRE_REVISION = "2026-07-28"`, `SUPPORTED_MODERN_PROTOCOL_VERSIONS = [FIRST_MODERN_PROTOCOL_VERSION]` (i.e. `["2026-07-28"]`). **Core** dist (`internal.d.mts`, `schemas-*.mjs`, verified): `LATEST_PROTOCOL_VERSION = "2025-11-25"`, `DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"`, `SUPPORTED_PROTOCOL_VERSIONS = [2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07]`. Note the modern constants are **server**-package, not core; core's constants are the legacy-era set. Available in the installed 2.4.0 dist (exported from `index.d.mts` or defined in server dist modules): `createMcpHandler`, `McpServer`, `InMemoryServerEventBus`, `ServerEventBus`, `ServerNotifier` (with `resourceUpdated(uri)`), `WebStandardStreamableHTTPServerTransport`, `PerRequestHTTPServerTransport` (class in `createMcpHandler-*.d.mts`), `SubscriptionFilter` (type in `mcp-*.d.mts`), `hostHeaderValidationResponse`/`originValidationResponse`, `createRequestStateCodec`. |
 
 ### Confirmed behavior vs assumptions rejected
 
@@ -64,8 +64,8 @@ Access date **2026-11-19** for all sources below.
 ```
 packages/mcp-core  ->  @markethub/contracts, @markethub/market-core (service types),
                        @modelcontextprotocol/server@2.4.0, zod
-apps/mcp-server    ->  packages/mcp-core  (calls serveStdio(createMcpServer))
-apps/api           ->  packages/mcp-core  (calls createMcpHandler(createMcpServer))
+apps/mcp-server    ->  packages/mcp-core  (serveStdio((ctx) => createMcpServer(ctx, stdioServices)))
+apps/api           ->  packages/mcp-core  (createMcpHandler((ctx) => createMcpServer(ctx, httpServices)))
 ```
 
 `packages/mcp-core` must not import `apps/api` or `apps/mcp-server`. The SDK dependency is declared in `packages/mcp-core` at the **existing 2.4.0 version**; `apps/mcp-server` retains its existing declaration for `serveStdio` (same version, deduped by Bun workspaces). No version change or new third-party dependency is introduced.
@@ -112,11 +112,58 @@ Both transports must reach the **same canonical capabilities** without duplicati
 
 **Why this interface is justified:** without it, shared registration would either import one app into the other (forbidden) or duplicate the tool set per transport. `McpServices` is the smallest seam that lets one registration implementation serve both transports while keeping dependency direction acyclic. It is not a general-purpose plugin system.
 
-- **HTTP (primary LAN transport):** in `apps/api`, register a single route (e.g. `POST/GET/DELETE /mcp`) that delegates to `createMcpHandler(createMcpServer).fetch(c.req.raw)`. The handler is web-standard and explicitly supports Hono's `c.req.raw`. It serves 2026-07-28 per request; default `legacy: 'stateless'` keeps 2025-era clients working through the same factory. Choose `legacy: 'reject'` only if a strict modern-only endpoint is required — default to dual-era for compatibility.
+#### 4.1.2 Normative `McpServices` contract (design)
+
+Shared registration calls only the operations below. Each returns canonical contract types where one exists, or a uniform `McpResult<T> = { ok: true; value: T } | { ok: false; error: { category: "validation" | "unavailable" | "provider" | "internal"; message: string } }` with sanitized messages (no credentials/raw arguments). `unavailable` is used for capabilities the local API does not expose or that are gated (e.g. M5 Phase 4B); it is never fabricated into data.
+
+| Operation | Purpose | Canonical basis / reuse |
+|---|---|---|
+| `getHealth()` | API/database health | `healthStatusSchema` (`packages/contracts`) |
+| `getProviderStatus()` | Composed auth/runtime/capability status | `providerStatusMapSchema` + `ProviderRegistry.getStatuses()` |
+| `searchCatalog({ text, limit, afterCanonicalId? })` | Bounded instrument discovery (§5.1); returns a bounded page + `nextCursor` aligned with §5.1/§5.3 | `CatalogRepository.searchInstruments` extension; canonical IDs only |
+| `getLiveSnapshot()` | Canonical live snapshot | `MarketDataService.getSnapshot()` / `liveSnapshotSchema` |
+| `getCachedCandles(req)` / `getCoverage(req)` | Cached reads + derived coverage | `HistoricalCandleService.getCached/getCoverageStatus` |
+| `fetchHistorical(req)` | On-demand retrieval (may cache candles) | `HistoricalCandleService.fetchOnDemand` |
+| `listSnapshots(filter)` / `getSnapshot(id)` | Stored snapshot reads | `OptionChainSnapshotService.listSnapshots/getSnapshot` |
+| `captureSnapshot(req)` | On-demand capture (persists `configId = null`) | `OptionChainSnapshotService.captureOnDemand` |
+| `readEventFeed({ after, limit })` | Bounded in-memory replay read (§6.1); returns `{ events, nextCursor, snapshotRequired? }` | `LiveEventHub` bounded history read seam |
+| `startActivity(rec)` / `completeActivity(rec)` | Durable activity recording (§9.1.1), best-effort/non-fatal | `McpActivityRepository` via API |
+
+`McpServicesHttp` implements these with direct in-process service/repository calls; `McpServicesStdio` implements them as thin local-API calls. Both use the same result/error shape so shared registration is transport-agnostic. Activity hooks are best-effort: a failure there never changes a data operation's outcome.
+
+#### 4.1.3 STDIO parity surface — capability-to-endpoint matrix (design)
+
+`McpServicesStdio` can only reach capabilities the local API exposes. Verified against `apps/api/src/app.ts` route registration (2026-11-19):
+
+| Capability | Local API today | M6 STDIO plan |
+|---|---|---|
+| Health | `GET /health` | Available now |
+| Provider status | `GET /api/providers/status` | Available now |
+| Live snapshot | `GET /api/market/snapshot` | Available now |
+| Historical cached/coverage | `GET /api/historical/candles`, `/coverage` | Available now |
+| Historical on-demand | `POST /api/historical/fetch` (loopback-guarded) | Available via local loopback; LAN MCP uses direct services (§8.1) |
+| Snapshot list/get | `GET /api/snapshots`, `/api/snapshots/:id` | Available now |
+| Snapshot on-demand capture | `POST /api/snapshots/capture` (loopback-guarded) | Available via local loopback |
+| Activity start/complete | none | **Add** `POST /api/mcp/activity/start` and `/complete` (§9.1.1) |
+| Activity list/detail (WebUI) | none | **Add** `GET /api/mcp/activity` (list), `GET /api/mcp/activity/:id` (by record id) and `GET /api/mcp/activity/by-operation/:operationId` (by correlation id) (§9.1.1) |
+| Catalog search | none (repository-level only) | **Add** bounded catalog search endpoint (§5.1) if catalog_search is in M6 scope; otherwise report unavailable over STDIO |
+| Event feed read | none (SSE stream only) | **Add** bounded feed-read endpoint (§6.1) or report unavailable over STDIO in M6 |
+| Futures / market-information | none | Unavailable in M6 (no shared service); report honestly |
+
+Parity acceptance is therefore qualified: **both transports expose the same capabilities where the local API provides them**; capabilities requiring new endpoints are either added in M6 phases or reported unavailable over STDIO, never silently reimplemented locally. The endpoint additions above are part of the M6 design, not existing implementation.
+
+**Per-capability decision rule (normative, for M6-B):** for `catalog_search` and `events/live` feed read, the implementer must record **one** of two outcomes per capability in the acceptance evidence: (a) the HTTP endpoint above is added in M6-B and both transports expose the capability, or (b) the capability is marked `unavailable` over STDIO with the deferral recorded. HTTP direct-service support alone does **not** satisfy STDIO parity. The default is (a) — add the endpoints — unless a documented reason prevents it. This decision is asserted by the parity tests (§11/§12): a capability in state (b) must be tested as `unavailable`, not silently omitted.
+
+**Normative contracts for the two new parity endpoints (design):**
+- `GET /api/catalog/search` — query `text` (non-empty), `limit` (default 25, max 100), optional `cursor` (keyset on `canonical_id`); response `{ instruments: CanonicalInstrument[], nextCursor: string | null }` with deterministic `canonical_id ASC` ordering. Read-only under the existing LAN access model; no `isLocalPeer` requirement. Reuses the §5.1 repository extension.
+- `GET /api/market/events` — query `after` (opaque cursor), `limit` (bounded); response `{ events: OutboundEvent[], nextCursor: string | null, snapshotRequired?: { reason: string } }` from the §6.1 `readAfter(cursor, limit)` seam. Explicit `snapshot-required` on expired/invalid/future cursor or empty history after restart; never a fabricated empty success. Read-only under the existing LAN access model. If these endpoints are not added in M6, `McpServicesStdio` reports catalog search and event feed reads as `unavailable` rather than inventing a local implementation.
+
+- **HTTP (primary LAN transport):** in `apps/api`, register a single route (e.g. `POST/GET/DELETE /mcp`) that delegates to `createMcpHandler((ctx) => createMcpServer(ctx, httpServices)).fetch(c.req.raw)`, where `httpServices` is the application-backed `McpServicesHttp` built from the existing injected services/repositories. The handler is web-standard and explicitly supports Hono's `c.req.raw`. It serves 2026-07-28 per request; default `legacy: 'stateless'` keeps 2025-era clients working through the same factory. Choose `legacy: 'reject'` only if a strict modern-only endpoint is required — default to dual-era for compatibility.
+- **Route registration order:** register the `/mcp` route **before** the production static/SPA catch-all in `apps/api/src/app.ts`. The existing `app.get("*")` fallback returns `index.html` for GETs not starting with `/api`, `/health` or `/ready`; `/mcp` must be added to that bypass list (or registered ahead of the fallback) so `GET /mcp` and all handler-required methods reach the MCP handler rather than the SPA. Handle every method the SDK entry needs (POST/GET/DELETE, plus OPTIONS preflight where applicable) at `/mcp`; do not let static or SPA handlers intercept them.
 - **Validation in front:** the SDK entry is deliberately validation-free. Add `hostHeaderValidationResponse`/`originValidationResponse` (with `localhostAllowedHostnames`/`localhostAllowedOrigins`) before `handler.fetch`, and respect the existing `isLocalPeer`/LAN policy for sensitive operations.
-- **STDIO (retain):** keep `serveStdio(() => createMcpServer())`. It is already the correct connection-pinned entry capable of 2026-07-28; no change is needed merely to preserve compatibility. Era selection depends on the client's opening exchange. Do not switch to a hand-built `server.connect(new StdioServerTransport())`, which would be 2025-era only.
-- **One factory, both transports:** `createMcpServer()` registers the same tools/resources/prompts for HTTP and STDIO so the eras cannot drift.
-- **Lifecycle:** call `handler.close()` on API shutdown to abort in-flight modern exchanges and close per-request instances; STDIO handle cleanup on process exit. Bounded resources: `maxSubscriptions` (SDK default 1024), `keepAliveMs` (default 15000), `maxRequestBodySize` (default 4 MiB) — configure explicitly rather than relying on defaults where operationally relevant.
+- **STDIO (retain):** keep `serveStdio((ctx) => createMcpServer(ctx, stdioServices))`, where `stdioServices` is the thin local-API-backed `McpServicesStdio`. It is already the correct connection-pinned entry capable of 2026-07-28; no change is needed merely to preserve compatibility. Era selection depends on the client's opening exchange. Do not switch to a hand-built `server.connect(new StdioServerTransport())`, which would be 2025-era only.
+- **One factory, both transports:** `createMcpServer(ctx, services)` registers the same tools/resources/prompts for HTTP and STDIO so the eras cannot drift; only the `McpServices` implementation differs. Neither transport creates a second application or independent database. Tool registration is never duplicated per transport.
+- **Lifecycle:** call `handler.close()` on API shutdown to abort in-flight modern exchanges and close per-request instances. For STDIO, retain the `serveStdio` handle (the current `apps/mcp-server/src/index.ts` discards it) and call its `close()` on process shutdown signals and relevant stdin end/close paths; do not leave the handle unreferenced. Bounded resources: `maxSubscriptions` (SDK default 1024), `keepAliveMs` (default 15000), `maxRequestBodySize` (default 4 MiB) — configure explicitly rather than relying on defaults where operationally relevant.
 - **Multi-client/stateless:** 2026-07-28 has no `Mcp-Session-Id`; each request is self-describing. Client-specific state belongs in `requestState` (sealed) or in the client's own listen stream — never in a global mutable map. No Redis/broker needed for a single-process monolith; `InMemoryServerEventBus` is sufficient.
 
 ### 4.2 HTTP event bridge ownership and lifecycle (Finding B)
@@ -124,16 +171,16 @@ Both transports must reach the **same canonical capabilities** without duplicati
 **Verified SDK behavior (installed 2.4.0 source + official support guide, accessed 2026-11-19):**
 - `McpServerFactory = (ctx: McpRequestContext) => McpServer | Server | Promise<...>`. `createMcpHandler` calls the factory **once per HTTP request**; `serveStdio` calls it **once per connection plus once for a discarded `server/discover` probe**. The factory therefore must be side-effect-free with respect to background work.
 - The `ServerEventBus` is owned by **`createMcpHandler`**, not by factory-created server instances. Each open `subscriptions/listen` stream registers a listener via `bus.subscribe()`; `handler.notify.{toolsChanged,promptsChanged,resourcesChanged,resourceUpdated(uri)}` publishes via `bus.publish()`. The SDK owns ack-first delivery, filtering, subscription-id stamping and teardown. `InMemoryServerEventBus` delivers synchronously to the live listener set; a throwing listener does not stop delivery to others, and an optional `onerror` callback reports listener errors.
-- `handler.close()` is idempotent: it closes all listen streams (`listenRouter.closeAll()`), closes all in-flight per-request server instances, clears its maps, and calls `onclose`. It does **not** own application-level subscriptions.
+- `handler.close()` is idempotent: it closes all listen streams via `listenRouter.closeAll()` (which writes the empty complete result before stream close — graceful teardown), closes/aborts other in-flight per-request server instances, clears its maps, and calls `onclose`. The public `McpHttpHandler.close()` type describes aborting in-flight modern exchanges; the graceful listen-stream completion is confirmed in the installed implementation (`dist/listenRouter-Bartj63y.mjs`), not only the type. It does **not** own application-level subscriptions.
 
-**Selected ownership:** the **application-wide event bridge is owned by `apps/api`**, created once at startup alongside `LiveEventHub` — never inside `createMcpServer()`. It holds exactly one subscription to the canonical change source (`MarketDataService.subscribe()` / `LiveEventHub` events) and maps canonical changes to `handler.notify.resourcesChanged()` / `resourceUpdated(uri)`. The bridge is the only component that translates application events into MCP-supported notifications; the factory only registers capabilities.
+**Selected ownership:** the **application-wide event bridge is owned by `apps/api`**, created once at startup alongside `LiveEventHub` — never inside `createMcpServer()`. Its single canonical subscription source is **`MarketDataService.subscribe()`** (the authoritative change notifications); `LiveEventHub` is the transport of those changes to REST/SSE clients, not a second source. The bridge maps each canonical change to `handler.notify.resourcesChanged()` / `resourceUpdated(uri)` for the affected resource (§5.3). It is the only component that translates application events into MCP-supported notifications; the factory only registers capabilities.
 
 **Sharing safety:** the handler's notifier/bus is handler-level state and is safe to share across all request-created server instances — those instances never touch the bus. The bridge publishes through the single `handler.notify` facade; no per-request listener is created. `InMemoryServerEventBus` is sufficient for this single-process monolith; a custom `ServerEventBus` would only be needed for multi-process deployments, which are out of scope.
 
 **Lifecycle and cleanup:**
 - **Init:** after `hub.start()` in `apps/api/src/index.ts`, create the MCP handler and bridge, then subscribe the bridge once. The bridge must not make provider calls at startup (offline-safe).
 - **Shutdown:** in the existing `shutdown()` function, use this order: (1) `await mcpHandler.close()` — closes MCP listen streams gracefully (empty result before stream close) and aborts in-flight exchanges; (2) unsubscribe the bridge listener; (3) `hub.stop()`; (4) `server.stop(true)`; (5) `db.close()`. `handler.close()` is idempotent, so repeated shutdown calls are safe.
-- **Errors:** bridge listener errors are reported through the SDK bus `onerror` callback and the existing logger; they never throw into SDK dispatch or stop delivery to other listeners. No duplicate event processing: one bridge subscription, one publish path. No unbounded listeners: the bridge owns one listener for the process lifetime; per-stream listeners are owned and torn down by the SDK listen router.
+- **Errors:** bridge listener errors are reported through the SDK bus `onerror` callback and the existing logger; they never throw into SDK dispatch or stop delivery to other listeners. With the default handler-created `InMemoryServerEventBus`, `onerror` is wired through the handler's `onerror` option; a custom `ServerEventBus` must wire its own error reporting. No duplicate event processing: one bridge subscription, one publish path. No unbounded listeners: the bridge owns one listener for the process lifetime; per-stream listeners are owned and torn down by the SDK listen router.
 
 ## 5. Tool, resource and prompt inventory
 
@@ -146,7 +193,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 - `market_snapshot` — canonical live snapshot from `MarketDataService` (quotes/depth via agreed canonical fields; no `value.native`).
 - `historical_candles` — cached candles + derived coverage/gaps from `HistoricalCandleService`; on-demand fetch only via the service's explicit request (never mutates sync config).
 - `option_chain_snapshot` — stored snapshots from `OptionChainSnapshotService`; on-demand capture returns data without changing capture config.
-- `futures_chain` / `market_information` — only where a shared service exists; otherwise report unavailable (do not fabricate).
+- `futures_chain` / `market_information` — **unavailable in M6** (no shared service exists in the current repository); report unavailable honestly, do not fabricate. They may be added later without changing MCP contracts.
 - `on_demand_retrieval` — grouped request for data not currently selected; success may cache candles per existing rules; never changes operational config.
 
 #### 5.1 Bounded `catalog_search` (Finding D)
@@ -161,6 +208,8 @@ Group related capabilities; do not create one tool per field. All capabilities g
 - **No accidental full-catalog reads:** the `markethub://catalog/instruments` resource must also require a query filter and a page bound; an unfiltered listing resource is not exposed.
 
 **Smallest repository-level extension needed:** add one method to `CatalogRepository` and `SqliteCatalogRepository`, e.g. `searchInstruments(query: { text: string; limit: number; afterCanonicalId?: string }): Promise<CanonicalInstrument[]>`. Implement with a bounded `LIKE` filter over canonical symbol/display name/identity key, `ORDER BY canonical_id ASC`, `LIMIT ?`, and a `canonical_id > afterCanonicalId` keyset predicate. This is a repository interface + implementation extension only — no new service layer, no new table or migration **for catalog search**. It is **not implemented in this task**.
+
+**Parameter translation (normative):** the external tool/resource `query` maps to service/repo `text`; the external opaque `cursor` / `nextCursor` is the last returned `canonical_id` and maps to/from service/repo `afterCanonicalId` (decode on input, encode on output). `limit` is identical across all layers. This keeps the tool/resource contract (§5.3), the `McpServices.searchCatalog` seam (§4.1.2), the HTTP endpoint (§4.1.3) and the repository extension consistent.
 
 #### 5.2 Data side effects and tool annotations (Finding F)
 
@@ -194,6 +243,30 @@ Group related capabilities; do not create one tool per field. All capabilities g
 
 **Boundary with M7:** M6 provides the **event-delivery foundation** (listen streams, supported notifications, discoverable feeds with cursors, read-after-notify) and read/on-demand data access (§5.2). Alert/scanner/watchlist definition, evaluation, trigger history and delivery-channel management are **M7** services; M6 does not implement them or invent alert-trigger notification types.
 
+#### 5.3 Normative capability inventory (design)
+
+Shared registration implements exactly this set. Inputs/outputs reuse existing contracts where available; `McpResult` is defined in §4.1.2. All tools report `unavailable` honestly when the underlying service/API lacks the capability (M5 Phase 4B gated, no futures/market-information service).
+
+| Capability | Kind | Input | Output | Side-effect class (§5.2) | Availability |
+|---|---|---|---|---|---|
+| `markethub_health` | tool | none | `healthStatusSchema` | read | existing |
+| `catalog_search` | tool | non-empty `query`, bounded `limit`, optional keyset `cursor` | canonical instruments + `nextCursor` | read | needs bounded search extension (§5.1) |
+| `provider_status` | tool | none | `providerStatusMapSchema` composition | read | existing |
+| `market_snapshot` | tool | optional canonical ID filter | `liveSnapshotSchema` (canonical fields only) | read | existing |
+| `historical_candles` | tool | `canonicalId`, `interval`, `from`/`to`, `mode: cached\|coverage\|onDemand` | candles + gaps / coverage status | read for cached/coverage; persistence for onDemand | existing services |
+| `option_chain_snapshot` | tool | `configId?`, `snapshotId?`, `mode: list\|get\|capture`, capture request fields | snapshot envelope(s) | read for list/get; persistence for capture | existing services |
+| `on_demand_retrieval` | tool | grouped request (instrument, data kind, range) | dispatch result referencing the specific tool outcome | persistence (delegates to historical/capture) | existing services; never mutates config |
+| `futures_chain`, `market_information` | tool | — | — | — | **unavailable in M6** (no shared service); report honestly |
+| `markethub://catalog/instruments` | resource template | `?query=&limit=&cursor=` | bounded instrument page | read | needs search extension |
+| `markethub://market/snapshot` | resource | none | `liveSnapshotSchema` | read | existing |
+| `markethub://historical/{canonicalId}/{interval}` | resource template | `?from=&to=` | candles + coverage | read | existing |
+| `markethub://snapshots/{configId?}` | resource template | `?cursor=` | snapshot page | read | existing |
+| `markethub://events/live` | resource | `?after=<cursor>` | bounded replay page or `snapshot-required` (§6.1) | read | in-memory only |
+| `markethub://events/alerts` | resource | — | — | — | **unavailable/contract-only in M6** (M7 dependency) |
+| `explain_market_snapshot`, `interpret_coverage_gaps`, `how_to_capture_snapshot` | prompt | guided args | text guidance calling tools above | read | existing |
+
+Event→notification mapping: canonical live changes map to `resources/updated` for the affected resource URI (e.g. `markethub://market/snapshot`, `markethub://historical/{id}/{interval}`) and `resources/list_changed` when the available resource set changes; clients then re-read the resource (read-after-notify). No custom notification types.
+
 ## 6. Subscription and event-delivery design
 
 - Use `subscriptions/listen` exactly as documented: the client opens a stream with a `SubscriptionFilter`; the server never sends unrequested notifications.
@@ -220,6 +293,8 @@ Group related capabilities; do not create one tool per field. All capabilities g
 
 **Honest cursor semantics for MCP resources:** live-event feed resources expose the in-memory hub cursor with explicit `snapshot-required` recovery; historical/snapshot resources use their own stored-data cursors. Resource descriptions must state which kind of cursor they use and that live cursors do not survive restart.
 
+**Feed read mechanism (design):** `LiveEventHub` currently exposes a stream-session API (`openStream`) and bounded in-memory history, not a stateless read-after-cursor method. M6 adds a narrow bounded history-read seam (e.g. `readAfter(cursor, limit)`) used only by the MCP feed resource handler: it returns events with revision > cursor from retained history, or an explicit `snapshot-required` (expired/invalid/future cursor, empty history after restart) or empty page. It must not create a client session or consume the SSE stream. Page size is bounded; the response envelope carries `events`, `nextCursor` and optional `snapshotRequired` reason. **Envelope cases (normative):** a normal page (including "no new events") returns `{ events: [...], nextCursor: string | null }` with **no** `snapshotRequired` field; a `snapshot-required` outcome returns `{ events: [], nextCursor: null, snapshotRequired: { reason } }` — never an empty success that could be mistaken for "no new events". `markethub://events/alerts` is **unavailable/contract-only in M6** (durable alert records are M7); the resource handler reports unavailable rather than returning empty data that could be mistaken for "no alerts".
+
 ## 7. Multi-client and lifecycle behavior
 
 - Stateless per-request handling means multiple clients share the same factory and services without session coupling; no cross-client mutable state.
@@ -244,6 +319,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 - **Host/Origin validation** protects the MCP HTTP handler against DNS rebinding and invalid-origin requests. Use the SDK's `hostHeaderValidationResponse(req, allowedHostnames)` and `originValidationResponse(req, allowedOriginHostnames)` (verified signatures in installed 2.4.0). The convenience helpers `localhostAllowedHostnames()` / `localhostAllowedOrigins()` are **localhost-only** and therefore insufficient for LAN clients — build the allowlist from validated config (`config.host`, configured LAN host/IP, and the API/Web origins) at startup.
 - **Existing loopback-only management controls remain intact.** MCP tools must not call credential/config management routes or bypass `isLocalPeer`; MCP capabilities are side-effect-free reads plus on-demand retrieval/capture through shared services (§5.2), never management operations.
 - **Do not apply `isLocalPeer()` to all read-only MCP requests** — that would incorrectly reject legitimate private LAN MCP clients. Apply it only where the existing application already requires local-owner management.
+- **HTTP MCP on-demand operations use direct in-process service calls**, not the loopback-guarded REST routes (`POST /api/historical/fetch`, `POST /api/snapshots/capture`). Those REST guards remain unchanged and are **not** the MCP enforcement point; MCP's boundary is the read-only/on-demand-vs-config-management distinction above. STDIO calls localhost and would pass `isLocalPeer`, but it likewise uses the dedicated activity/API endpoints, not a proxy of management routes. Implementers must not route MCP HTTP through the guarded REST endpoints, or LAN clients would be wrongly blocked.
 - **Do not weaken credential/configuration protection**, and do not introduce application login/authentication or a new security framework. LAN exposure without app-level login remains the confirmed deployment model; document the risk.
 
 ## 9. Existing services and contracts to reuse
@@ -286,20 +362,55 @@ No new service layer: MCP is a thin adapter over these.
 | `summary_json` | Safe operation summary: canonical instrument ID, interval, provider attempts, snapshot ID, record counts — **no credentials, tokens, raw arguments or full market payloads** |
 | `data_result_ref` | Optional reference to the resulting stored record (e.g. snapshot ID / canonical ID + range) for WebUI navigation |
 
-**Lifecycle and correlation:** write a `started` record at operation entry and update it to a terminal status on completion (or mark `interrupted` on shutdown). A restart can therefore identify operations that never completed. Use one row per operation with `operation_id` for correlation rather than two rows, unless implementation evidence favours append-only start/finish rows — decide at implementation time and document.
+**Lifecycle and correlation (normative default):** one row per operation with a **unique `operation_id`**. Start inserts the row with `status = "started"`; complete updates the same row to a terminal status (`succeeded`/`failed`/`interrupted`) with `finishedAt`/`durationMs`. Duplicate start with the same `operation_id` is idempotent (no second row); a complete for an unknown `operation_id` is rejected. Timestamps are monotonic (`finishedAt >= startedAt`). On shutdown, in-progress rows may be marked `interrupted`; rows left `started` across a restart are detectable as incomplete. Deviations (e.g. append-only start/finish rows) require explicit rationale in implementation.
+
+**Bounds and indexes (normative default):** `summary_json`, `error_message` and `error_category` are size-bounded and sanitized server-side; oversized values are truncated or rejected, never stored raw. Indexes on `operation_id` (unique), `started_at`, `status`, `tool_name` and `transport` support the WebUI filters/pagination (§9.1.1) and the retention cutoff scan. No full market payloads, credentials, tokens or unrestricted arguments are stored.
 
 **Separate outcomes — critical:** a successful data operation that persists candles/snapshots must remain `succeeded` even if a subsequent notification publish fails. Notification delivery is a distinct outcome: record it in `summary_json` (e.g. `notification: "failed"`) or a separate optional field, never by flipping the data operation's status. Notification failures must not make persisted data appear failed.
 
-**Ownership:** an `McpActivityRepository` in `packages/database` owns writes/reads; the shared registration in `packages/mcp-core` records through `McpServices` (both HTTP and STDIO implementations write to the same local application DB via the API — STDIO records through an API endpoint, never by opening the DB itself). Bounded writes: one record per operation, no per-tick/per-notification rows.
+**Ownership:** an `McpActivityRepository` in `packages/database` owns writes/reads; the shared registration in `packages/mcp-core` records through `McpServices`. The API process owns the SQLite database and the repository. HTTP MCP uses the existing in-process repository through its application services. STDIO **never opens the database or imports the repository** — it sends activity start/completion through the local API. Bounded writes: one record per operation, no per-tick/per-notification rows.
 
-**Retention:** activity retention is configurable through the existing WebUI-owned `app_meta` retention settings, extended with an `ACTIVITY` class (max age days). Reuse `AppSettings` validated-read and the existing fail-closed cleanup pattern: missing/malformed/invalid settings disable cleanup and delete nothing. No hidden deletion policy; no silent discard of useful records. Cleanup is bounded and batched like the existing candle/snapshot cleanup.
+#### 9.1.1 Proposed STDIO activity API contract (design only)
+
+Two minimal internal endpoints on the existing Hono app, following current conventions (`isLocalPeer` guard, Zod `safeParse`, `apiErrorSchema` with `error`/`message`, 400/403 responses):
+
+- **Start operation — `POST /api/mcp/activity/start`**
+  - Request: generated `operationId` (client-generated correlation ID), `toolName`, `transport: "STDIO"`, optional `clientName`/`clientVersion`, `startedAt` (ISO), `summaryJson` (sanitized safe summary).
+  - Response: persisted activity record `id` and the echoed `operationId`.
+  - Validation: non-empty `operationId`/`toolName`, valid timestamp, summary size bound; reject unknown fields or oversized payloads.
+- **Complete operation — `POST /api/mcp/activity/complete`**
+  - Request: matching `operationId`, terminal `status` (`succeeded` | `failed` | `interrupted`), `finishedAt` (ISO), optional `errorCategory`/`errorMessage` (sanitized), optional `dataResultRef` (safe result reference).
+  - Response: the updated activity record `id` and final `status`.
+  - Validation: `operationId` must match an existing started record; status must be a terminal value; error fields sanitized server-side.
+- **List/query (WebUI read) — `GET /api/mcp/activity`**
+  - Query: bounded `limit` (default 25, max 100), keyset `cursor` (opaque, on `started_at`+`id`), optional filters `toolName`, `transport` (`HTTP`/`STDIO`), `status`, `from`/`to` (ISO timestamps). Deterministic order `started_at DESC, id DESC`.
+  - Response: `{ records: McpActivityView[], nextCursor: string | null }`. `McpActivityView` exposes only safe fields (id, operationId, toolName, transport, timestamps, duration, status, client name/version, sanitized error category/message, safe summary, `dataResultRef`) — never raw arguments, tokens or full payloads.
+  - Access: read-only under the existing LAN access model (no `isLocalPeer` requirement for reads); no new auth framework.
+- **Detail (WebUI read) — two canonical forms, both on dedicated paths (no dual-mode collection path):**
+  - `GET /api/mcp/activity/:id` — lookup by persisted record `id`.
+  - `GET /api/mcp/activity/by-operation/:operationId` — lookup by correlation `operationId` (unique per §9.1).
+  - Response: both detail forms return a **single `McpActivityView`** (404 if absent) using the safe-field allow-list. The collection path `GET /api/mcp/activity` is **always** the paginated `{ records, nextCursor }` list envelope and never accepts an `operationId` selector; there is no response-shape switching on a single path. Register the static `/by-operation` segment before the `/:id` route so it is not captured as a record id.
+  - `dataResultRef` maps to existing views: a snapshot ID opens the Snapshot panel record; a canonical ID + interval/range opens the Historical panel range. The WebUI performs this navigation client-side; the API returns only the reference, not joined market payloads.
+
+**Boundary and ownership:** the API process owns the DB and `McpActivityRepository`; STDIO uses these endpoints only. Use the existing loopback-only local-owner boundary (`isLocalPeer`) for these write endpoints, as with other local management writes. The WebUI reads activity through the normal application API under the existing LAN read model (read-only, no new auth). Never store access tokens, broker credentials, unrestricted raw arguments or complete market-data payloads. No OAuth, API-key infrastructure, new auth framework or generic audit platform.
+
+**Failure behavior (explicit):**
+- A temporary failure to record activity must **not** corrupt a successfully completed market-data operation. STDIO treats activity-write failure as a logged diagnostic, not a data-operation failure.
+- A successful data persistence result remains `succeeded` even if activity finalization or notification delivery fails; those are separate outcomes recorded in the activity record, not status flips.
+- A missing completion record remains detectable as `started`/incomplete after a restart; the WebUI highlights it.
+- No stronger durability guarantee is claimed than the implementation can provide: activity writes are best-effort at the STDIO boundary, with the API repository providing the actual persistence once a write is accepted.
+
+**Retention:** activity retention is configurable through the existing WebUI-owned `app_meta` retention settings. Extend `retentionSettingsSchema.classes` with an optional `ACTIVITY: { maxAgeDays: z.number().int().positive() }` alongside `CANDLE`/`SNAPSHOT`. Existing stored values without `ACTIVITY` remain valid (optional field) and simply have no activity cleanup until the owner configures it; malformed/invalid values still fail closed. Reuse `AppSettings` validated-read and the existing fail-closed cleanup pattern: missing/malformed/invalid settings disable cleanup and delete nothing. Add a bounded, batched `cleanupActivities(cutoffMs, batchLimit)` repository method invoked from the same cleanup path as candles/snapshots (extend `applyRetentionCleanup` to include an `activitiesDeleted` count), with an index on `started_at` for the cutoff scan. No hidden deletion policy; no silent discard of useful records. The WebUI retention panel gains an activity max-age field using the same validated save flow.
 
 ## 9.2 WebUI activity inspection and management (Finding C)
 
 **Verified current WebUI (2026-11-19):** `apps/web/src/App.tsx` already has three tabs — Overview, Live data, History & snapshots — with `ProviderPanel`, `LivePanel`, `SubscriptionPanel`, `HistoricalPanel` and `SnapshotPanel`. It is **not** a minimal health shell. `docs/WEBUI_AND_CONFIGURATION.md` is stale on this point and is corrected in this task.
 
 **Target addition — one "MCP / Activity" section integrated into the existing navigation** (no separate admin app or dashboard framework):
-- **Transport availability:** show whether HTTP MCP and STDIO MCP are configured/available, with honest "not implemented / not connected" states until M6-A lands.
+- **Transport availability — distinct, honest states per transport:**
+  - **HTTP MCP** (runs in the API process): `Not implemented` (current state until M6-A), then `Configured`, `Available`, or `Unavailable/error`. Once implemented, derive these from actual API handler/readiness information — never from package installation alone.
+  - **STDIO MCP** (separate process): `Not configured`, `Configured`, `Activity observed`, or `No recent activity / status unknown`. The WebUI cannot reliably infer that a separate STDIO process is currently running; durable activity records may provide evidence of *observed past activity*, but historical activity is **not** proof the process is currently running. Do not claim "connected" or "running" without an actual signal.
+  - No heartbeat service, polling solely to simulate STDIO connection status, background monitoring process, or new infrastructure component. HTTP readiness and STDIO process status are not interchangeable.
 - **Recent tool calls:** a bounded, paginated list from `mcp_activity` with tool name, transport, timestamp, duration, status and client name/version.
 - **Filters:** by operation/tool, time window and outcome (`succeeded`/`failed`/`interrupted`/`started`).
 - **Detail view:** correlation/operation ID, sanitized error category and message, safe summary, and whether the data was stored even if notification delivery failed.
@@ -312,8 +423,8 @@ No new service layer: MCP is a thin adapter over these.
 ## 10. Implementation phases and dependencies
 
 - **M6-A — Transport and server lifecycle.** Add `createMcpServer(ctx, services)` factory and the `McpServices` seam (§4.1.1); mount `createMcpHandler` on Hono `/mcp` with Host/Origin validation; retain `serveStdio(factory)` with the local-API `McpServicesStdio`; wire `handler.close()` into shutdown; explicit opt-in/era tests. Depends on: existing app lifecycle. No provider dependency.
-- **M6-B — Tools and resources over shared services.** Implement the tool/resource/prompt inventory; bounded catalog search (§5.1); on-demand retrieval/capture with accurate side-effect annotations (§5.2) and config immutability; honest unavailable states. Depends on: M6-A, M2/M4/M5 services (already present).
-- **M6-C — Durable activity history and WebUI inspection.** Add the single additive `mcp_activity` table + repository + `ACTIVITY` retention class (§9.1); record start/completion/correlation through `McpServices`; add the WebUI MCP/Activity section with filters, detail view and navigation to stored data (§9.2). Depends on: M6-A/B. This is the smallest correct way to make operations durable and inspectable.
+- **M6-B — Tools and resources over shared services.** Implement the normative capability inventory (§5.3) over the `McpServices` contract (§4.1.2); add the local-API endpoints needed for STDIO parity per the matrix (§4.1.3) — bounded catalog search (§5.1) and bounded feed read (§6.1) — or report those capabilities unavailable over STDIO; on-demand retrieval/capture with accurate side-effect annotations (§5.2) and config immutability; register `/mcp` before the SPA catch-all (§4). Depends on: M6-A, M2/M4/M5 services (already present).
+- **M6-C — Durable activity history and WebUI inspection.** Add the single additive `mcp_activity` table + repository + `ACTIVITY` retention class (§9.1); add the STDIO write endpoints and WebUI read endpoints (§9.1.1); record start/completion/correlation through `McpServices`; add the WebUI MCP/Activity section with filters, detail view and navigation to stored data (§9.2). Depends on: M6-A/B. This is the smallest correct way to make operations durable and inspectable.
 - **M6-D — Subscription/listen and event delivery.** Wire `ServerEventBus`/`notify`, listen filters, resource URIs, cursor-based feeds, read-after-notify, graceful close/reconnect; record notification outcomes separately from data outcomes (§9.1). Depends on: M6-B/C, `LiveEventHub`; alert feeds are contract-only until M7.
 - **M6-E — Parity, multi-client, security and conformance acceptance.** Cross-interface parity, multi-client isolation, permission-boundary tests, 2026/2025-era conformance, bounded-resource, activity-durability and shutdown tests. Depends on: M6-A–D.
 
@@ -326,7 +437,7 @@ New `tests/mcp/` suite (mirrors source areas; no live network):
 - `tools.test.ts` — each tool over fake/shared services (including on-demand retrieval/capture side effects); input validation; bounded catalog search limits/ordering/cursor; honest unavailable/empty states; on-demand config immutability; annotation accuracy.
 - `resources.test.ts` — resource URIs, cursor pagination, provenance/freshness fields, read-after-notify payloads.
 - `subscriptions.test.ts` — listen filter, supported notifications only, `resourceUpdated(uri)`, graceful vs remote close, reconnect from cursor, multi-client isolation, `maxSubscriptions` bound.
-- `parity.test.ts` — MCP vs REST/SSE vs WebUI canonical state from the same services; **both transports** (HTTP direct services and STDIO local-API client) reach the same capabilities with identical response semantics.
+- `parity.test.ts` — MCP vs REST/SSE vs WebUI canonical state from the same services; **both transports** (HTTP direct services and STDIO local-API client) reach the same capabilities with identical response semantics **where the local API exposes them** (§4.1.3); capabilities reported unavailable over STDIO are asserted as such, not silently omitted.
 - `security.test.ts` — no operational config mutation, no credential leakage, `isLocalPeer`/LAN boundary (LAN reads allowed, management still loopback-only), bounded inputs, cancellation/timeout.
 - `activity.test.ts` — durable activity records: start/completion correlation, status transitions (`started`/`succeeded`/`failed`/`interrupted`), sanitized error category/message, safe summary with no secrets or full payloads, restart recovery of incomplete operations, **data success preserved when notification delivery fails**, `ACTIVITY` retention fail-closed and bounded cleanup, WebUI query/filter/navigation reads.
 
@@ -335,7 +446,7 @@ All tests use fakes/mocked fetch/temp DBs; no live provider, socket or network.
 ## 12. Acceptance criteria
 
 - 2026-07-28 is explicitly opted in via `createMcpHandler`/`serveStdio`; default behavior and 2025 compatibility are tested, not assumed.
-- One factory backs HTTP and STDIO; no duplicate market logic; MCP consumes shared services only.
+- One factory backs HTTP and STDIO through the concrete `McpServices` contract (§4.1.2); no duplicate market logic; MCP consumes shared services only; parity holds where the local API exposes a capability (§4.1.3), with honest unavailable reporting otherwise.
 - Tool/resource inventory is grouped, discoverable, correctly annotated for side effects (§5.2), and reports availability/freshness/provenance honestly; no fabricated fields.
 - On-demand retrieval never mutates operational config; permission boundary tests pass.
 - `subscriptions/listen` delivers only supported notifications; clients read data from resources/feeds; no custom standard notification types; graceful close/reconnect and multi-client isolation pass.
