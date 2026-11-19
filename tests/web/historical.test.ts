@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig } from "../../packages/contracts/src/index";
+import { istCalendarParts, parseIstDateOnly, parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig } from "../../packages/contracts/src/index";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
@@ -44,6 +44,47 @@ describe("India-local date-only range", () => {
     expect(range!.toMs).toBe(Date.parse("2026-01-06T18:29:59.999Z"));
     expect(parseIstDateRange("2026-01-06", "2026-01-05")).toBeNull();
     expect(parseIstDateRange("not-a-date", "2026-01-05")).toBeNull();
+  });
+
+  test("valid ordinary dates and leap day are accepted", () => {
+    expect(Number.isFinite(parseIstDateOnly("2026-01-05"))).toBe(true);
+    expect(Number.isFinite(parseIstDateOnly("2024-02-29"))).toBe(true); // leap day
+    expect(parseIstDateOnly("2024-02-29")).toBe(Date.parse("2024-02-28T18:30:00.000Z"));
+    expect(Number.isFinite(parseIstDateOnly("2000-02-29"))).toBe(true); // century leap year
+  });
+
+  test("impossible calendar dates are rejected, not normalized", () => {
+    for (const invalid of [
+      "2025-02-29", // non-leap year
+      "1900-02-29", // century non-leap year
+      "2026-02-30", // February has at most 29 days
+      "2026-04-31", // April has 30 days
+      "2026-00-10", // month 00
+      "2026-13-10", // month 13
+      "2026-01-00", // day 00
+      "2026-01-32"  // day 32
+    ]) {
+      expect(Number.isNaN(parseIstDateOnly(invalid))).toBe(true);
+      expect(parseIstDateRange(invalid, "2026-01-05")).toBeNull();
+      expect(parseIstDateRange("2026-01-05", invalid)).toBeNull();
+    }
+  });
+
+  test("four-digit year boundaries are handled without Date.UTC 0-99 remapping", () => {
+    // Date.UTC(5, ...) would mean 1905; the four-digit string "0005" must mean year 5.
+    // Verify via IST calendar parts: 00:00 IST is the previous UTC day, so UTC
+    // getters would report year 4 for "0005-01-01".
+    const year5 = parseIstDateOnly("0005-01-01");
+    expect(Number.isFinite(year5)).toBe(true);
+    expect(istCalendarParts(year5)).toEqual({ year: 5, month: 0, day: 1, weekday: istCalendarParts(year5).weekday });
+
+    const year99 = parseIstDateOnly("0099-12-31");
+    expect(istCalendarParts(year99).year).toBe(99);
+    expect(istCalendarParts(year99).month).toBe(11);
+    expect(istCalendarParts(year99).day).toBe(31);
+
+    expect(Number.isFinite(parseIstDateOnly("9999-12-31"))).toBe(true);
+    expect(istCalendarParts(parseIstDateOnly("0000-01-01")).year).toBe(0); // year 0 is a valid four-digit year
   });
 });
 

@@ -29,12 +29,18 @@ function num(value: unknown): number | null {
 }
 
 interface ExpiryEntry {
-  date: string; // DD-MM-YYYY
-  expiry: string; // provider epoch seconds
-  flag?: number;
+  date: string; // DD-MM-YYYY (documented)
+  expiry: string; // provider epoch seconds (documented)
 }
 
-/** Strictly parse `expiryData`; null means malformed/incomplete metadata. */
+/**
+ * Strictly parse the documented `expiryData` fields: `date` (DD-MM-YYYY) and
+ * `expiry` (epoch-seconds string). The official option-chain page mentions an
+ * `expiry_flag` in prose but does not document its type or meaning, the sample
+ * response omits it, and the official SDK does not interpret it. It is
+ * therefore ignored here — no selection decision is based on it.
+ * Null means malformed/incomplete metadata.
+ */
 function parseExpiryData(value: unknown): ExpiryEntry[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   const out: ExpiryEntry[] = [];
@@ -43,11 +49,7 @@ function parseExpiryData(value: unknown): ExpiryEntry[] | null {
     const r = row as Record<string, unknown>;
     if (typeof r.date !== "string" || !/^\d{2}-\d{2}-\d{4}$/.test(r.date)) return null;
     if (typeof r.expiry !== "string" || !/^\d+$/.test(r.expiry)) return null;
-    out.push({
-      date: r.date,
-      expiry: r.expiry,
-      ...(typeof r.expiry_flag === "number" ? { flag: r.expiry_flag } : {})
-    });
+    out.push({ date: r.date, expiry: r.expiry });
   }
   return out;
 }
@@ -130,15 +132,21 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     const selected = matches[0]!;
 
     // Request 2: fetch the chain for the exact requested expiry timestamp.
+    // The documented `timestamp` request parameter selects "options chain data
+    // at timestamp"; passing the exact expiry epoch from discovery is the only
+    // documented way to select a specific expiry. Attribution of the envelope
+    // therefore rests on the request we made, NOT on response metadata.
     const selectedPayload = await this.get(selected.expiry, native) as {
       data?: { expiryData?: unknown; optionsChain?: unknown; callOi?: unknown; putOi?: unknown; indiavixData?: unknown }
     };
+    // Consistency check only: if the second response's available-expiry list
+    // no longer contains the expiry we selected, the response contradicts the
+    // documented selection contract. Presence in that list is NOT treated as
+    // proof that the returned rows belong to the expiry — live attribution
+    // semantics remain Stage G unverified.
     const returnedExpiries = parseExpiryData(selectedPayload.data?.expiryData);
     if (!returnedExpiries) throw new Error("EXPIRY_METADATA_INVALID");
-    const stillPresent = returnedExpiries.some((e) => e.expiry === selected.expiry);
-    const flagged = returnedExpiries.filter((e) => e.flag === 1);
-    const flagMismatch = flagged.length > 0 && !flagged.some((e) => e.expiry === selected.expiry);
-    if (!stillPresent || flagMismatch) throw new Error("EXPIRY_MISMATCH");
+    if (!returnedExpiries.some((e) => e.expiry === selected.expiry)) throw new Error("EXPIRY_MISMATCH");
 
     const envelope = this.parseBody(selectedPayload, request);
     clearFyersDataThrottle(this.cooldown);
@@ -186,7 +194,9 @@ export class FyersOptionChainAdapter implements OptionChainProvider {
     }
     return {
       underlyingCanonicalId: request.underlyingCanonicalId,
-      expiryDate: request.expiryDate, // verified against provider expiry metadata above
+      // Selected by exact expiry epoch in request 2; live row-level attribution
+      // is not established by the documented response contract (Stage G item).
+      expiryDate: request.expiryDate,
       capturedAt: new Date(this.now()).toISOString(),
       observationTimestamp: null, // no per-snapshot observation time in the response
       underlyingLtp,

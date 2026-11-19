@@ -62,12 +62,28 @@ export function istDateString(epochMs: number): string {
   return `${p.year}-${mm}-${dd}`;
 }
 
-/** Epoch ms of 00:00:00 India-local time for a `YYYY-MM-DD` date string. */
+/** Number of days in a month (month is 1-based). Leap years follow the Gregorian rule. */
+function daysInMonth(year: number, month: number): number {
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return lengths[month - 1] ?? 0;
+}
+
+/**
+ * Epoch ms of 00:00:00 India-local time for a `YYYY-MM-DD` date string.
+ * Rejects impossible calendar dates instead of letting Date normalize them
+ * (e.g. 2025-02-29 -> 2025-03-01). Four-digit years 0-99 are handled by
+ * setUTCFullYear, avoiding Date.UTC's 1900+ remapping for those years.
+ */
 export function parseIstDateOnly(date: string): number {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!match) return NaN;
   const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
-  const ms = Date.UTC(year, month - 1, day) - IST_OFFSET_MS;
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return NaN;
+  const utcMidnight = new Date(0);
+  utcMidnight.setUTCFullYear(year, month - 1, day);
+  utcMidnight.setUTCHours(0, 0, 0, 0);
+  const ms = utcMidnight.getTime() - IST_OFFSET_MS;
   return Number.isFinite(ms) ? ms : NaN;
 }
 
