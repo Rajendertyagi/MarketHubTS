@@ -1,6 +1,6 @@
 import type { LiveChangeEvent, LiveEventSource } from "@markethub/contracts";
 import type {
-  ClientSession, CursorInput, HubStats, IntervalScheduler, LiveEventHubOptions, OpenStreamResult, OutboundEvent
+  ClientSession, CursorInput, FeedReadResult, HubStats, IntervalScheduler, LiveEventHubOptions, OpenStreamResult, OutboundEvent
 } from "./types";
 
 /** Approximate retained payload size. UTF-16 length is a deterministic, documented proxy for bytes. */
@@ -267,6 +267,47 @@ export class LiveEventHub {
     }
 
     return { outcome: "session", session: client };
+  }
+
+  /**
+   * Stateless bounded read over retained replay history. No client session is
+   * created and no SSE stream is consumed, so existing SSE clients are untouched.
+   * Cursor semantics mirror openStream(): invalid / future / expired cursors and
+   * lost history after restart return snapshot-required, never an empty success.
+   * Uses limit + 1 lookahead to decide nextCursor.
+   */
+  readAfter(cursor: string | undefined, limit: number): FeedReadResult {
+    const bounded = Math.max(1, Math.min(Math.trunc(limit), 100));
+    const current = this.source.getSnapshot().revision;
+    const parsed = cursor === undefined
+      ? ({ kind: "none" } as ParsedCursor)
+      : parseCursorValue(cursor, "invalid-cursor");
+
+    if (parsed.kind === "invalid") return { outcome: "snapshot-required", reason: parsed.reason };
+
+    if (parsed.kind === "value") {
+      if (parsed.value > current) return { outcome: "snapshot-required", reason: "future-cursor" };
+      if (parsed.value < current) {
+        const oldest = this.history[0]?.revision;
+        if (oldest === undefined || oldest > parsed.value + 1) {
+          return { outcome: "snapshot-required", reason: "expired-cursor" };
+        }
+      }
+    }
+
+    // No cursor: start before the oldest retained event (all retained history).
+    // With no history at all, a fresh stream (revision 0) is a normal empty page;
+    // a non-zero revision with no history means replay was lost after restart.
+    const fromRevision = parsed.kind === "value" ? parsed.value : -1;
+    if (this.history.length === 0 && current > 0) {
+      return { outcome: "snapshot-required", reason: "expired-cursor" };
+    }
+
+    const candidates = this.history.filter((entry) => entry.revision > fromRevision);
+    const page = candidates.slice(0, bounded);
+    const hasMore = candidates.length > bounded;
+    const nextCursor = hasMore && page.length > 0 ? String(page[page.length - 1]!.revision) : null;
+    return { outcome: "page", events: page.map((entry) => entry.outbound), nextCursor };
   }
 
   closeSession(session: ClientSession): void {

@@ -1,4 +1,4 @@
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, sql, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   CanonicalInstrument,
@@ -229,6 +229,30 @@ export class SqliteCatalogRepository implements CatalogRepository {
   }
   async listInstruments(): Promise<CanonicalInstrument[]> {
     const rows = this.db.select().from(canonicalInstruments).all();
+    return rows.map((r) => {
+      const d = this.db.select().from(derivativeContracts).where(eq(derivativeContracts.canonicalId, r.canonicalId)).get();
+      return rowToInstrument(r, d ?? null);
+    });
+  }
+  async searchInstruments(query: { text: string; limit: number; afterCanonicalId?: string }): Promise<CanonicalInstrument[]> {
+    const text = query.text.trim();
+    if (!text) return [];
+    // Escape LIKE metacharacters so a literal '%' or '_' cannot broaden the search.
+    const escaped = text.replace(/[\\%_]/g, "\\$&");
+    const pattern = `%${escaped}%`;
+    const match = sql`(lower(${canonicalInstruments.canonicalSymbol}) like lower(${pattern}) escape '\\' or lower(${canonicalInstruments.displayName}) like lower(${pattern}) escape '\\' or lower(${canonicalInstruments.identityKey}) like lower(${pattern}) escape '\\')`;
+    const conds: SQL[] = [match];
+    if (query.afterCanonicalId !== undefined) {
+      conds.push(sql`${canonicalInstruments.canonicalId} > ${query.afterCanonicalId}`);
+    }
+    // limit + 1 lookahead: the caller discards the extra row and derives nextCursor.
+    const rows = this.db
+      .select()
+      .from(canonicalInstruments)
+      .where(and(...conds))
+      .orderBy(asc(canonicalInstruments.canonicalId))
+      .limit(Math.max(1, query.limit) + 1)
+      .all();
     return rows.map((r) => {
       const d = this.db.select().from(derivativeContracts).where(eq(derivativeContracts.canonicalId, r.canonicalId)).get();
       return rowToInstrument(r, d ?? null);

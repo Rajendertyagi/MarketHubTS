@@ -1,2 +1,2 @@
 export { createMcpServer } from "./factory";
-export type { McpResult, McpServices } from "./services";
+export type { McpCatalogPage, McpFeedEvent, McpFeedPage, McpResult, McpServices } from "./services";

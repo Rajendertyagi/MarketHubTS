@@ -15,18 +15,19 @@ import {
   type ReadinessStatus
 } from "@markethub/contracts";
 import {
-  AppSettings, CandleRepository, SnapshotRepository, checkDatabase, type DatabaseHandle
+  AppSettings, CandleRepository, SnapshotRepository, SqliteCatalogRepository, checkDatabase, type DatabaseHandle
 } from "@markethub/database";
 import { nowIso } from "@markethub/shared";
 import type { AppConfig } from "@markethub/config";
 import type { CredentialStore, ProviderConfig, ProviderId } from "@markethub/contracts";
 import {
   HistoricalCandleService, OptionChainSnapshotService,
-  type MarketDataService, type ProviderRegistry
+  type CatalogRepository, type MarketDataService, type ProviderRegistry
 } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 import { registerMcpRoute } from "./mcp-routes";
+import { registerCatalogRoutes } from "./catalog-routes";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
@@ -57,6 +58,8 @@ export interface AppDependencies {
   snapshotService?: OptionChainSnapshotService;
   /** M6-A: the single application-owned MCP HTTP handler. */
   mcpHandler?: McpHttpHandler;
+  /** M6-B1: catalog repository override for tests; defaults to a repo over deps.db. */
+  catalogRepo?: CatalogRepository;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -167,6 +170,10 @@ export function createApp(deps: AppDependencies) {
 
 
   registerProviderRoutes(app, deps);
+
+  // M6-B1: read-only bounded catalog search over the same catalog repository.
+  const catalogRepo = deps.catalogRepo ?? new SqliteCatalogRepository(deps.db.db, deps.db.sqlite);
+  registerCatalogRoutes(app, { catalog: catalogRepo });
 
   // M5 canonical historical/snapshot services. No live providers are wired in
   // M5 (Phase 4B/Stage G); empty provider lists keep on-demand operations

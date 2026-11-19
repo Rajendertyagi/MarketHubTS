@@ -36,6 +36,12 @@ export interface CatalogRepository {
   getInstrumentByCanonicalId(canonicalId: string): Promise<CanonicalInstrument | null>;
   getInstrumentByIdentityKey(identityKey: string): Promise<CanonicalInstrument | null>;
   listInstruments(): Promise<CanonicalInstrument[]>;
+  /**
+   * Bounded, deterministic catalog search. Fetches at most `limit + 1` rows so
+   * callers can detect a following page via lookahead; returns up to that many
+   * rows in canonical_id ASC order. The extra row is discarded by the caller.
+   */
+  searchInstruments(query: { text: string; limit: number; afterCanonicalId?: string }): Promise<CanonicalInstrument[]>;
   getMapping(provider: string, nativeIdentifier: string): Promise<ProviderInstrumentMapping | null>;
   listMappingsByCanonicalId(canonicalId: string): Promise<ProviderInstrumentMapping[]>;
   listAliasesByCanonicalId(canonicalId: string): Promise<InstrumentAlias[]>;

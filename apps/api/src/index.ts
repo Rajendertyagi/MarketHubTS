@@ -7,7 +7,7 @@ import { healthStatusSchema } from "@markethub/contracts";
 import { nowIso } from "@markethub/shared";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createMcpServer, type McpServices } from "@markethub/mcp-core";
-import { MarketDataService, ProviderRegistry } from "@markethub/market-core";
+import { MarketDataService, ProviderRegistry, type CatalogRepository } from "@markethub/market-core";
 import { LiveEventHub } from "@markethub/realtime";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
@@ -27,7 +27,12 @@ let coordinator: SubscriptionCoordinator | null = null;
 let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
 
 /** Build the HTTP-backed MCP services from the existing injected state. */
-function createHttpMcpServices(config: AppConfig, db: DatabaseHandle): McpServices {
+function createHttpMcpServices(
+  config: AppConfig,
+  db: DatabaseHandle,
+  catalog: CatalogRepository,
+  hub: LiveEventHub
+): McpServices {
   return {
     getHealth: async () => {
       const parsed = healthStatusSchema.safeParse({
@@ -40,6 +45,31 @@ function createHttpMcpServices(config: AppConfig, db: DatabaseHandle): McpServic
       return parsed.success
         ? { ok: true, value: parsed.data }
         : { ok: false, error: { category: "internal", message: "Failed to build health status" } };
+    },
+    searchCatalog: async (req) => {
+      const text = req.text.trim();
+      if (!text) {
+        return { ok: false, error: { category: "validation", message: "text must be non-empty" } };
+      }
+      const limit = Math.max(1, Math.min(Math.trunc(req.limit), 100));
+      const rows = await catalog.searchInstruments({
+        text,
+        limit,
+        ...(req.afterCanonicalId !== undefined ? { afterCanonicalId: req.afterCanonicalId } : {})
+      });
+      const page = rows.slice(0, limit);
+      const nextCursor = rows.length > limit && page.length > 0 ? page[page.length - 1]!.canonicalId : null;
+      return { ok: true, value: { instruments: page, nextCursor } };
+    },
+    readEventFeed: async (req) => {
+      const result = hub.readAfter(req.after, req.limit);
+      if (result.outcome === "snapshot-required") {
+        return {
+          ok: true,
+          value: { events: [], nextCursor: null, snapshotRequired: { reason: result.reason } }
+        };
+      }
+      return { ok: true, value: { events: result.events, nextCursor: result.nextCursor } };
     }
   };
 }
@@ -128,12 +158,16 @@ async function main() {
   // M6-A: one handler for the process lifetime; its factory builds a fresh
   // McpServer per request over the existing services. No second app/DB/provider.
   const runtimeDb = db;
-  mcpHandler = createMcpHandler((ctx) => createMcpServer(ctx, createHttpMcpServices(config, runtimeDb)));
+  const runtimeHub = hub;
+  const runtimeCatalog = catalog;
+  mcpHandler = createMcpHandler((ctx) =>
+    createMcpServer(ctx, createHttpMcpServices(config, runtimeDb, runtimeCatalog, runtimeHub))
+  );
 
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
-    service, hub, coordinator, mcpHandler
+    service, hub, coordinator, mcpHandler, catalogRepo: catalog
   });
 
   try {

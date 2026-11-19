@@ -44,6 +44,17 @@ export type OpenStreamResult =
   | { outcome: "session"; session: ClientSession }
   | { outcome: "snapshot-required"; reason: string };
 
+/**
+ * Result of a stateless bounded read over retained replay history. Distinct
+ * from OpenStreamResult: no client session is created and no SSE stream is
+ * consumed. A normal page (including an empty one) has outcome "page"; a
+ * cursor-recovery condition has outcome "snapshot-required" and must never be
+ * reported as an empty successful page.
+ */
+export type FeedReadResult =
+  | { outcome: "page"; events: OutboundEvent[]; nextCursor: string | null }
+  | { outcome: "snapshot-required"; reason: string };
+
 export interface HubStats {
   replayEvents: number;
   replayBytes: number;

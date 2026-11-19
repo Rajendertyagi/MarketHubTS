@@ -51,6 +51,28 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
     return c.json(liveSnapshotSchema.parse(deps.service.getSnapshot()));
   });
 
+  // Stateless bounded read over retained replay history. Read-only and safe for
+  // LAN clients; does not open a stream or affect existing SSE clients.
+  app.get("/api/market/events", (c) => {
+    const rawLimit = c.req.query("limit");
+    let limit = 25;
+    if (rawLimit !== undefined) {
+      if (!/^\d+$/.test(rawLimit)) {
+        return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "limit must be an integer between 1 and 100" }), 400);
+      }
+      limit = Number(rawLimit);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "limit must be an integer between 1 and 100" }), 400);
+      }
+    }
+    const after = c.req.query("after");
+    const result = deps.hub.readAfter(after, limit);
+    if (result.outcome === "snapshot-required") {
+      return c.json({ events: [], nextCursor: null, snapshotRequired: { reason: result.reason } });
+    }
+    return c.json({ events: result.events, nextCursor: result.nextCursor });
+  });
+
   app.get("/api/market/stream", (c) => {
     // Last-Event-ID is authoritative when present (including empty-but-present).
     const lastEventId = c.req.header("Last-Event-ID");
