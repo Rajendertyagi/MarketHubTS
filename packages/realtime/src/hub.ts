@@ -36,6 +36,34 @@ export function parseCursor(input: CursorInput): ParsedCursor {
   return { kind: "none" };
 }
 
+let runtimeCounter = 0;
+/** Unique per LiveEventHub instance; feed cursors are scoped to it. */
+function newRuntimeId(): string {
+  runtimeCounter += 1;
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  // PID keeps the fallback unique across processes on the same host.
+  return c?.randomUUID?.() ?? `hub-${process.pid.toString(36)}-${Date.now().toString(36)}-${runtimeCounter.toString(36)}`;
+}
+
+/**
+ * Stateless feed cursors are `<runtimeId>:<revision>`. The runtime id prevents
+ * a cursor from a previous application instance (whose revision restarts at 0)
+ * from being mistaken for a valid position in this instance's history.
+ * SSE Last-Event-ID remains a bare numeric revision and is NOT parsed here.
+ */
+function encodeFeedCursor(runtimeId: string, revision: number): string {
+  return `${runtimeId}:${revision}`;
+}
+
+function parseFeedCursor(raw: string, runtimeId: string): ParsedCursor {
+  const separator = raw.lastIndexOf(":");
+  if (separator <= 0) return { kind: "invalid", reason: "invalid-cursor" };
+  if (raw.slice(0, separator) !== runtimeId) {
+    return { kind: "invalid", reason: "previous-instance-cursor" };
+  }
+  return parseCursorValue(raw.slice(separator + 1), "invalid-cursor");
+}
+
 /**
  * One bounded per-client queue. Data events are bounded by count and bytes;
  * control events bypass those limits but are coalesced so they cannot grow
@@ -148,6 +176,7 @@ interface ReplayEntry {
  * this hub only transports compact revisioned events.
  */
 export class LiveEventHub {
+  private readonly runtimeId = newRuntimeId();
   private unsubscribe: (() => void) | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly clients = new Map<number, ClientQueue>();
@@ -272,16 +301,18 @@ export class LiveEventHub {
   /**
    * Stateless bounded read over retained replay history. No client session is
    * created and no SSE stream is consumed, so existing SSE clients are untouched.
-   * Cursor semantics mirror openStream(): invalid / future / expired cursors and
-   * lost history after restart return snapshot-required, never an empty success.
-   * Uses limit + 1 lookahead to decide nextCursor.
+   * Cursors are scoped to this hub instance (`<runtimeId>:<revision>`), so a
+   * cursor from a previous instance — whose revision restarts at 0 — is rejected
+   * with snapshot-required instead of silently skipping events. Invalid / future
+   * / expired cursors and lost history also return snapshot-required, never an
+   * empty success. Uses limit + 1 lookahead to decide nextCursor.
    */
   readAfter(cursor: string | undefined, limit: number): FeedReadResult {
     const bounded = Math.max(1, Math.min(Math.trunc(limit), 100));
     const current = this.source.getSnapshot().revision;
     const parsed = cursor === undefined
       ? ({ kind: "none" } as ParsedCursor)
-      : parseCursorValue(cursor, "invalid-cursor");
+      : parseFeedCursor(cursor, this.runtimeId);
 
     if (parsed.kind === "invalid") return { outcome: "snapshot-required", reason: parsed.reason };
 
@@ -306,7 +337,9 @@ export class LiveEventHub {
     const candidates = this.history.filter((entry) => entry.revision > fromRevision);
     const page = candidates.slice(0, bounded);
     const hasMore = candidates.length > bounded;
-    const nextCursor = hasMore && page.length > 0 ? String(page[page.length - 1]!.revision) : null;
+    const nextCursor = hasMore && page.length > 0
+      ? encodeFeedCursor(this.runtimeId, page[page.length - 1]!.revision)
+      : null;
     return { outcome: "page", events: page.map((entry) => entry.outbound), nextCursor };
   }
 

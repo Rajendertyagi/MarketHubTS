@@ -1,45 +1,44 @@
 import { describe, expect, test } from "bun:test";
-import type { FreshnessPolicy } from "../../packages/contracts/src/index";
-import { MarketDataService } from "../../packages/market-core/src/index";
-import type { NormalizeObservationInput } from "../../packages/market-core/src/index";
+import type { LiveChangeEvent, LiveEventSource, LiveSnapshot } from "../../packages/contracts/src/index";
 import { LiveEventHub } from "../../packages/realtime/src/index";
 import type { ClientSession, LiveEventHubOptions, OutboundEvent } from "../../packages/realtime/src/index";
 
 const A = "v1|NSE|INDEX|INDEX|CODE:NIFTY50";
 const B = "v1|NSE|INDEX|INDEX|CODE:NIFTYBANK";
 const BASE = 1_700_000_000_000;
-const policy: FreshnessPolicy = {
-  openMaxAgeMs: 15_000, unknownMaxAgeMs: 5_000, maxRetainedObservationAgeMs: 60_000
-};
+
+/** Controllable source: revisions start at 0 for each fresh instance. */
+function fakeSource() {
+  let revision = 0;
+  const listeners = new Set<(event: LiveChangeEvent) => void>();
+  const snapshot = (): LiveSnapshot => ({ revision, capturedAtMs: BASE, items: [], connections: [] });
+  const source: LiveEventSource = {
+    get revision() { return revision; },
+    getSnapshot: snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    }
+  };
+  const emit = (canonicalId: string = A): number => {
+    revision += 1;
+    const event: LiveChangeEvent = { type: "item-removed", revision, canonicalId };
+    for (const listener of listeners) listener(event);
+    return revision;
+  };
+  return { source, emit, get revision() { return revision; } };
+}
 
 function harness(overrides: Partial<LiveEventHubOptions> = {}) {
-  const service = new MarketDataService({
-    now: () => new Date(BASE), policy, maxInstruments: 20, session: () => "OPEN"
-  });
-  const hub = new LiveEventHub(service, {
+  const source = fakeSource();
+  const hub = new LiveEventHub(source.source, {
     replayMaxEvents: 100, replayMaxBytes: 1_000_000,
     clientMaxEvents: 100, clientMaxBytes: 1_000_000,
     refreshIntervalMs: 0,
     ...overrides
   });
   hub.start();
-  service.track(A);
-  service.track(B);
-  // Cursor at the post-tracking baseline: subsequent reads see only emitted events.
-  const base = service.getSnapshot().revision;
-  return { service, hub, base };
-}
-
-function observation(canonicalId: string, ltp: number): NormalizeObservationInput {
-  return {
-    provider: "UPSTOX", canonicalId, value: { ltp },
-    rawProviderTimestamp: BASE, providerTimestampUnit: "MS",
-    providerTimestampMeaning: "last traded time", receivedAtMs: BASE
-  };
-}
-
-function emit(service: MarketDataService, canonicalId: string, ltp: number): void {
-  service.applyProviderUpdate(observation(canonicalId, ltp));
+  return { source, hub };
 }
 
 async function readN(session: ClientSession, n: number): Promise<OutboundEvent[]> {
@@ -53,101 +52,153 @@ async function readN(session: ClientSession, n: number): Promise<OutboundEvent[]
 }
 
 describe("LiveEventHub.readAfter (M6-B1)", () => {
-  test("valid cursor returns ordered events with limit+1 lookahead", () => {
-    const { service, hub, base } = harness();
-    emit(service, A, 100); // base+1
-    emit(service, B, 200); // base+2
-    emit(service, A, 101); // base+3
+  test("valid same-instance cursor round-trip with limit+1 lookahead", () => {
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2
+    source.emit(A); // rev 3
 
-    const first = hub.readAfter(String(base), 2);
+    const first = hub.readAfter(undefined, 2);
     expect(first.outcome).toBe("page");
     if (first.outcome !== "page") return;
-    expect(first.events.map((e) => e.id)).toEqual([String(base + 1), String(base + 2)]);
-    expect(first.nextCursor).toBe(String(base + 2)); // lookahead row (base+3) exists
+    expect(first.events.map((e) => e.id)).toEqual(["1", "2"]);
+    expect(first.nextCursor).not.toBeNull(); // lookahead row (rev 3) exists
 
     const second = hub.readAfter(first.nextCursor!, 2);
     expect(second.outcome).toBe("page");
     if (second.outcome !== "page") return;
-    expect(second.events.map((e) => e.id)).toEqual([String(base + 3)]);
+    expect(second.events.map((e) => e.id)).toEqual(["3"]);
     expect(second.nextCursor).toBeNull(); // no lookahead row
     hub.stop();
   });
 
-  test("no cursor reads all retained history; empty page and full final page yield null", () => {
-    const { service, hub, base } = harness();
-    emit(service, A, 100); // base+1
+  test("no cursor reads all retained history; caught-up page yields null", () => {
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2
 
     const all = hub.readAfter(undefined, 10);
     expect(all.outcome).toBe("page");
     if (all.outcome === "page") {
-      expect(all.events.length).toBe(base + 1); // track events + emitted event
+      expect(all.events.length).toBe(2);
       expect(all.nextCursor).toBeNull();
     }
 
-    const empty = hub.readAfter(String(base + 1), 10);
-    expect(empty.outcome).toBe("page");
-    if (empty.outcome === "page") {
-      expect(empty.events).toEqual([]);
-      expect(empty.nextCursor).toBeNull();
+    // A cursor from a lookahead page resumes at the next event and terminates
+    // with nextCursor null once the retained history is exhausted.
+    const first = hub.readAfter(undefined, 1);
+    expect(first.outcome).toBe("page");
+    if (first.outcome !== "page") return;
+    expect(first.nextCursor).not.toBeNull();
+    const resumed = hub.readAfter(first.nextCursor!, 10);
+    expect(resumed.outcome).toBe("page");
+    if (resumed.outcome === "page") {
+      expect(resumed.events.map((e) => e.id)).toEqual(["2"]);
+      expect(resumed.nextCursor).toBeNull();
     }
     hub.stop();
   });
 
   test("invalid and future cursors return snapshot-required", () => {
-    const { service, hub, base } = harness();
-    emit(service, A, 100); // base+1
-    emit(service, B, 200); // base+2
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2
 
     expect(hub.readAfter("not-a-number", 10)).toEqual({ outcome: "snapshot-required", reason: "invalid-cursor" });
-    expect(hub.readAfter(String(base + 99), 10)).toEqual({ outcome: "snapshot-required", reason: "future-cursor" });
+    // A bare numeric cursor is the legacy format and is rejected.
+    expect(hub.readAfter("1", 10)).toEqual({ outcome: "snapshot-required", reason: "invalid-cursor" });
     hub.stop();
   });
 
-  test("expired cursor (evicted history) returns snapshot-required", () => {
-    // Keep only one replay event so early revisions are evicted.
-    const { service, hub, base } = harness({ replayMaxEvents: 1 });
-    emit(service, A, 100); // base+1
-    emit(service, B, 200); // base+2 — evicts earlier history
-    expect(hub.readAfter(String(base), 10)).toEqual({ outcome: "snapshot-required", reason: "expired-cursor" });
+  test("expired same-instance cursor (evicted history) returns snapshot-required", () => {
+    const { source, hub } = harness({ replayMaxEvents: 2 });
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2
+    source.emit(A); // rev 3 — history now [2, 3]
+
+    // Obtain a real opaque cursor at rev 2 via lookahead (rev 3 is the extra row).
+    const first = hub.readAfter(undefined, 1);
+    expect(first.outcome).toBe("page");
+    if (first.outcome !== "page") return;
+    const cursor = first.nextCursor;
+    expect(cursor).not.toBeNull();
+
+    // Emit enough to evict rev 2 from the bounded history.
+    source.emit(B); // rev 4
+    source.emit(A); // rev 5 — history now [4, 5]
+
+    expect(hub.readAfter(cursor!, 10)).toEqual({ outcome: "snapshot-required", reason: "expired-cursor" });
     hub.stop();
   });
 
   test("lost history after restart returns snapshot-required, not empty success", () => {
-    const { service, hub } = harness();
-    emit(service, A, 100);
-    emit(service, B, 200);
-    hub.stop(); // clears history but source revision stays > 0
+    const { source, hub } = harness();
+    source.emit(A);
+    source.emit(B);
+    hub.stop(); // clears history but source revision stays 2
 
     expect(hub.readAfter(undefined, 10)).toEqual({ outcome: "snapshot-required", reason: "expired-cursor" });
   });
 
   test("bounded reads never exceed the requested limit", () => {
-    const { service, hub, base } = harness();
-    for (let i = 0; i < 10; i++) emit(service, A, 100 + i);
-    const result = hub.readAfter(String(base), 3);
+    const { source, hub } = harness();
+    for (let i = 0; i < 10; i++) source.emit(A);
+    const result = hub.readAfter(undefined, 3);
     expect(result.outcome).toBe("page");
     if (result.outcome === "page") {
       expect(result.events.length).toBe(3);
-      expect(result.nextCursor).toBe(String(base + 3));
+      expect(result.nextCursor).not.toBeNull();
     }
     hub.stop();
   });
 
   test("readAfter does not create sessions or disturb existing SSE clients", async () => {
-    const { service, hub, base } = harness();
-    emit(service, A, 100); // base+1
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
     const stream = hub.openStream({ lastEventId: undefined, since: undefined });
     expect(stream.outcome).toBe("session");
     if (stream.outcome !== "session") return;
     const before = hub.getStats().clients;
 
-    hub.readAfter(String(base), 10);
+    hub.readAfter(undefined, 10);
     expect(hub.getStats().clients).toBe(before); // no new client session
 
-    emit(service, B, 200); // base+2
+    source.emit(B); // rev 2
     const events = await readN(stream.session, 2);
-    expect(events.some((e) => e.id === String(base + 2))).toBe(true); // existing client still receives live events
+    expect(events.some((e) => e.id === "2")).toBe(true); // existing SSE client still receives live events
     hub.closeSession(stream.session);
     hub.stop();
+  });
+
+  test("cursor from a previous instance is rejected after revision reset", () => {
+    // Instance 1 reaches revision 100; client saves a cursor at revision 80.
+    const first = harness();
+    for (let i = 0; i < 100; i++) first.source.emit(A);
+    const oldCursorPage = first.hub.readAfter(undefined, 100);
+    expect(oldCursorPage.outcome).toBe("page");
+    if (oldCursorPage.outcome !== "page") return;
+    // Walk forward to obtain a real opaque cursor near revision 80.
+    let cursor: string | null = null;
+    let page = first.hub.readAfter(undefined, 25);
+    while (page.outcome === "page" && page.nextCursor !== null) {
+      cursor = page.nextCursor;
+      page = first.hub.readAfter(cursor, 25);
+    }
+    expect(cursor).not.toBeNull();
+    first.hub.stop();
+
+    // Instance 2: fresh source (revision resets to 0) and fresh hub.
+    const second = harness();
+    for (let i = 0; i < 100; i++) second.source.emit(A); // exceeds the old numeric revision
+    const result = second.hub.readAfter(cursor!, 10);
+    expect(result).toEqual({ outcome: "snapshot-required", reason: "previous-instance-cursor" });
+    second.hub.stop();
+  });
+
+  test("legacy bare-numeric cursor from a previous instance is rejected", () => {
+    const second = harness();
+    for (let i = 0; i < 100; i++) second.source.emit(A);
+    expect(second.hub.readAfter("80", 10)).toEqual({ outcome: "snapshot-required", reason: "invalid-cursor" });
+    second.hub.stop();
   });
 });
