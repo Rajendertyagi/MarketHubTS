@@ -52,7 +52,14 @@ export type OpenStreamResult =
  * reported as an empty successful page.
  */
 export type FeedReadResult =
-  | { outcome: "page"; events: OutboundEvent[]; nextCursor: string | null }
+  | {
+      outcome: "page";
+      events: OutboundEvent[];
+      /** Pagination continuation: present only when the lookahead row exists. */
+      nextCursor: string | null;
+      /** Always-present runtime-scoped checkpoint for the next read, including final and empty pages. */
+      resumeCursor: string;
+    }
   | { outcome: "snapshot-required"; reason: string };
 
 export interface HubStats {

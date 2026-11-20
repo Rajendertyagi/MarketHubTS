@@ -99,6 +99,77 @@ describe("LiveEventHub.readAfter (M6-B1)", () => {
     hub.stop();
   });
 
+  test("final page resumeCursor allows reading a later new event", () => {
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2
+
+    const final = hub.readAfter(undefined, 10);
+    expect(final.outcome).toBe("page");
+    if (final.outcome !== "page") return;
+    expect(final.nextCursor).toBeNull(); // final page
+    expect(final.resumeCursor).toBeTruthy(); // checkpoint still present
+
+    source.emit(A); // rev 3 — new event after the final page
+    const resumed = hub.readAfter(final.resumeCursor, 10);
+    expect(resumed.outcome).toBe("page");
+    if (resumed.outcome === "page") {
+      expect(resumed.events.map((e) => e.id)).toEqual(["3"]);
+      expect(resumed.nextCursor).toBeNull();
+    }
+    hub.stop();
+  });
+
+  test("empty caught-up page resumeCursor allows reading a later new event", () => {
+    const { source, hub } = harness();
+    source.emit(A); // rev 1
+    source.emit(B); // rev 2 — provides the lookahead row for a cursor
+    const first = hub.readAfter(undefined, 1);
+    expect(first.outcome).toBe("page");
+    if (first.outcome !== "page") return;
+    const second = hub.readAfter(first.nextCursor!, 1);
+    expect(second.outcome).toBe("page");
+    if (second.outcome !== "page") return;
+    const caughtUp = hub.readAfter(second.resumeCursor, 10);
+    expect(caughtUp.outcome).toBe("page");
+    if (caughtUp.outcome !== "page") return;
+    expect(caughtUp.events).toEqual([]);
+    expect(caughtUp.nextCursor).toBeNull();
+    expect(caughtUp.resumeCursor).toBeTruthy();
+
+    source.emit(A); // rev 3 — new event after the empty caught-up page
+    const resumed = hub.readAfter(caughtUp.resumeCursor, 10);
+    expect(resumed.outcome).toBe("page");
+    if (resumed.outcome === "page") expect(resumed.events.map((e) => e.id)).toEqual(["3"]);
+    hub.stop();
+  });
+
+  test("multi-page read: every page including the final one carries resumeCursor", () => {
+    const { source, hub } = harness();
+    for (let i = 0; i < 5; i++) source.emit(A); // rev 1..5
+
+    let cursor: string | undefined;
+    let pages = 0;
+    let finalResume: string | null = null;
+    while (true) {
+      const page = hub.readAfter(cursor, 2);
+      expect(page.outcome).toBe("page");
+      if (page.outcome !== "page") break;
+      pages += 1;
+      expect(page.resumeCursor).toBeTruthy();
+      if (page.nextCursor === null) { finalResume = page.resumeCursor; break; }
+      cursor = page.nextCursor;
+    }
+    expect(pages).toBe(3); // 2 + 2 + 1
+    expect(finalResume).toBeTruthy();
+
+    source.emit(B); // rev 6
+    const resumed = hub.readAfter(finalResume!, 10);
+    expect(resumed.outcome).toBe("page");
+    if (resumed.outcome === "page") expect(resumed.events.map((e) => e.id)).toEqual(["6"]);
+    hub.stop();
+  });
+
   test("invalid and future cursors return snapshot-required", () => {
     const { source, hub } = harness();
     source.emit(A); // rev 1
@@ -192,6 +263,24 @@ describe("LiveEventHub.readAfter (M6-B1)", () => {
     for (let i = 0; i < 100; i++) second.source.emit(A); // exceeds the old numeric revision
     const result = second.hub.readAfter(cursor!, 10);
     expect(result).toEqual({ outcome: "snapshot-required", reason: "previous-instance-cursor" });
+    second.hub.stop();
+  });
+
+  test("resumeCursor from a previous instance is rejected after restart", () => {
+    const first = harness();
+    for (let i = 0; i < 30; i++) first.source.emit(A);
+    const final = first.hub.readAfter(undefined, 100);
+    expect(final.outcome).toBe("page");
+    if (final.outcome !== "page") return;
+    const oldResume = final.resumeCursor; // checkpoint from the old runtime
+    first.hub.stop();
+
+    const second = harness();
+    for (let i = 0; i < 100; i++) second.source.emit(A); // new instance exceeds old revision
+    expect(second.hub.readAfter(oldResume, 10)).toEqual({
+      outcome: "snapshot-required",
+      reason: "previous-instance-cursor"
+    });
     second.hub.stop();
   });
 

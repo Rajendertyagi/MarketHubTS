@@ -340,7 +340,12 @@ export class LiveEventHub {
     const nextCursor = hasMore && page.length > 0
       ? encodeFeedCursor(this.runtimeId, page[page.length - 1]!.revision)
       : null;
-    return { outcome: "page", events: page.map((entry) => entry.outbound), nextCursor };
+    // Checkpoint is always usable: after the last returned event, or at the
+    // current revision for an empty caught-up page. Event ids stay bare numeric
+    // for SSE compatibility, so clients need this runtime-scoped token to resume.
+    const checkpointRevision = page.length > 0 ? page[page.length - 1]!.revision : current;
+    const resumeCursor = encodeFeedCursor(this.runtimeId, checkpointRevision);
+    return { outcome: "page", events: page.map((entry) => entry.outbound), nextCursor, resumeCursor };
   }
 
   closeSession(session: ClientSession): void {

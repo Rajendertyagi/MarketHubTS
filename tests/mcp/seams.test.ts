@@ -80,6 +80,7 @@ describe("M6-B1 HTTP seams", () => {
       const json = await ok.json();
       expect(Array.isArray(json.events)).toBe(true);
       expect(json.nextCursor === null || typeof json.nextCursor === "string").toBe(true);
+      expect(typeof json.resumeCursor).toBe("string"); // checkpoint present even on final/empty pages
       expect(json.snapshotRequired).toBeUndefined();
 
       const badCursor = await app.request("/api/market/events?after=not-a-number&limit=25");

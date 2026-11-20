@@ -69,7 +69,7 @@ function createHttpMcpServices(
           value: { events: [], nextCursor: null, snapshotRequired: { reason: result.reason } }
         };
       }
-      return { ok: true, value: { events: result.events, nextCursor: result.nextCursor } };
+      return { ok: true, value: { events: result.events, nextCursor: result.nextCursor, resumeCursor: result.resumeCursor } };
     }
   };
 }

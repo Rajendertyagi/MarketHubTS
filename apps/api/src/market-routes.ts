@@ -70,7 +70,7 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
     if (result.outcome === "snapshot-required") {
       return c.json({ events: [], nextCursor: null, snapshotRequired: { reason: result.reason } });
     }
-    return c.json({ events: result.events, nextCursor: result.nextCursor });
+    return c.json({ events: result.events, nextCursor: result.nextCursor, resumeCursor: result.resumeCursor });
   });
 
   app.get("/api/market/stream", (c) => {

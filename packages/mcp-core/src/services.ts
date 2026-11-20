@@ -24,7 +24,10 @@ export interface McpCatalogPage {
 /** Bounded event-feed page. `snapshotRequired` is distinct from an empty page. */
 export interface McpFeedPage {
   events: McpFeedEvent[];
+  /** Pagination continuation: present only when the lookahead row exists. */
   nextCursor: string | null;
+  /** Runtime-scoped checkpoint for the next read; absent only on snapshot-required. */
+  resumeCursor?: string;
   snapshotRequired?: { reason: string };
 }
 

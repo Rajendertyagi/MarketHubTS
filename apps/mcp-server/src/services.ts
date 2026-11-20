@@ -60,6 +60,7 @@ export function createStdioServices(apiBase: string): McpServices {
           value: {
             events: json.events ?? [],
             nextCursor: json.nextCursor ?? null,
+            ...(json.resumeCursor !== undefined ? { resumeCursor: String(json.resumeCursor) } : {}),
             ...(json.snapshotRequired ? { snapshotRequired: { reason: String(json.snapshotRequired.reason) } } : {})
           }
         };
