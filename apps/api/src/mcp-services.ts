@@ -76,6 +76,20 @@ export function createHttpMcpServices(
     getCoverage: async (req) => ({ ok: true, value: historicalService.getCoverageStatus(req) }),
     fetchHistorical: async (req) => ({ ok: true, value: await historicalService.fetchOnDemand(req) }),
     listSnapshots: async (filter) => ({ ok: true, value: { snapshots: snapshotService.listSnapshots(filter.configId, filter.fromMs, filter.toMs) } }),
+    listSnapshotsPage: async (req) => {
+      const result = snapshotService.listSnapshotsPage(req);
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: {
+            category: result.reason === "unknown_config" ? "unavailable" : "validation",
+            message: result.message,
+            ...(result.reason === "unknown_config" ? { reason: "unknown_config" as const } : {})
+          }
+        };
+      }
+      return { ok: true, value: { snapshots: result.snapshots, nextCursor: result.nextCursor } };
+    },
     getSnapshot: async (id) => {
       const snapshot = snapshotService.getSnapshot(id);
       return snapshot

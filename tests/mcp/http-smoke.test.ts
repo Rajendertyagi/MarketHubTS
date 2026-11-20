@@ -34,7 +34,20 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
     const db = openDatabase({ dbPath });
     runMigrations(db.db, defaultMigrationsFolder);
 
-    const services: McpServices = { getHealth: async () => ({ ok: true, value: HEALTH }) };
+    const services: McpServices = {
+      getHealth: async () => ({ ok: true, value: HEALTH }),
+      searchCatalog: async () => ({ ok: true, value: { instruments: [], nextCursor: null } }),
+      readEventFeed: async () => ({ ok: true, value: { events: [], nextCursor: null, resumeCursor: "r:0" } }),
+      getProviderStatus: async () => ({ ok: true, value: {} as never }),
+      getLiveSnapshot: async () => ({ ok: true, value: { revision: 0, capturedAtMs: 0, items: [], connections: [] } as never }),
+      getCachedCandles: async () => ({ ok: true, value: { candles: [] } }),
+      getCoverage: async () => ({ ok: true, value: { gaps: [], unavailableNotes: [] } }),
+      fetchHistorical: async () => ({ ok: true, value: { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] } }),
+      listSnapshots: async () => ({ ok: true, value: { snapshots: [] } }),
+      listSnapshotsPage: async () => ({ ok: true, value: { snapshots: [], nextCursor: null } }),
+      getSnapshot: async (id) => ({ ok: true, value: { id } as never }),
+      captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } })
+    };
     const handler = createMcpHandler((ctx) => createMcpServer(ctx, services));
     const app = createApp({ config, db, logger: createLogger("error"), startedAt: Date.now(), mcpHandler: handler });
 
@@ -57,6 +70,12 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
       const result = await client.callTool({ name: "markethub_health", arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toEqual(HEALTH);
+
+      // M6-B3: read a resource and get a prompt over the real listener.
+      const resource = await client.readResource({ uri: "markethub://market/snapshot" });
+      expect(resource.contents[0]!.text).toContain("revision");
+      const prompt = await client.getPrompt({ name: "explain_market_snapshot", arguments: {} });
+      expect(prompt.messages[0]!.content.type).toBe("text");
 
       // Invalid Host is rejected by the real listener before the handler runs.
       const rejected = await fetch(url, {

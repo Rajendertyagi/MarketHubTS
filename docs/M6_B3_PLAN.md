@@ -1,6 +1,6 @@
 # M6-B3 — MCP Resources, Prompts and Cache Hints
 
-> **Status:** Implementation plan only. Awaiting separate authorization. **No B3 source exists yet.** This document does not implement anything.
+> **Status:** Authoritative B3 contract. **M6-B3 is implemented in the working tree** (resources, prompts, cache hints, snapshot pagination) and has passed focused verification; it is pending independent review and separate merge/publication authorization. This document itself does not implement anything.
 > **Last updated:** 2026-11-20 (corrected after independent review: SDK constructor, URI-template matching, cursor ownership, SQLite index evidence, error mapping, prompt dependency, filter consistency)
 > **Depends on:** M6-A (`7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory); M6-B1 (`d50b372`, cursor fixes `6fd088d`/`be94219`: catalog-search and event-feed read seams + endpoints); M6-B2 (`0e0ec6d`, HTTP-adapter testability correction `a0e707e`: nine tools over both transports).
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §3.1 (C13–C15), §4.1 (shared factory / `McpServices`), §5 / §5.3 (inventory), §10 (M6-B); [`M6_B_PLAN.md`](M6_B_PLAN.md) §4.2–§4.3 (resources/prompts), §5 (seams), §7 (B3 sub-phase), §8–§9 (tests/acceptance). **§4 of this document is the single authoritative resource-URI contract**; the governing docs link here rather than restating it.
@@ -26,7 +26,7 @@ Register the **resource** and **prompt** halves of the M6 capability inventory t
 **Fixed decisions (evidence in the cited sections):**
 1. **§4 is the canonical URI contract.** The template strings are chosen to match the installed SDK's actual matcher, not RFC 6570 assumptions (§4.1). Governing docs were reconciled to link here.
 2. **`markethub://events/alerts` is retained** as a contract-only resource: discoverable, with an honest description and an explicit `unavailable` error (§8). Removing it would silently change the confirmed inventory (`M6_PLAN.md` §5.3, `M6_B_PLAN.md` decision 4); durable alert records are M7.
-3. **Snapshot pagination requires an explicit config selector** — a real `configId` or the reserved sentinel `none` for the **null-config partition** (`config_id IS NULL`). That partition contains **both** on-demand snapshots (`configId = null` at capture) **and** snapshots retained after their capture configuration was deleted (`ON DELETE SET NULL`; `packages/database/src/repositories/snapshots.ts:78-81`, `packages/market-core/src/snapshots/service.ts:62-64`). This is required by the SQLite query plan (§7.3), not a product-scope reduction: unfiltered "all snapshots" browsing remains in the unchanged B2 `option_chain_snapshot` tool (oldest-first, 200 cap).
+3. **Snapshot pagination uses an explicit discriminated selector** — `{ kind: "config", configId }` or `{ kind: "null-config" }`. There is **no reserved magic string**: capture-config IDs accept any non-empty string (`optionChainCaptureConfigSchema.id = z.string().min(1)`), so `"none"` is a valid real ID and must remain addressable. The `null-config` selector covers the **null-config partition** (`config_id IS NULL`), which contains **both** on-demand snapshots (`configId = null` at capture) **and** snapshots retained after their capture configuration was deleted (`ON DELETE SET NULL`; `packages/database/src/repositories/snapshots.ts:78-81`, `packages/market-core/src/snapshots/service.ts:62-64`). This is required by the SQLite query plan (§7.3), not a product-scope reduction: unfiltered "all snapshots" browsing remains in the unchanged B2 `option_chain_snapshot` tool (oldest-first, 200 cap).
 4. **One opaque cursor codec**, owned by market-core. `McpServices`, HTTP and STDIO forward the cursor unchanged; only market-core decodes it (§7.1). No `afterCapturedAt`/`afterId` in the public seam.
 5. **Cache hints** are set in the **second** `McpServer` constructor argument (§6). The explicit values equal SDK defaults; the wire assertion is the actual C15 evidence. No cache abstraction is introduced.
 6. **Prompts are static text-only guidance** registered with `registerPrompts(server)` — no `McpServices` dependency (§5).
@@ -59,6 +59,12 @@ Register the **resource** and **prompt** halves of the M6 capability inventory t
 Add exactly one method to `packages/mcp-core/src/services.ts`:
 
 ```ts
+// Selector is owned by market-core (packages/market-core/src/snapshots/page.ts)
+// and imported as a type here. No magic string; "none" is a valid config id.
+export type SnapshotPageSelector =
+  | { kind: "config"; configId: string }
+  | { kind: "null-config" };
+
 // B3 — newest-first bounded snapshot page. Cursor is opaque end-to-end.
 // The error carries a discriminator so the resource can distinguish an unknown
 // config selector (genuine not-found) from a valid config with an empty page.
@@ -66,15 +72,15 @@ export type McpSnapshotPageResult =
   | { ok: true; value: { snapshots: McpOptionChainSnapshot[]; nextCursor: string | null } }
   | { ok: false; error: { category: "validation" | "unavailable" | "internal"; message: string; reason?: "unknown_config" } };
 
-listSnapshotsPage(filter: {
-  configId: string;        // real config id, or reserved "none" => null-config partition (on-demand + config-deleted snapshots)
-  limit: number;           // 1..100, clamped in the service
-  cursor?: string;         // opaque; absent => first page
+listSnapshotsPage(req: {
+  selector: SnapshotPageSelector;  // discriminated; forwarded unchanged by both adapters
+  limit: number;                   // 1..100, clamped in the service
+  cursor?: string;                 // opaque; absent or "first" => first page
 }): Promise<McpSnapshotPageResult>;
 ```
 
 - **No `fromMs`/`toMs`** (no product requirement for date filtering in the paginated resource; the B2 tool keeps its existing filter). **No `afterCapturedAt`/`afterId`** in the public seam — those are internal keyset fields used only inside market-core (§7.1).
-- `McpSnapshotPageResult` is the only new result type; it extends the `McpResult` error shape with one optional `reason` discriminator. All other `McpResult<T>` types stay unchanged. No activity hooks, no subscription methods, no speculative seams.
+- `McpSnapshotPageResult` is the only new result type in mcp-core; it extends the `McpResult` error shape with one optional `reason` discriminator. All other `McpResult<T>` types stay unchanged. No activity hooks, no subscription methods, no speculative seams.
 - Barrel `packages/mcp-core/src/index.ts`: export the two new registration functions and `McpSnapshotPageResult`.
 
 ## 4. Resource inventory — canonical URI contract
@@ -101,11 +107,12 @@ These are measured behaviors of `UriTemplate.match()` / `partToRegExp`, not RFC 
 | 1 | `markethub://catalog/instruments{?query,limit,cursor}` | `markethub://catalog/instruments?query=NIFTY&limit=25&cursor=first` | `query` (non-empty), `limit` (1–100), `cursor` (`first` or opaque) | `searchCatalog({ text, limit, afterCanonicalId })` | `{ instruments, nextCursor }` | empty query → invalid params; `first` → no `afterCanonicalId` |
 | 2 | `markethub://market/snapshot` | `markethub://market/snapshot` | none | `getLiveSnapshot()` | `liveSnapshotSchema` value | service failure → explicit error (§8) |
 | 3 | `markethub://historical/{canonicalId}/{interval}{?from,to}` | `markethub://historical/NIFTY%20INDEX/1d?from=2026-01-01&to=2026-02-01` | `canonicalId`, `interval`, `from`, `to` (ISO-8601) | `getCachedCandles` + `getCoverage` (same range) | `{ candles, coverage }` | invalid/reversed range → invalid params via shared `parseRange` |
-| 4 | `markethub://snapshots/{configId}{?cursor}` | `markethub://snapshots/cfg1?cursor=first` | `configId` (real id or `none`), `cursor` (`first` or opaque) | `listSnapshotsPage({ configId, limit: 25, cursor })` | `{ snapshots, nextCursor }` | unknown config → not-found (via `getCaptureConfig()`); malformed cursor → invalid params; `none` → null-config partition (on-demand **and** config-deleted snapshots) |
+| 4a | `markethub://snapshots/config/{configId}{?cursor}` | `markethub://snapshots/config/none?cursor=first` | `configId` (any real non-empty id, **including `"none"`**), `cursor` (`first` or opaque) | `listSnapshotsPage({ selector: { kind: "config", configId }, limit: 25, cursor })` | `{ snapshots, nextCursor }` | unknown config → not-found (via `getCaptureConfig()`); malformed/mismatched cursor → invalid params |
+| 4b | `markethub://snapshots/null-config{?cursor}` | `markethub://snapshots/null-config?cursor=first` | `cursor` (`first` or opaque) | `listSnapshotsPage({ selector: { kind: "null-config" }, limit: 25, cursor })` | `{ snapshots, nextCursor }` | null-config partition (on-demand **and** config-deleted snapshots); malformed/mismatched cursor → invalid params |
 | 5 | `markethub://events/live{?after,limit}` | `markethub://events/live?after=first&limit=25` | `after` (`first` or opaque), `limit` | `readEventFeed({ after, limit })` | discriminated `McpFeedPage` | `snapshotRequired` is a **valid** body (no `resumeCursor`); service failure → explicit error |
 | 6 | `markethub://events/alerts` | `markethub://events/alerts` | none | none | — | contract-only: explicit `unavailable` error, honest description, never empty |
 
-- Register in the table order; assert `resources/list` (static: #2, #6) and `resources/templates/list` (templates: #1, #3, #4, #5) order in tests (C13).
+- **Six logical capabilities, seven registered resources:** 2 static (`markethub://market/snapshot`, `markethub://events/alerts`) and 5 templates (catalog, historical, snapshots/config, snapshots/null-config, events/live). Register in table order; assert `resources/list` (static, in order) and `resources/templates/list` (templates, in order) in tests (C13). The split into two snapshot templates is required to keep `"none"` a valid config ID.
 - Resource descriptions must state the cursor kind: #1/#4 use stored-data opaque cursors; #5 uses a **runtime-scoped** cursor that does not survive restart (`M6_PLAN.md` §6.1).
 - No unfiltered catalog listing resource (`M6_PLAN.md` §5.1).
 
@@ -151,8 +158,8 @@ const server = new McpServer(
 
 ### 7.1 One opaque cursor codec (market-core owns it)
 
-- **Structure:** versioned `v1.<base64url(JSON)>` where JSON is `{ c: <capturedAt ISO string>, i: <snapshot id>, f: <configId selector> }`. Version prefix allows future evolution without breaking old cursors silently.
-- **Filter binding:** decode verifies `f` equals the requested `configId` selector (real id or `none`); a mismatch is a validation error. A cursor cannot be replayed against a different config.
+- **Structure:** versioned `v1.<base64url(JSON)>` where JSON is `{ c: <capturedAt ISO string>, i: <snapshot id>, s: <SnapshotPageSelector> }`. Version prefix allows future evolution without breaking old cursors silently.
+- **Selector binding:** decode verifies `s` deep-equals the requested discriminated selector (`{ kind: "config", configId }` or `{ kind: "null-config" }`); a mismatch is a validation error. A cursor cannot be replayed against a different config or across the config/null-config boundary. In particular, if a configuration is deleted between page requests its snapshots move to the null-config partition, and the old config-scoped cursor **must not** be silently reused with the `null-config` selector — the selector mismatch is rejected.
 - **First page:** `cursor` absent at the `McpServices` layer; the resource maps the `first` sentinel to absent. No cursor is fabricated for the first page.
 - **Malformed cursor:** undecodable, wrong version, missing fields, or filter mismatch → validation error (`-32602`), **never** a silent empty page.
 - **Expiration and anchor-row deletion:** **cursors do not expire** — no TTL or expiry is implemented, and none is claimed. A cursor is a **self-contained keyset boundary** (`capturedAt`, `id`, config selector); the repository's comparison `(captured_at < ?) OR (captured_at = ? AND id < ?)` does **not** require the anchor row to exist. Therefore a cursor is **not invalidated when its anchor row is deleted** (e.g. by retention cleanup). Do **not** add an anchor-row existence check — it would cost an extra database lookup on every page and would break naturally with retention cleanup. Deleting the anchor row between page requests must still yield the correct next page.
@@ -162,9 +169,10 @@ const server = new McpServer(
 
 ### 7.2 Store / service / repository
 
-- `SnapshotStore.listSnapshotsPage(filter: { configId: string; limit: number; afterCapturedAt?: string; afterId?: string }): { snapshots; nextCursor }` in `packages/market-core/src/snapshots/service.ts`; `OptionChainSnapshotService.listSnapshotsPage` decodes the opaque cursor into `afterCapturedAt`/`afterId`, calls the store, and encodes `nextCursor`. `listSnapshots` stays unchanged for REST/WebUI.
-- **Config-selector validation (required):** for a real `configId`, `OptionChainSnapshotService.listSnapshotsPage` **must call the existing `getCaptureConfig(configId)`** (`packages/market-core/src/snapshots/service.ts:54-56`; repository `:42-58`) before reading the page. `null` means the configuration is unknown → return `ok: false` with `reason: "unknown_config"` (the resource maps this to `ResourceNotFoundError`). A non-null config with zero snapshots is a **valid empty page** (`ok: true`, `snapshots: []`, `nextCursor: null`), never not-found and never an error. For selector `none`, skip this check — the null-config partition is valid by definition and includes both on-demand snapshots and snapshots retained after config deletion (`ON DELETE SET NULL`). This distinction must not be inferred from an empty result.
-- Repository (`packages/database/src/repositories/snapshots.ts`): `WHERE config_id = ?` (or `config_id IS NULL` for selector `none`) + keyset `(captured_at < ?) OR (captured_at = ? AND id < ?)` + `ORDER BY captured_at DESC, id DESC LIMIT limit + 1`. `limit` default 25, max 100. The repository receives **internal keyset fields only**, never the opaque cursor.
+- `SnapshotStore.listSnapshotsPage(filter: { selector: SnapshotPageSelector; limit: number; afterCapturedAt?: string; afterId?: string }): OptionChainSnapshot[]` in `packages/market-core/src/snapshots/service.ts` returns `limit + 1` rows (lookahead). `OptionChainSnapshotService.listSnapshotsPage` decodes the opaque cursor into `afterCapturedAt`/`afterId`, calls the store, trims to `limit`, and encodes `nextCursor`. `listSnapshots` stays unchanged for REST/WebUI.
+- **Config-selector validation (required):** for `{ kind: "config", configId }`, `OptionChainSnapshotService.listSnapshotsPage` **must call the existing `getCaptureConfig(configId)`** (`packages/market-core/src/snapshots/service.ts:54-56`; repository `:42-58`) before reading the page. `null` means the configuration is unknown → return `ok: false` with `reason: "unknown_config"` (the resource maps this to `ResourceNotFoundError`). A non-null config with zero snapshots is a **valid empty page** (`ok: true`, `snapshots: []`, `nextCursor: null`), never not-found and never an error. For `{ kind: "null-config" }`, skip this check — the partition is valid by definition and includes both on-demand snapshots and snapshots retained after config deletion (`ON DELETE SET NULL`). This distinction must not be inferred from an empty result.
+- **Deletion race:** config validation and page retrieval are two repository calls. A config deleted between them moves its snapshots to the null-config partition; the next config-scoped page may then be empty. This is an honest, bounded outcome (no fabricated data, no cross-selector cursor reuse because the cursor is selector-bound). No new transaction or abstraction is introduced for this rare race.
+- Repository (`packages/database/src/repositories/snapshots.ts`): `WHERE config_id = ?` (config selector) or `WHERE config_id IS NULL` (null-config selector) + keyset `(captured_at < ?) OR (captured_at = ? AND id < ?)` + `ORDER BY captured_at DESC, id DESC LIMIT limit + 1`. `limit` default 25, max 100. The repository receives the **selector** and **internal keyset fields only**, never the opaque cursor.
 
 ### 7.3 SQLite query plan — evidence and decision
 
@@ -184,8 +192,8 @@ const server = new McpServer(
 
 ### 7.4 STDIO parity endpoint
 
-- Add read-only **`GET /api/snapshots/page?configId=<id|none>&limit=<n>&cursor=<opaque>`** → `{ snapshots, nextCursor }`. No `from`/`to` (§3). Register in `snapshot-routes.ts` **before** the dynamic `GET /api/snapshots/:id` route, and the router before the SPA fallback in `app.ts`. No `isLocalPeer` requirement (read-only LAN model), consistent with B1 parity endpoints.
-- `McpServicesStdio.listSnapshotsPage` forwards `configId`, `limit` and the **opaque cursor unchanged**, and validates the response with `optionChainSnapshotSchema` (pattern: `apps/mcp-server/src/services.ts:183-197`).
+- Add read-only **`GET /api/snapshots/page?scope=config&configId=<id>&limit=<n>&cursor=<opaque>`** and **`GET /api/snapshots/page?scope=null-config&limit=<n>&cursor=<opaque>`** → `{ snapshots, nextCursor }`. No `from`/`to` (§3). Strict validation: `scope=config` requires a non-empty `configId`; `scope=null-config` must not receive `configId`; unknown scopes, missing/conflicting parameters and non-integer/out-of-range `limit` → 400 validation error; unknown config → 404 not-found. A real config ID equal to `"none"` remains valid. Register in `snapshot-routes.ts` **before** the dynamic `GET /api/snapshots/:id` route, and the router before the SPA fallback in `app.ts`. No `isLocalPeer` requirement (read-only LAN model), consistent with B1 parity endpoints.
+- `McpServicesStdio.listSnapshotsPage` maps `selector.kind` to `scope`, forwards `configId` (config scope only), `limit` and the **opaque cursor unchanged**, and validates the response with `optionChainSnapshotSchema` (pattern: `apps/mcp-server/src/services.ts:183-197`). It maps 404 to `reason: "unknown_config"` and 400 to a validation error.
 - `McpServicesHttp.listSnapshotsPage` calls `snapshotService.listSnapshotsPage` directly with the same injected instances as REST — never through guarded REST routes.
 
 ## 8. Error semantics (verified against installed SDK)
@@ -195,8 +203,8 @@ const server = new McpServer(
 | Condition | Throw | Wire |
 |---|---|---|
 | Malformed/unparseable URI | SDK before callback: `ProtocolError(INVALID_PARAMS, ..., { uri, reason: "invalid_uri" })` | `-32602`, `data` has `uri` **and** `reason` |
-| Invalid input, invalid/reversed range, malformed or mismatched cursor | `new ProtocolError(INVALID_PARAMS, sanitizedMessage)` — **no `data.uri`** | `-32602` (distinguishable from not-found by absent `data.uri`) |
-| Genuine not-found: real `configId` where `getCaptureConfig(configId)` returns `null` (mapped from `reason: "unknown_config"`) | `new ResourceNotFoundError(uri)` | `-32602`, `data` exactly `{ uri }` |
+| Invalid input, invalid/reversed range, malformed cursor, or cursor whose bound selector differs from the requested selector | `new ProtocolError(INVALID_PARAMS, sanitizedMessage)` — **no `data.uri`** | `-32602` (distinguishable from not-found by absent `data.uri`) |
+| Genuine not-found: `{ kind: "config", configId }` where `getCaptureConfig(configId)` returns `null` (mapped from `reason: "unknown_config"`) | `new ResourceNotFoundError(uri)` | `-32602`, `data` exactly `{ uri }` |
 | Provider/service unavailable; contract-only `events/alerts` | `new ProtocolError(INTERNAL_ERROR, "unavailable in M6 — <reason>")` | `-32603` |
 | Database/internal failure | `new ProtocolError(INTERNAL_ERROR, generic sanitized message)` | `-32603` |
 
@@ -211,7 +219,7 @@ const server = new McpServer(
 
 **`apps/mcp-server`:** `src/services.ts` (implement `listSnapshotsPage` via the new endpoint, forwarding the opaque cursor unchanged).
 
-**`packages/market-core`:** `src/snapshots/service.ts` (`listSnapshotsPage` on `SnapshotStore` + service); **new** small cursor-codec module in `src/snapshots/`.
+**`packages/market-core`:** `src/snapshots/service.ts` (`listSnapshotsPage` on `SnapshotStore` + service); **new** `src/snapshots/page.ts` (selector type, versioned opaque cursor codec, page result type); `src/index.ts` (exports).
 
 **`packages/database`:** `src/repositories/snapshots.ts` (implement `listSnapshotsPage`). **No schema/migration change.**
 
@@ -221,22 +229,22 @@ const server = new McpServer(
 
 Tests must exercise the **installed SDK matcher**, not hand-written assumptions. Use `new UriTemplate(...)` / a real pinned client against `handler.fetch` for URI cases.
 
-- **URI matching (`resources.test.ts`):** for each canonical template — exact match with all variables; missing variable → no match; reordered variables → no match; empty value → no match; percent-encoded value delivered raw and decoded by the callback; path value containing `/` percent-encoded; `first` sentinel maps to first page; `{configId?}`-style templates are absent. Assert `resources/list` (2 static) and `resources/templates/list` (4 templates) order.
-- **Resource reads:** valid read → JSON `contents`; catalog empty query → invalid params; historical invalid/reversed range → invalid params; snapshot first page and subsequent page (opaque cursor round-trip), final-page `nextCursor: null`, malformed/mismatched cursor → invalid params; **unknown config (`getCaptureConfig()` returns `null`) → not-found, while a valid config with zero snapshots → valid empty page (not not-found, not error)**; **`none` selector returns the whole null-config partition — both an on-demand snapshot and a snapshot whose config was deleted (`ON DELETE SET NULL`)**; `events/live` normal page with `resumeCursor` and `snapshotRequired` envelope without one; `events/alerts` explicit unavailable; service failure → explicit error, never empty success.
+- **URI matching (`resources.test.ts`):** for each canonical template — exact match with all variables; missing variable → no match; reordered variables → no match; empty value → no match; percent-encoded value delivered raw and decoded by the callback; path value containing `/` percent-encoded; `first` sentinel maps to first page; `{configId?}`-style templates are absent. Assert `resources/list` (2 static) and `resources/templates/list` (5 templates, including both snapshot forms) order.
+- **Resource reads:** valid read → JSON `contents`; catalog empty query → invalid params; historical invalid/reversed range → invalid params; snapshot first page and subsequent page (opaque cursor round-trip), final-page `nextCursor: null`, malformed/mismatched cursor → invalid params; **a real config whose ID is exactly `"none"` resolves through `snapshots/config/none` (not the null-config partition)**; **unknown config (`getCaptureConfig()` returns `null`) → not-found, while a valid config with zero snapshots → valid empty page (not not-found, not error)**; **the `null-config` selector returns the whole null-config partition — both an on-demand snapshot and a snapshot whose config was deleted (`ON DELETE SET NULL`)**; `events/live` normal page with `resumeCursor` and `snapshotRequired` envelope without one; `events/alerts` explicit unavailable; service failure → explicit error, never empty success.
 - **Prompts (`prompts.test.ts`):** `prompts/list` order; `prompts/get` returns user text; assert **no service calls**; invalid args → validation error.
 - **Cache hints (`cache-hints.test.ts`):** wire assertions on 2026 responses that all six methods carry `ttlMs: 0` / `cacheScope: "private"`; same scope across pages; no cache fields on non-cacheable operations; 2025-era responses unaffected if dual-era retained.
-- **Snapshot page (`snapshot-page.test.ts`):** newest-first ordering, `id` tie-break with equal `captured_at`, bound (default/max), `limit + 1` lookahead (`nextCursor` present vs `null`), opaque cursor encode/decode round-trip, filter binding mismatch rejection, malformed cursor rejection, `none` selector covering both on-demand and config-deleted snapshots, `getCaptureConfig()`-based unknown-config vs valid-empty-page distinction, **anchor-row deletion between page requests still returns the correct next page (no existence check)**, no change to `listSnapshots`.
+- **Snapshot page (`snapshot-page.test.ts`):** newest-first ordering, `id` tie-break with equal `captured_at`, bound (default/max), `limit + 1` lookahead (`nextCursor` present vs `null`), versioned opaque cursor encode/decode round-trip, **selector binding (config vs null-config, and config id `"none"` vs null-config)**, malformed/mismatched cursor rejection, first-page sentinel, **config ID `"none"` works as a real config**, other arbitrary non-empty IDs work, null-config covers both on-demand and config-deleted snapshots, `getCaptureConfig()`-based unknown-config vs valid-empty-page distinction, **anchor-row deletion between page requests still returns the correct next page (no existence check)**, **config deletion between requests does not allow cross-selector cursor reuse**, no change to `listSnapshots`.
 - **Adapters (`tools-adapters.test.ts`):** HTTP and STDIO forward the **same opaque cursor unchanged**; STDIO validates the response envelope; no `afterCapturedAt`/`afterId` in the seam.
 - **Real HTTP smoke (`http-smoke.test.ts`):** read one resource and get one prompt over the real listener (broad acceptance stays M6-E).
 - **Regression:** existing nine B2 tools unchanged (`tools.test.ts`, `tools-adapters.test.ts`).
 
 ## 11. Acceptance criteria (M6-B3 exit)
 
-- Six resources and three prompts registered through the single shared factory; identical over HTTP and STDIO; no duplicate registration.
+- Six logical resource capabilities registered as seven resources (2 static + 5 templates) and three prompts through the single shared factory; identical over HTTP and STDIO; no duplicate registration.
 - `McpServices` contains only `listSnapshotsPage` beyond B2 — no activity hooks, no subscription methods, no `fromMs`/`toMs`, no split cursor fields.
 - Canonical URI templates match the installed SDK exactly; first-page sentinel, percent-decoding and required-variable behavior verified by tests.
 - One opaque cursor codec in market-core; HTTP/STDIO forward unchanged; no expiration claimed; final page via lookahead; **no anchor-row existence check — cursors remain valid keyset boundaries after row deletion, verified by test**.
-- Snapshot pagination uses an explicit config selector; `none` covers the full null-config partition (on-demand **and** config-deleted snapshots); `getCaptureConfig()` distinguishes unknown config (not-found) from a valid empty page; index limitation documented; **no migration**; unfiltered browsing remains in the B2 tool.
+- Snapshot pagination uses a discriminated selector with no magic string: `"none"` remains a valid config ID; the `null-config` selector covers the full null-config partition (on-demand **and** config-deleted snapshots); cursors bind the full selector and reject cross-selector reuse; `getCaptureConfig()` distinguishes unknown config (not-found) from a valid empty page; index limitation documented; **no migration**; unfiltered browsing remains in the B2 tool.
 - `markethub://events/alerts` discoverable with an explicit `unavailable` error; no fabricated or empty data.
 - Cache hints correct on all six cacheable results, verified on the 2026 wire; per-resource override unused; 2025-era unaffected.
 - Prompts static, `registerPrompts(server)`, no service calls.
@@ -251,7 +259,7 @@ Tests must exercise the **installed SDK matcher**, not hand-written assumptions.
 - No credentials, tokens, provider-native identifiers, raw arguments or unsanitized errors in resources, prompts, errors or logs.
 - MCP must not modify operational configuration; all B3 capabilities are reads. LAN reads use the existing model; no new auth framework.
 - Bounded work: `limit` clamped 1–100; snapshot page work bounded by the config partition (§7.3); event feed bounded by the existing hub seam.
-- Live cursors (`events/live`) do not survive restart; resource descriptions say so. Stored-data cursors do not expire and are **not** invalidated by deletion of their anchor row — they are self-contained keyset boundaries with no existence check (§7.1), so retention cleanup does not break pagination.
+- Live cursors (`events/live`) do not survive restart; resource descriptions say so. Stored-data cursors do not expire and are **not** invalidated by deletion of their anchor row — they are self-contained keyset boundaries with no existence check (§7.1), so retention cleanup does not break pagination. They **are** rejected when the requested selector differs from the selector bound into the cursor (e.g. after a config is deleted and its snapshots move to the null-config partition).
 
 ## 13. Non-goals and separate authorization boundaries
 

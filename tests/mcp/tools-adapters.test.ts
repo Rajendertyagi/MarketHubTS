@@ -163,6 +163,11 @@ function fakeDeps() {
   } as never;
   const snapshotService = {
     listSnapshots: (configId?: string) => { calls.push(`listSnapshots:${configId ?? ""}`); return []; },
+    listSnapshotsPage: (req: { selector: { kind: string; configId?: string }; limit: number; cursor?: string }) => {
+      const id = req.selector.kind === "config" ? req.selector.configId : "-";
+      calls.push(`page:${req.selector.kind}:${id}:${req.cursor ?? "first"}`);
+      return { ok: true, snapshots: [], nextCursor: null };
+    },
     getSnapshot: (id: string) => { calls.push(`getSnapshot:${id}`); return id === "missing" ? null : { id, configId: null, capturedAt: "2026-01-01T00:00:00.000Z", provider: "UPSTOX", envelope: { strikes: [] }, provenance: {} }; },
     captureOnDemand: async (req: { underlyingCanonicalId: string }) => { calls.push(`captureOnDemand:${req.underlyingCanonicalId}`); return { snapshot: null, error: "no provider available" }; }
   } as never;
@@ -249,5 +254,89 @@ describe("M6-B2 HTTP adapter (direct factory)", () => {
       closeDatabaseHandle(db);
       removeTempDir(dir);
     }
+  });
+
+  test("listSnapshotsPage forwards the discriminated selector and opaque cursor unchanged", async () => {
+    const { services, calls } = fakeDeps();
+    const opaque = "v1.eyJjIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwiaSI6InMxIiwicyI6eyJraW5kIjoibnVsbC1jb25maWcifX0";
+    const configResult = await services.listSnapshotsPage({
+      selector: { kind: "config", configId: "none" }, limit: 25, cursor: opaque
+    });
+    expect(configResult.ok).toBe(true);
+    expect(calls).toContain(`page:config:none:${opaque}`);
+
+    const nullResult = await services.listSnapshotsPage({
+      selector: { kind: "null-config" }, limit: 10
+    });
+    expect(nullResult.ok).toBe(true);
+    expect(calls).toContain("page:null-config:-:first");
+  });
+});
+
+describe("M6-B3 STDIO adapter (snapshot page)", () => {
+  test("forwards scope, configId and opaque cursor unchanged and validates the envelope", async () => {
+    const opaque = "v1.abc123";
+    let seen = "";
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: (req) => {
+        seen = new URL(req.url).search;
+        return Response.json({ snapshots: [], nextCursor: null });
+      }
+    });
+    try {
+      const services = createStdioServices(`http://127.0.0.1:${server.port}`);
+      const result = await services.listSnapshotsPage({
+        selector: { kind: "config", configId: "none" }, limit: 25, cursor: opaque
+      });
+      expect(result.ok).toBe(true);
+      expect(seen).toContain("scope=config");
+      expect(seen).toContain("configId=none");
+      expect(seen).toContain(`cursor=${opaque}`);
+      expect(seen).toContain("limit=25");
+    } finally { await server.stop(true); }
+  });
+
+  test("null-config scope omits configId; 404 maps to unknown_config and 400 to validation", async () => {
+    let status = 200;
+    let seen = "";
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: (req) => {
+        seen = new URL(req.url).search;
+        if (status === 404) return Response.json({ error: "not_found", message: "Unknown capture configuration" }, { status: 404 });
+        if (status === 400) return Response.json({ error: "invalid_request", message: "bad cursor" }, { status: 400 });
+        return Response.json({ snapshots: [], nextCursor: null });
+      }
+    });
+    try {
+      const services = createStdioServices(`http://127.0.0.1:${server.port}`);
+      const ok = await services.listSnapshotsPage({ selector: { kind: "null-config" }, limit: 25 });
+      expect(ok.ok).toBe(true);
+      expect(seen).toContain("scope=null-config");
+      expect(seen).not.toContain("configId");
+
+      status = 404;
+      const missing = await services.listSnapshotsPage({ selector: { kind: "config", configId: "x" }, limit: 25 });
+      expect(missing.ok).toBe(false);
+      if (!missing.ok) {
+        expect(missing.error.category).toBe("unavailable");
+        expect(missing.error.reason).toBe("unknown_config");
+      }
+
+      status = 400;
+      const bad = await services.listSnapshotsPage({ selector: { kind: "config", configId: "x" }, limit: 25, cursor: "bad" });
+      expect(bad.ok).toBe(false);
+      if (!bad.ok) expect(bad.error.category).toBe("validation");
+    } finally { await server.stop(true); }
+  });
+
+  test("malformed page envelope is rejected, never ok:true", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ snapshots: "not-an-array", nextCursor: null }) });
+    try {
+      const services = createStdioServices(`http://127.0.0.1:${server.port}`);
+      const result = await services.listSnapshotsPage({ selector: { kind: "null-config" }, limit: 25 });
+      expect(result.ok).toBe(false);
+    } finally { await server.stop(true); }
   });
 });

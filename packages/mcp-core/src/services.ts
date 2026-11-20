@@ -4,13 +4,22 @@ import type {
 } from "@markethub/contracts";
 import {
   candleGapSchema, candleRangeNoteSchema, historicalCandleSchema, liveSnapshotSchema,
-  optionChainSnapshotSchema, providerStatusMapSchema
+  optionChainSnapshotSchema, providerStatusMapSchema, type SnapshotPageSelector
 } from "@markethub/contracts";
 
 /** Uniform result shape shared by all MCP service operations. */
 export type McpResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: { category: "validation" | "unavailable" | "provider" | "internal"; message: string } };
+
+/**
+ * B3 snapshot page result. The `reason` discriminator lets the resource map an
+ * unknown configuration to a genuine not-found while a valid config with zero
+ * snapshots stays a successful empty page.
+ */
+export type McpSnapshotPageResult =
+  | { ok: true; value: { snapshots: McpOptionChainSnapshot[]; nextCursor: string | null } }
+  | { ok: false; error: { category: "validation" | "unavailable" | "internal"; message: string; reason?: "unknown_config" } };
 
 /** Zod-inferred canonical shapes (assignable from both service interfaces and validated API responses). */
 export type McpProviderStatusMap = z.infer<typeof providerStatusMapSchema>;
@@ -82,8 +91,9 @@ export interface McpOptionChainRequest {
 /**
  * The seam through which shared MCP registration reaches application capabilities.
  * M6-A exposed `getHealth()`; M6-B1 added catalog search and event-feed reads;
- * M6-B2 adds only the operations consumed by the nine registered tools. No
- * activity hooks (M6-C), no snapshot pagination (B3), no speculative methods.
+ * M6-B2 added the operations consumed by the nine registered tools; M6-B3 adds
+ * `listSnapshotsPage`. No activity hooks (M6-C), no subscription methods
+ * (M6-D), no speculative methods.
  */
 export interface McpServices {
   getHealth(): Promise<McpResult<HealthStatus>>;
@@ -95,6 +105,8 @@ export interface McpServices {
   getCoverage(req: CandleRangeRequest): Promise<McpResult<McpCoverageStatus>>;
   fetchHistorical(req: CandleRangeRequest): Promise<McpResult<McpHistoricalFetchResult>>;
   listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number }): Promise<McpResult<{ snapshots: McpOptionChainSnapshot[] }>>;
+  /** B3 — discriminated selector + opaque cursor, forwarded unchanged by both adapters. */
+  listSnapshotsPage(req: { selector: SnapshotPageSelector; limit: number; cursor?: string }): Promise<McpSnapshotPageResult>;
   getSnapshot(id: string): Promise<McpResult<McpOptionChainSnapshot>>;
   captureSnapshot(req: McpOptionChainRequest): Promise<McpResult<McpCaptureResult>>;
 }

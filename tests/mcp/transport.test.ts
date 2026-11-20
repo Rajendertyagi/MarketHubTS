@@ -15,7 +15,18 @@ const HEALTH = healthStatusSchema.parse({
 });
 
 const services: McpServices = {
-  getHealth: async () => ({ ok: true, value: HEALTH })
+  getHealth: async () => ({ ok: true, value: HEALTH }),
+  searchCatalog: async () => ({ ok: true, value: { instruments: [], nextCursor: null } }),
+  readEventFeed: async () => ({ ok: true, value: { events: [], nextCursor: null, resumeCursor: "r:0" } }),
+  getProviderStatus: async () => ({ ok: true, value: {} as never }),
+  getLiveSnapshot: async () => ({ ok: true, value: {} as never }),
+  getCachedCandles: async () => ({ ok: true, value: { candles: [] } }),
+  getCoverage: async () => ({ ok: true, value: { gaps: [], unavailableNotes: [] } }),
+  fetchHistorical: async () => ({ ok: true, value: { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] } }),
+  listSnapshots: async () => ({ ok: true, value: { snapshots: [] } }),
+  listSnapshotsPage: async () => ({ ok: true, value: { snapshots: [], nextCursor: null } }),
+  getSnapshot: async (id) => ({ ok: true, value: { id } as never }),
+  captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "x" } })
 };
 
 function makeHandler() {

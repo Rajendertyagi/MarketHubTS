@@ -1,6 +1,6 @@
 # M6-B — MCP Capabilities over Shared Services
 
-> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3/B4 implementation not started.** Awaiting separate authorization for each remaining sub-phase.
+> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented in the working tree** (pending independent review and separate merge/publication authorization); **M6-B4 implementation not started.** Awaiting separate authorization for the remaining sub-phase.
 > **Last updated:** 2026-11-20
 > **Depends on:** M6-A (implemented at `7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory, `markethub_health` only) and M6-B1 (catalog search + event-feed seams; final implementation baseline `be9421911ad74766a200ef091fcacdcef8448177`).
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §4.1.2 (McpServices), §4.1.3 (STDIO parity), §5 (inventory), §5.1–§5.3 (catalog search, annotations, capability table), §10 (M6-B), §11–§12 (tests/acceptance). This document adds execution detail; it does not change that design.
@@ -62,9 +62,9 @@ listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number }):
   Promise<McpResult<{ snapshots: OptionChainSnapshot[] }>>;
 // B3 — separate newest-first bounded page seam (not in B2 scope).
 // Opaque cursor end-to-end; one codec in market-core. No fromMs/toMs, no split keyset fields.
-// configId is an explicit selector: real id or reserved "none" => config_id IS NULL.
-listSnapshotsPage(filter: { configId: string; limit: number; cursor?: string }):
-  Promise<McpResult<{ snapshots: OptionChainSnapshot[]; nextCursor: string | null }>>;
+// Discriminated selector (no magic string): "none" remains a valid config id.
+listSnapshotsPage(req: { selector: SnapshotPageSelector; limit: number; cursor?: string }):
+  Promise<McpSnapshotPageResult>;
 getSnapshot(id: string): Promise<McpResult<OptionChainSnapshot>>;
 captureSnapshot(req: OptionChainRequest): Promise<McpResult<CaptureResult>>;
 // Discriminated: successful pages always carry resumeCursor; recovery never does.
@@ -124,10 +124,10 @@ This is a composition-only change; it must not alter M6-A transport, CORS, Host/
 | events/alerts | direct | none | contract-only; handler returns explicit `unavailable` (M7) |
 
 **Snapshot resource pagination contract (bounded newest-first seam):** the existing `SnapshotStore.listSnapshots(configId?, fromMs?, toMs?)` (`packages/market-core/src/snapshots/service.ts:8-15`) and its repository implementation order by `capturedAt ASC` with a default cap of 200 — re-sorting that oldest-first subset cannot surface the newest snapshots. M6-B therefore adds one bounded page method, symmetric with the catalog search extension:
-- `McpServices.listSnapshotsPage(filter: { configId: string; limit: number; cursor?: string })` accepts and returns an **opaque** cursor. One versioned cursor codec in market-core decodes it to internal keyset fields (`afterCapturedAt`, `afterId`) bound to the config selector; the repository receives only those internal fields. No `afterCapturedAt`/`afterId` in the public seam, no `fromMs`/`toMs`, and no duplicate codec in MCP/REST/adapters. Cursors do not expire (no expiry is implemented). Full contract: `M6_B3_PLAN.md` §7.1.
+- `McpServices.listSnapshotsPage(req: { selector: SnapshotPageSelector; limit: number; cursor?: string })` accepts and returns an **opaque** cursor. One versioned cursor codec in market-core decodes it to internal keyset fields (`afterCapturedAt`, `afterId`) bound to the **full discriminated selector**; the repository receives the selector plus those internal fields. No `afterCapturedAt`/`afterId` in the public seam, no `fromMs`/`toMs`, and no duplicate codec in MCP/REST/adapters. Cursors do not expire and are not invalidated by anchor-row deletion, but are rejected on selector mismatch. Full contract: `M6_B3_PLAN.md` §7.1.
 - `SnapshotStore.listSnapshotsPage` / `OptionChainSnapshotService.listSnapshotsPage` use `ORDER BY captured_at DESC, id DESC`, `LIMIT limit + 1` lookahead, and keyset predicate `(captured_at < afterCapturedAt) OR (captured_at = afterCapturedAt AND id < afterId)`. `nextCursor` is null when the lookahead finds no extra row. The existing `listSnapshots` stays unchanged for REST/WebUI.
 - **B2** uses only `McpServices.listSnapshots` (no pagination) over the existing `OptionChainSnapshotService.listSnapshots()` — oldest-first with a 200-record default cap; it is not described as returning the latest snapshots. **B3** adds the paginated seam; no MCP-layer re-sorting of a capped oldest-first set. Malformed/mismatched cursors return an explicit validation error, never a silent empty page.
-- **Index evidence:** the existing `(config_id, captured_at)` index does not support the `id` tie-break or unfiltered newest-first ordering (verified with `EXPLAIN QUERY PLAN`; `M6_B3_PLAN.md` §7.3). The paginated resource therefore requires an explicit config selector (real id or reserved `none` for `config_id IS NULL`); unfiltered browsing remains in the B2 tool. **No migration in B3**; a future unfiltered index needs separate authorization.
+- **Index evidence:** the existing `(config_id, captured_at)` index does not support the `id` tie-break or unfiltered newest-first ordering (verified with `EXPLAIN QUERY PLAN`; `M6_B3_PLAN.md` §7.3). The paginated resource therefore requires an explicit **discriminated** selector (`{ kind: "config", configId }` or `{ kind: "null-config" }` — no magic string, so `"none"` stays a valid config ID); unfiltered browsing remains in the B2 tool. **No migration in B3**; a future unfiltered index needs separate authorization.
 
 ### 4.3 Prompts
 

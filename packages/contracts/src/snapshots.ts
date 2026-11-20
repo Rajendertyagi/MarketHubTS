@@ -126,6 +126,15 @@ export const optionChainCaptureConfigSchema = z.object({
   updatedAt: z.string()
 });
 
+/**
+ * Discriminated selector for a bounded snapshot page partition (M6-B3).
+ * No magic string: capture-config IDs accept any non-empty string, so "none"
+ * is a valid real config ID and the null-config partition is a distinct kind.
+ */
+export type SnapshotPageSelector =
+  | { kind: "config"; configId: string }
+  | { kind: "null-config" };
+
 // --- Retention (validated app_meta value, user-controlled) ---
 
 export const retentionDataClassSchema = z.enum(["CANDLE", "SNAPSHOT"]);

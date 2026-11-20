@@ -6,6 +6,7 @@ import {
   optionChainSnapshotSchema
 } from "@markethub/contracts";
 import type { OptionChainSnapshotService, OptionChainRequest } from "@markethub/market-core";
+import type { SnapshotPageSelector } from "@markethub/contracts";
 import type { SnapshotRepository } from "@markethub/database";
 import { isLocalPeer } from "./lib/net";
 
@@ -80,9 +81,53 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
     return c.json({ snapshot: optionChainSnapshotSchema.parse(result.snapshot) });
   });
 
+  // B3: newest-first bounded page with an explicit discriminated selector.
+  // Static /page MUST precede the dynamic /:id route. No magic string: a real
+  // config id of "none" is addressed via scope=config&configId=none.
+  app.get("/api/snapshots/page", (c) => {
+    const scope = c.req.query("scope");
+    const configId = c.req.query("configId");
+    const limitRaw = c.req.query("limit");
+    const cursor = c.req.query("cursor");
+
+    let selector: SnapshotPageSelector;
+    if (scope === "config") {
+      if (configId === undefined || configId.length === 0) {
+        return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "scope=config requires a non-empty configId" }), 400);
+      }
+      selector = { kind: "config", configId };
+    } else if (scope === "null-config") {
+      if (configId !== undefined) {
+        return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "scope=null-config must not include configId" }), 400);
+      }
+      selector = { kind: "null-config" };
+    } else {
+      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "scope must be 'config' or 'null-config'" }), 400);
+    }
+
+    const limit = limitRaw === undefined ? 25 : Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "limit must be an integer between 1 and 100" }), 400);
+    }
+
+    const result = deps.service.listSnapshotsPage({
+      selector, limit, ...(cursor !== undefined ? { cursor } : {})
+    });
+    if (!result.ok) {
+      if (result.reason === "unknown_config") {
+        return c.json(apiErrorSchema.parse({ error: "not_found", message: result.message }), 404);
+      }
+      return c.json(apiErrorSchema.parse({ error: "invalid_request", message: result.message }), 400);
+    }
+    return c.json({
+      snapshots: result.snapshots.map((s) => optionChainSnapshotSchema.parse(s)),
+      nextCursor: result.nextCursor
+    });
+  });
+
   // Dynamic :id route MUST be registered after all static /api/snapshots/*
   // routes — Hono matches in registration order, so an earlier :id would
-  // shadow /api/snapshots/configs and /api/snapshots/capture.
+  // shadow /api/snapshots/configs, /api/snapshots/capture and /api/snapshots/page.
   app.get("/api/snapshots/:id", (c) => {
     const snapshot = deps.service.getSnapshot(c.req.param("id"));
     if (!snapshot) return c.json(apiErrorSchema.parse({ error: "not_found", message: "Snapshot not found" }), 404);

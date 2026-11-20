@@ -1,8 +1,9 @@
-import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lt, lte, or } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   OptionChainCaptureConfig,
-  OptionChainSnapshot
+  OptionChainSnapshot,
+  SnapshotPageSelector
 } from "@markethub/contracts";
 import { optionChainCaptureConfigs, optionChainSnapshots } from "../schema";
 import type { MarketHubDb } from "../index";
@@ -105,6 +106,44 @@ export class SnapshotRepository {
     const rows = conditions.length
       ? this.db.select().from(optionChainSnapshots).where(and(...conditions)).orderBy(asc(optionChainSnapshots.capturedAt)).limit(Math.max(1, Math.min(limit, 1000))).all()
       : this.db.select().from(optionChainSnapshots).orderBy(asc(optionChainSnapshots.capturedAt)).limit(Math.max(1, Math.min(limit, 1000))).all();
+    return rows.map((r) => this.toSnapshot(r));
+  }
+
+  /**
+   * B3: newest-first bounded page with stable (captured_at, id) keyset.
+   * Returns limit + 1 rows so the service can decide nextCursor by lookahead.
+   * The selector is explicit — no magic string — so a config id of "none"
+   * remains a real config and the null-config partition is a distinct scope.
+   */
+  listSnapshotsPage(filter: {
+    selector: SnapshotPageSelector;
+    limit: number;
+    afterCapturedAt?: string;
+    afterId?: string;
+  }): OptionChainSnapshot[] {
+    const conditions = [];
+    if (filter.selector.kind === "config") {
+      conditions.push(eq(optionChainSnapshots.configId, filter.selector.configId));
+    } else {
+      conditions.push(isNull(optionChainSnapshots.configId));
+    }
+    if (filter.afterCapturedAt !== undefined && filter.afterId !== undefined) {
+      conditions.push(
+        or(
+          lt(optionChainSnapshots.capturedAt, filter.afterCapturedAt),
+          and(
+            eq(optionChainSnapshots.capturedAt, filter.afterCapturedAt),
+            lt(optionChainSnapshots.id, filter.afterId)
+          )
+        )
+      );
+    }
+    const bounded = Math.max(1, Math.min(Math.trunc(filter.limit), 100));
+    const rows = this.db.select().from(optionChainSnapshots)
+      .where(and(...conditions))
+      .orderBy(desc(optionChainSnapshots.capturedAt), desc(optionChainSnapshots.id))
+      .limit(bounded + 1)
+      .all();
     return rows.map((r) => this.toSnapshot(r));
   }
 

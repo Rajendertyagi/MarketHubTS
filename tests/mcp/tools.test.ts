@@ -34,6 +34,7 @@ const services: McpServices = {
   getCoverage: async (req) => { calls.push(`coverage:${req.canonicalId}`); return { ok: true, value: { gaps: [], unavailableNotes: [] } }; },
   fetchHistorical: async (req) => { calls.push(`fetch:${req.canonicalId}:${req.fromMs}:${req.toMs}`); return { ok: true, value: { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] } }; },
   listSnapshots: async (filter) => { calls.push(`list:${filter.configId ?? ""}`); return { ok: true, value: { snapshots: [] } }; },
+  listSnapshotsPage: async (req) => { calls.push(`page:${req.selector.kind}`); return { ok: true, value: { snapshots: [], nextCursor: null } }; },
   getSnapshot: async (id) => id === "missing" ? { ok: false, error: { category: "unavailable", message: "Snapshot not found" } } : { ok: true, value: { id, configId: null, capturedAt: "2026-01-01T00:00:00.000Z", provider: "UPSTOX", envelope: { strikes: [] }, provenance: {} } as never },
   captureSnapshot: async (req) => { calls.push(`capture:${req.underlyingCanonicalId}:${req.expiryDate}`); return { ok: true, value: { snapshot: null, error: "no provider available" } }; }
 };

@@ -195,6 +195,29 @@ export function createStdioServices(apiBase: string): McpServices {
         return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
       }
     },
+    listSnapshotsPage: async (req) => {
+      try {
+        const params = new URLSearchParams({ scope: req.selector.kind, limit: String(req.limit) });
+        if (req.selector.kind === "config") params.set("configId", req.selector.configId);
+        if (req.cursor !== undefined) params.set("cursor", req.cursor);
+        const res = await fetch(`${apiBase}/api/snapshots/page?${params}`);
+        const json = await res.json();
+        if (res.status === 404) {
+          return { ok: false, error: { category: "unavailable", message: "Unknown capture configuration", reason: "unknown_config" } };
+        }
+        if (!res.ok) {
+          const category = res.status === 400 ? "validation" : "unavailable";
+          return { ok: false, error: { category, message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        }
+        const parsed = zArray(json?.snapshots, optionChainSnapshotSchema);
+        if (!parsed.ok || !(json.nextCursor === null || typeof json.nextCursor === "string")) {
+          return { ok: false, error: { category: "unavailable", message: "Invalid snapshot page response" } };
+        }
+        return { ok: true, value: { snapshots: parsed.value, nextCursor: json.nextCursor } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
     getSnapshot: async (id) => {
       try {
         const res = await fetch(`${apiBase}/api/snapshots/${encodeURIComponent(id)}`);

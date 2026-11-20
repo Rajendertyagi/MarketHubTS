@@ -2,6 +2,10 @@ import type {
   OptionChainCaptureConfig, OptionChainSnapshot, OptionChainSnapshotEnvelope, ProviderId
 } from "@markethub/contracts";
 import type { RetentionReader } from "../historical/service";
+import {
+  decodeSnapshotCursor, encodeSnapshotCursor,
+  type SnapshotPageResult, type SnapshotPageSelector
+} from "./page";
 
 /** Structural seam — market-core never imports the database package. */
 export interface SnapshotStore {
@@ -12,6 +16,13 @@ export interface SnapshotStore {
   putSnapshot(snapshot: OptionChainSnapshot): boolean;
   getSnapshot(id: string): OptionChainSnapshot | null;
   listSnapshots(configId?: string, fromMs?: number, toMs?: number): OptionChainSnapshot[];
+  /** Newest-first bounded page; returns limit + 1 rows for lookahead. */
+  listSnapshotsPage(filter: {
+    selector: SnapshotPageSelector;
+    limit: number;
+    afterCapturedAt?: string;
+    afterId?: string;
+  }): OptionChainSnapshot[];
 }
 
 export interface OptionChainRequest {
@@ -65,6 +76,40 @@ export class OptionChainSnapshotService {
 
   listSnapshots(configId?: string, fromMs?: number, toMs?: number): OptionChainSnapshot[] {
     return this.options.snapshots.listSnapshots(configId, fromMs, toMs);
+  }
+
+  /**
+   * B3: newest-first bounded page over an explicit selector. The cursor is
+   * opaque end-to-end; only this method decodes/encodes it. Config existence is
+   * checked through the existing getCaptureConfig lookup so an unknown config
+   * is a genuine not-found, distinct from a valid config with an empty page.
+   */
+  listSnapshotsPage(req: { selector: SnapshotPageSelector; limit: number; cursor?: string }): SnapshotPageResult {
+    const limit = Math.max(1, Math.min(Math.trunc(req.limit), 100));
+    if (req.selector.kind === "config" && this.getCaptureConfig(req.selector.configId) === null) {
+      return { ok: false, reason: "unknown_config", message: "Unknown capture configuration" };
+    }
+
+    let after: { capturedAt: string; id: string } | undefined;
+    if (req.cursor !== undefined && req.cursor !== "first") {
+      const decoded = decodeSnapshotCursor(req.cursor, req.selector);
+      if (decoded === null) {
+        return { ok: false, reason: "invalid_cursor", message: "Invalid snapshot page cursor" };
+      }
+      after = decoded;
+    }
+
+    const rows = this.options.snapshots.listSnapshotsPage({
+      selector: req.selector,
+      limit,
+      ...(after !== undefined ? { afterCapturedAt: after.capturedAt, afterId: after.id } : {})
+    });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextCursor = rows.length > limit && last !== undefined
+      ? encodeSnapshotCursor({ c: last.capturedAt, i: last.id, s: req.selector })
+      : null;
+    return { ok: true, snapshots: page, nextCursor };
   }
 
   getSnapshot(id: string): OptionChainSnapshot | null {

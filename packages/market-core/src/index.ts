@@ -20,3 +20,5 @@ export type { HistoricalProvider, HistoricalFetchOutcome, HistoricalServiceOptio
 export { assessGaps } from "./historical/gaps";
 export { OptionChainSnapshotService } from "./snapshots/service";
 export type { OptionChainProvider, OptionChainRequest, SnapshotServiceOptions, CaptureResult, SnapshotStore } from "./snapshots/service";
+export { encodeSnapshotCursor, decodeSnapshotCursor } from "./snapshots/page";
+export type { SnapshotPageSelector, SnapshotPageResult } from "./snapshots/page";
