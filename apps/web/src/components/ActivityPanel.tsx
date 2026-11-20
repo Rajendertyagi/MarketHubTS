@@ -7,7 +7,8 @@ import { StatusBadge } from "./StatusBadge";
 
 interface ActivityPanelProps {
   httpHandlerMounted: boolean | null;
-  onNavigateToHistory?: () => void;
+  onOpenSnapshot?: (snapshotId: string) => void;
+  onOpenHistorical?: (ref: { canonicalId: string; interval: string; fromMs: number; toMs: number }) => void;
 }
 
 function toError(error: unknown): string {
@@ -34,7 +35,7 @@ function formatDuration(ms: number | null): string {
   return `${ms} ms`;
 }
 
-export function ActivityPanel({ httpHandlerMounted, onNavigateToHistory }: ActivityPanelProps) {
+export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistorical }: ActivityPanelProps) {
   const [records, setRecords] = useState<McpActivityView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   // One cursor per visited page; index 0 is the unfiltered first page.
@@ -85,12 +86,13 @@ export function ActivityPanel({ httpHandlerMounted, onNavigateToHistory }: Activ
 
   useEffect(() => { void load(); loadStdioPresence(); }, []);
 
-  const lookup = async () => {
-    if (!operationId.trim()) { setError("Enter an operation ID first."); return; }
+  const lookup = async (id?: string) => {
+    const target = (id ?? operationId).trim();
+    if (!target) { setError("Enter an operation ID first."); return; }
     setLoading(true);
     setError(null);
     try {
-      setDetail(await fetchActivityByOperation(operationId.trim()));
+      setDetail(await fetchActivityByOperation(target));
     } catch (cause) {
       setError(toError(cause));
       setDetail(null);
@@ -106,11 +108,13 @@ export function ActivityPanel({ httpHandlerMounted, onNavigateToHistory }: Activ
     const ref = record.dataResultRef;
     if (!ref) return null;
     if (ref.kind === "snapshot") {
-      return <button type="button" className="text-sky-400 hover:underline" onClick={() => onNavigateToHistory?.()}>
+      return <button type="button" className="text-sky-400 hover:underline" onClick={() => onOpenSnapshot?.(ref.snapshotId)}>
         Open snapshot {ref.snapshotId.slice(0, 8)}…
       </button>;
     }
-    return <span className="text-slate-400">Historical {ref.canonicalId} / {ref.interval}</span>;
+    return <button type="button" className="text-sky-400 hover:underline" onClick={() => onOpenHistorical?.({
+      canonicalId: ref.canonicalId, interval: ref.interval, fromMs: ref.fromMs, toMs: ref.toMs
+    })}>Open historical {ref.canonicalId} / {ref.interval}</button>;
   };
 
   return (
@@ -180,6 +184,11 @@ export function ActivityPanel({ httpHandlerMounted, onNavigateToHistory }: Activ
               {record.transport} · {record.startedAt} · {formatDuration(record.durationMs)}
               {record.clientName ? ` · ${record.clientName}` : ""}
             </p>
+            <p className="mt-1 text-xs text-slate-500 break-all">Operation: {record.operationId}</p>
+            <button type="button" className="mt-1 text-sky-400 hover:underline text-xs" onClick={() => {
+              setOperationId(record.operationId);
+              void lookup(record.operationId);
+            }}>View details</button>
             {record.errorMessage && <p className="mt-1 text-xs text-rose-300">{record.errorCategory}: {record.errorMessage}</p>}
             {resultLink(record)}
           </li>

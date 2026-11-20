@@ -2,7 +2,7 @@
 
 > **Document status:** Reviewed implementation plan; not an implementation authorization.
 > **Repository baseline:** `Rajendertyagi/MarketHubTS`, branch `develop`, HEAD `490cbaa79c3a06ae2f34d44f951327d5607c3a32` (20 November 2026).
-> **Current implementation state:** M6-A and M6-B1/B2/B3 are present. M6-C source implementation is not present. This document is the authoritative M6-C plan; it corrects and sharpens the earlier plan based on the current source and official SDK behavior.
+> **Current implementation state:** M6-A and M6-B1/B2/B3 are present. **M6-C is implemented and published on `develop` at `fbca177`** (durable activity history, recording wrapper, activity endpoints, retention integration and WebUI inspection). This document is the authoritative M6-C plan.
 > **Governing documents:** `docs/M6_PLAN.md` §§9.1, 9.1.1, 9.2, 10 and 13; `docs/MCP_INTERFACE.md`; `docs/PROJECT_MANAGER_PROTOCOL.md`; `docs/ENGINEERING_STANDARDS.md`.
 
 ## 1. Objective

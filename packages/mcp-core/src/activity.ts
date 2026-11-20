@@ -1,5 +1,5 @@
 import { CLIENT_INFO_META_KEY, type ServerContext } from "@modelcontextprotocol/server";
-import type { McpActivityResultRef, McpActivitySummary } from "@markethub/contracts";
+import { sanitizeSensitiveText, type McpActivityResultRef, type McpActivitySummary } from "@markethub/contracts";
 import type { McpServices } from "./services";
 
 export type ActivityTransport = "HTTP" | "STDIO";
@@ -45,23 +45,44 @@ function resultRefOf(value: unknown): McpActivityResultRef | undefined {
   return undefined;
 }
 
+/** Extract an error object from either structuredContent or text content. */
+function errorObjectOf(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  const outer = value as Record<string, unknown>;
+  const structured = outer.structuredContent;
+  if (structured && typeof structured === "object") {
+    const err = (structured as Record<string, unknown>).error;
+    if (err && typeof err === "object") return err as Record<string, unknown>;
+  }
+  // tools.ts failure() places { ok:false, error } in text content, not structuredContent.
+  const content = outer.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const text = (part as Record<string, unknown>).text;
+      if (typeof text !== "string") continue;
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (parsed && typeof parsed === "object") {
+          const err = (parsed as Record<string, unknown>).error;
+          if (err && typeof err === "object") return err as Record<string, unknown>;
+        }
+      } catch { /* not JSON text */ }
+    }
+  }
+  return null;
+}
+
 /** Sanitized failure detail from a thrown error or an isError tool result. */
 function failureDetail(value: unknown): { category: string; message: string } {
   if (value instanceof Error) {
-    return { category: "internal", message: value.message.slice(0, 300) };
+    return { category: "internal", message: sanitizeSensitiveText(value.message, 300) };
   }
-  if (value && typeof value === "object") {
-    const outer = value as Record<string, unknown>;
-    const structured = outer.structuredContent;
-    if (structured && typeof structured === "object") {
-      const err = (structured as Record<string, unknown>).error;
-      if (err && typeof err === "object") {
-        const e = err as Record<string, unknown>;
-        const category = typeof e.category === "string" ? e.category.slice(0, 64) : "internal";
-        const message = typeof e.message === "string" ? e.message.slice(0, 300) : "tool returned isError";
-        return { category, message };
-      }
-    }
+  const err = errorObjectOf(value);
+  if (err) {
+    const category = typeof err.category === "string" ? sanitizeSensitiveText(err.category, 64) : "internal";
+    const message = typeof err.message === "string" ? sanitizeSensitiveText(err.message, 300) : "tool returned isError";
+    return { category, message };
   }
   return { category: "internal", message: "tool returned isError" };
 }
@@ -135,7 +156,7 @@ export function safeSummary(input: Record<string, unknown>, keys: readonly strin
   const out: McpActivitySummary = {};
   for (const key of keys) {
     const value = input[key];
-    if (typeof value === "string") out[key] = value.slice(0, 200);
+    if (typeof value === "string") out[key] = sanitizeSensitiveText(value, 200);
     else if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
     else if (typeof value === "boolean") out[key] = value;
   }

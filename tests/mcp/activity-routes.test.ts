@@ -119,6 +119,77 @@ describe("M6-C activity API routes", () => {
     } finally { h.cleanup(); }
   });
 
+  test("summaryJson must be a bounded safe-summary JSON object", async () => {
+    const h = harness();
+    try {
+      const bad = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody({ summaryJson: "not-json" }))
+      }, h.localEnv);
+      expect(bad.status).toBe(400);
+      const unsafe = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody({ summaryJson: JSON.stringify({ token: "secret123" }) }))
+      }, h.localEnv);
+      expect(unsafe.status).toBe(200); // schema validates shape; sanitizer redacts values at write
+      const view = h.activities.getByOperationId(OP);
+      expect(view?.summaryJson).not.toContain("secret123");
+    } finally { h.cleanup(); }
+  });
+
+  test("complete error fields are redacted before persistence", async () => {
+    const h = harness();
+    try {
+      await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(startBody())
+      }, h.localEnv);
+      await h.app.request("/api/mcp/activity/complete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId: OP, status: "failed", errorCategory: "provider", errorMessage: "Bearer abc123 token=secret99 rejected" })
+      }, h.localEnv);
+      const view = h.activities.getByOperationId(OP);
+      expect(view?.errorMessage).not.toContain("abc123");
+      expect(view?.errorMessage).not.toContain("secret99");
+      expect(view?.errorMessage).toContain("[redacted]");
+    } finally { h.cleanup(); }
+  });
+
+  test("oversized request bodies are rejected", async () => {
+    const h = harness();
+    try {
+      const huge = "x".repeat(5000);
+      const res = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody({ toolName: huge }))
+      }, h.localEnv);
+      expect(res.status).toBe(400);
+    } finally { h.cleanup(); }
+  });
+
+  test("default createApp composition wires activity retention cleanup", async () => {
+    resetConfigCache();
+    const dir = mkdtempSync(join(tmpdir(), "mh-activity-default-"));
+    const dbPath = join(dir, "test.sqlite");
+    const config = loadConfig({ env: { MARKETHUB_ENV: "test", MARKETHUB_DB_PATH: dbPath, MARKETHUB_PORT: "3999" } });
+    const db = openDatabase({ dbPath });
+    runMigrations(db.db, defaultMigrationsFolder);
+    const app = createApp({ config, db, logger: createLogger("error"), startedAt: Date.now() });
+    const localEnv = { requestIP: () => ({ address: "127.0.0.1" }) };
+    try {
+      const started = await app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody())
+      }, localEnv);
+      expect(started.status).toBe(200);
+      const settings = new AppSettings(db.db);
+      settings.setRetention({ version: 1, classes: { ACTIVITY: { maxAgeDays: 1 } } });
+      const cleanup = await app.request("/api/retention/cleanup", { method: "POST" }, localEnv);
+      expect(cleanup.status).toBe(200);
+      const body = await json(cleanup);
+      expect(typeof body.activitiesDeleted).toBe("number");
+    } finally { closeDatabaseHandle(db); removeTempDir(dir); }
+  });
+
   test("malformed bodies and unknown fields are rejected", async () => {
     const h = harness();
     try {

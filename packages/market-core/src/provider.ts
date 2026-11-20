@@ -1,3 +1,4 @@
+import { sanitizeSensitiveText } from "@markethub/contracts";
 import type {
   ProviderAdapter,
   ProviderId,
@@ -7,12 +8,7 @@ import type {
 
 /** Remove anything that looks like a credential from an error message. */
 export function sanitizeError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw
-    .replace(/(Bearer\s+)[^\s"']+/gi, "$1[redacted]")
-    .replace(/(appIdHash|access_token|refresh_token|app_secret|authorization_code|code|token|secret)\s*[:=]\s*[^,\s}&"']+/gi, "$1=[redacted]")
-    .replace(/[?&](code|state|access_token|token)=[^&\s"']+/gi, "?$1=[redacted]")
-    .slice(0, 300);
+  return sanitizeSensitiveText(error, 300);
 }
 
 export interface ProviderRegistryOptions {

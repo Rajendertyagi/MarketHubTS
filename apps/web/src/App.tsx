@@ -145,6 +145,8 @@ function ProviderPanel() {
 
 export function App() {
   const [activeTab, setActiveTab] = useState<"overview" | "live" | "history" | "activity">("overview");
+  const [focusSnapshotId, setFocusSnapshotId] = useState<string | null>(null);
+  const [focusHistorical, setFocusHistorical] = useState<{ canonicalId: string; interval: string; fromMs: number; toMs: number } | null>(null);
   const [lastSuccessAt, setLastSuccessAt] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["system-status"],
@@ -293,14 +295,15 @@ export function App() {
         )}
         {activeTab === "history" && (
           <>
-            <HistoricalPanel />
-            <SnapshotPanel />
+            <HistoricalPanel focus={focusHistorical} />
+            <SnapshotPanel focusSnapshotId={focusSnapshotId} />
           </>
         )}
         {activeTab === "activity" && (
           <ActivityPanel
             httpHandlerMounted={data?.mcp?.httpHandlerMounted ?? null}
-            onNavigateToHistory={() => setActiveTab("history")}
+            onOpenSnapshot={(snapshotId) => { setFocusSnapshotId(snapshotId); setActiveTab("history"); }}
+            onOpenHistorical={(ref) => { setFocusHistorical(ref); setActiveTab("history"); }}
           />
         )}
         <Outlet />

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { OptionChainCaptureConfig, OptionChainSnapshot } from "@markethub/contracts";
 import {
-  captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshots,
+  captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshot, fetchSnapshots,
   saveCaptureConfig, SnapshotHttpError
 } from "../lib/snapshots";
 import { StatusBadge } from "./StatusBadge";
@@ -18,7 +18,8 @@ function toError(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
-export function SnapshotPanel() {
+export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | null }) {
+  const [focusedSnapshot, setFocusedSnapshot] = useState<OptionChainSnapshot | null>(null);
   const [configs, setConfigs] = useState<OptionChainCaptureConfig[]>([]);
   const [snapshots, setSnapshots] = useState<OptionChainSnapshot[] | null>(null);
   const [underlying, setUnderlying] = useState("");
@@ -36,6 +37,12 @@ export function SnapshotPanel() {
   };
 
   useEffect(() => { loadConfigs(); loadSnapshots(); }, []);
+
+  // M6-C: open/select the snapshot referenced by an activity record.
+  useEffect(() => {
+    if (!focusSnapshotId) { setFocusedSnapshot(null); return; }
+    void fetchSnapshot(focusSnapshotId).then(setFocusedSnapshot).catch(() => setFocusedSnapshot(null));
+  }, [focusSnapshotId]);
 
   const addConfig = async () => {
     if (!underlying.trim() || !expiry.trim()) { setError("Enter an underlying and expiry first."); return; }
@@ -127,6 +134,18 @@ export function SnapshotPanel() {
           ))}
         </ul>
       </div>
+
+      {focusedSnapshot && (
+        <div className="mt-5 rounded-lg border border-sky-800/60 bg-sky-950/20 p-3" role="status">
+          <h4 className="text-sm font-semibold text-sky-200">Selected snapshot (from activity)</h4>
+          <p className="mt-1 text-xs text-slate-300 break-all">
+            {focusedSnapshot.id} · {focusedSnapshot.envelope.underlyingCanonicalId} · {focusedSnapshot.envelope.expiryDate}
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            Captured {focusedSnapshot.envelope.capturedAt} · {focusedSnapshot.envelope.strikes.length} strikes · provider {focusedSnapshot.provider}
+          </p>
+        </div>
+      )}
 
       <div className="mt-5 border-t border-slate-800 pt-4">
         <h4 className="text-sm font-semibold text-slate-200">Stored snapshots</h4>

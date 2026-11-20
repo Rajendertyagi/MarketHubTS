@@ -190,15 +190,17 @@ export function createApp(deps: AppDependencies) {
   const snapshotService = deps.snapshotService ?? new OptionChainSnapshotService({
     snapshots: snapshotRepo, settings: appSettings, providers: []
   });
+  // M6-C: construct the activity repository once, before any route that needs
+  // it, so default composition and injected composition share the same instance.
+  const activityRepo = deps.activityRepo ?? new McpActivityRepository(deps.db.db, deps.db.sqlite);
   registerHistoricalRoutes(app, {
     service: historicalService, candles: candleRepo, snapshots: snapshotRepo, settings: appSettings,
-    ...(deps.activityRepo ? { activities: deps.activityRepo } : {})
+    activities: activityRepo
   });
   registerSnapshotRoutes(app, { service: snapshotService, snapshots: snapshotRepo });
 
-  // M6-C: durable activity history. One repository instance shared with the
-  // MCP adapter; write routes are local-owner-only, reads follow the LAN model.
-  const activityRepo = deps.activityRepo ?? new McpActivityRepository(deps.db.db, deps.db.sqlite);
+  // M6-C: durable activity history. Write routes are local-owner-only, reads
+  // follow the LAN model. Same repository instance as retention cleanup.
   registerMcpActivityRoutes(app, { activities: activityRepo });
 
   if (deps.service && deps.hub && (deps.supervisor || deps.coordinator)) {

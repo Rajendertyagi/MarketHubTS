@@ -45,6 +45,14 @@ export const mcpActivityStartRequestSchema = z.object({
   clientVersion: z.string().min(1).max(120).optional(),
   clientStartedAt: diagnosticTimestamp.optional(),
   summaryJson: z.string().max(1000).optional()
+    .refine((raw) => {
+      if (raw === undefined) return true;
+      try {
+        return mcpActivitySummarySchema.safeParse(JSON.parse(raw)).success;
+      } catch {
+        return false;
+      }
+    }, { message: "summaryJson must be a bounded safe-summary JSON object" })
 }).strict();
 export type McpActivityStartRequest = z.infer<typeof mcpActivityStartRequestSchema>;
 

@@ -24,7 +24,7 @@ function toError(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
-export function HistoricalPanel() {
+export function HistoricalPanel({ focus }: { focus?: { canonicalId: string; interval: string; fromMs: number; toMs: number } | null }) {
   const [canonicalId, setCanonicalId] = useState("");
   const [interval, setInterval] = useState<CandleInterval>("1D");
   const [from, setFrom] = useState("");
@@ -52,6 +52,15 @@ export function HistoricalPanel() {
   };
 
   useEffect(() => { loadConfigs(); loadRetention(); }, []);
+
+  // M6-C: prefill the historical query from an activity result reference.
+  useEffect(() => {
+    if (!focus) return;
+    setCanonicalId(focus.canonicalId);
+    setInterval(focus.interval as CandleInterval);
+    setFrom(new Date(focus.fromMs).toISOString().slice(0, 10));
+    setTo(new Date(focus.toMs).toISOString().slice(0, 10));
+  }, [focus]);
 
   const readCached = async () => {
     // Date-only inputs are India-local calendar dates: inclusive local midnight

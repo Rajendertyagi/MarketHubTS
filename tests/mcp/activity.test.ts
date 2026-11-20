@@ -176,6 +176,48 @@ describe("M6-C activity recording", () => {
     expect(startReq?.clientVersion).toBeUndefined();
   });
 
+  test("error messages and summaries are redacted before persistence", async () => {
+    let captured: { errorMessage?: string; summaryJson?: string } | undefined;
+    const { services } = makeServices({
+      getLiveSnapshot: async () => { throw new Error("Bearer abc123 token=secret99 rejected"); },
+      startActivity: async (req) => {
+        captured = { summaryJson: req.summaryJson };
+        return { ok: true, value: { id: "a1", operationId: req.operationId, startedAt: "2026-01-01T00:00:00.000Z" } };
+      },
+      completeActivity: async (req) => {
+        captured = { ...captured, errorMessage: req.errorMessage };
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const { client, handler } = await connect(services);
+    try {
+      await client.callTool({ name: "market_snapshot", arguments: {} });
+      expect(captured?.errorMessage).not.toContain("abc123");
+      expect(captured?.errorMessage).not.toContain("secret99");
+      expect(captured?.errorMessage).toContain("[redacted]");
+    } finally { await client.close(); await handler.close(); }
+  });
+
+  test("isError tool result with error in text content is extracted", async () => {
+    let captured: { errorMessage?: string; errorCategory?: string } | undefined;
+    const { services } = makeServices({
+      getProviderStatus: async () => ({
+        ok: false as const,
+        error: { category: "unavailable" as const, message: "registry down" }
+      }),
+      completeActivity: async (req) => {
+        captured = { errorMessage: req.errorMessage, errorCategory: req.errorCategory };
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const { client, handler } = await connect(services);
+    try {
+      await client.callTool({ name: "provider_status", arguments: {} });
+      expect(captured?.errorCategory).toBe("unavailable");
+      expect(captured?.errorMessage).toBe("registry down");
+    } finally { await client.close(); await handler.close(); }
+  });
+
   test("all nine tools, seven resources and three prompts are recorded", async () => {
     const { services, calls } = makeServices();
     const { client, handler } = await connect(services);
