@@ -18,6 +18,12 @@ interface CursorPayload {
 
 const CURSOR_PREFIX = "v1.";
 const MAX_CURSOR_LENGTH = 4096;
+/** ISO-8601 datetime with explicit timezone, matching the contract's z.string().datetime(). */
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function isIsoDateTime(value: string): boolean {
+  return ISO_DATETIME.test(value) && Number.isFinite(Date.parse(value));
+}
 
 /** Encode a self-contained, versioned, opaque keyset cursor. */
 export function encodeSnapshotCursor(payload: CursorPayload): string {
@@ -47,7 +53,7 @@ export function decodeSnapshotCursor(
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
-  if (typeof obj.c !== "string" || obj.c.length === 0) return null;
+  if (typeof obj.c !== "string" || !isIsoDateTime(obj.c)) return null;
   if (typeof obj.i !== "string" || obj.i.length === 0) return null;
   if (!isSelector(obj.s) || !selectorsEqual(obj.s, selector)) return null;
   return { capturedAt: obj.c, id: obj.i };

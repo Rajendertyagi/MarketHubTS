@@ -66,6 +66,21 @@ describe("M6-B3 snapshot page selector and cursor", () => {
     expect(decodeSnapshotCursor("v1.", configNone)).toBeNull();
   });
 
+  test("a structurally valid cursor with a malformed timestamp is rejected", () => {
+    const badPayload = JSON.stringify({
+      c: "not-a-date", i: "s1", s: { kind: "null-config" }
+    });
+    const badCursor = "v1." + Buffer.from(badPayload, "utf8").toString("base64url");
+    expect(decodeSnapshotCursor(badCursor, nullConfig)).toBeNull();
+
+    const h = harness();
+    try {
+      const result = h.service.listSnapshotsPage({ selector: nullConfig, limit: 25, cursor: badCursor });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("invalid_cursor");
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
   test('a real configuration whose id is exactly "none" is addressable', () => {
     const h = harness();
     try {
