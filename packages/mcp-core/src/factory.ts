@@ -11,7 +11,9 @@ import { registerPrompts } from "./prompts";
  * per HTTP request and once per STDIO connection (plus a discarded discovery probe).
  */
 export function createMcpServer(ctx: McpRequestContext, services: McpServices): McpServer {
-  void ctx; // reserved for era-specific registration in later phases
+  // M6-C: requestInfo is set only for HTTP requests by the installed SDK;
+  // serveStdio never sets it. No activity rows are created during construction.
+  const transport = ctx.requestInfo ? "HTTP" : "STDIO";
   const server = new McpServer(
     { name: "markethubts", version: "0.1.0" },
     {
@@ -25,8 +27,8 @@ export function createMcpServer(ctx: McpRequestContext, services: McpServices): 
       }
     }
   );
-  registerTools(server, services);
-  registerResources(server, services);
-  registerPrompts(server);
+  registerTools(server, services, transport);
+  registerResources(server, services, transport);
+  registerPrompts(server, services, transport);
   return server;
 }

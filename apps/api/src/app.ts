@@ -15,7 +15,7 @@ import {
   type ReadinessStatus
 } from "@markethub/contracts";
 import {
-  AppSettings, CandleRepository, SnapshotRepository, SqliteCatalogRepository, checkDatabase, type DatabaseHandle
+  AppSettings, CandleRepository, SnapshotRepository, SqliteCatalogRepository, McpActivityRepository, checkDatabase, type DatabaseHandle
 } from "@markethub/database";
 import { nowIso } from "@markethub/shared";
 import type { AppConfig } from "@markethub/config";
@@ -60,6 +60,8 @@ export interface AppDependencies {
   mcpHandler?: McpHttpHandler;
   /** M6-B1: catalog repository override for tests; defaults to a repo over deps.db. */
   catalogRepo?: CatalogRepository;
+  /** M6-C: durable activity repository; defaults to a repo over deps.db. */
+  activityRepo?: McpActivityRepository;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -95,6 +97,7 @@ import { registerProviderRoutes } from "./provider-routes";
 import { registerMarketRoutes } from "./market-routes";
 import { registerHistoricalRoutes } from "./historical-routes";
 import { registerSnapshotRoutes } from "./snapshot-routes";
+import { registerMcpActivityRoutes } from "./mcp-activity-routes";
 export function isAllowedCorsOrigin(origin: string, config: Pick<AppConfig, "lan" | "port" | "webPort">): boolean {
   if (!origin) return false;
   const allowed = new Set<string>([
@@ -188,9 +191,15 @@ export function createApp(deps: AppDependencies) {
     snapshots: snapshotRepo, settings: appSettings, providers: []
   });
   registerHistoricalRoutes(app, {
-    service: historicalService, candles: candleRepo, snapshots: snapshotRepo, settings: appSettings
+    service: historicalService, candles: candleRepo, snapshots: snapshotRepo, settings: appSettings,
+    ...(deps.activityRepo ? { activities: deps.activityRepo } : {})
   });
   registerSnapshotRoutes(app, { service: snapshotService, snapshots: snapshotRepo });
+
+  // M6-C: durable activity history. One repository instance shared with the
+  // MCP adapter; write routes are local-owner-only, reads follow the LAN model.
+  const activityRepo = deps.activityRepo ?? new McpActivityRepository(deps.db.db, deps.db.sqlite);
+  registerMcpActivityRoutes(app, { activities: activityRepo });
 
   if (deps.service && deps.hub && (deps.supervisor || deps.coordinator)) {
     registerMarketRoutes(app, {
@@ -215,7 +224,8 @@ export function createApp(deps: AppDependencies) {
       timestamp: nowIso(),
       uptimeMs: Date.now() - deps.startedAt,
       health,
-      readiness
+      readiness,
+      mcp: { httpHandlerMounted: deps.mcpHandler !== undefined }
     });
     return c.json(payload);
   });

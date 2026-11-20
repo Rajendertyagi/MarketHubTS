@@ -101,6 +101,8 @@ export { SqliteCatalogRepository } from "./repositories/catalog";
 export { CandleRepository } from "./repositories/candles";
 export type { UpsertCandlesOptions, UpsertCandlesResult } from "./repositories/candles";
 export { SnapshotRepository } from "./repositories/snapshots";
+export { McpActivityRepository } from "./repositories/mcp-activity";
+export type { ActivityStartOutcome, ActivityCompleteOutcome } from "./repositories/mcp-activity";
 export { AppSettings, RETENTION_SETTINGS_KEY } from "./app-settings";
 export type { RetentionReadResult } from "./app-settings";
 export { SqliteCredentialStore, resolveCredentialKeyPath } from "./credentials";

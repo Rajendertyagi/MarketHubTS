@@ -2,7 +2,7 @@ import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@ma
 import {
   openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings,
   SqliteSubscriptionRepository, SqliteCatalogRepository, AppSettings, CandleRepository, SnapshotRepository,
-  type DatabaseHandle
+  McpActivityRepository, type DatabaseHandle
 } from "@markethub/database";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createMcpServer } from "@markethub/mcp-core";
@@ -113,6 +113,7 @@ async function main() {
   const appSettings = new AppSettings(db.db);
   const candleRepo = new CandleRepository(db.db, db.sqlite);
   const snapshotRepo = new SnapshotRepository(db.db, db.sqlite);
+  const activityRepo = new McpActivityRepository(db.db, db.sqlite);
   const historicalService = new HistoricalCandleService({ candles: candleRepo, settings: appSettings, providers: [] });
   const snapshotService = new OptionChainSnapshotService({ snapshots: snapshotRepo, settings: appSettings, providers: [] });
 
@@ -123,7 +124,10 @@ async function main() {
   const runtimeCatalog = catalog;
   mcpHandler = createMcpHandler((ctx) =>
     createMcpServer(ctx, createHttpMcpServices(
-      config, runtimeDb, runtimeCatalog, runtimeHub, registry, service, historicalService, snapshotService
+      config, runtimeDb, runtimeCatalog, runtimeHub, registry, service, historicalService, snapshotService, activityRepo,
+      (error) => logger.warn("mcp_activity_write_failed", {
+        message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
+      })
     ))
   );
 
@@ -131,7 +135,7 @@ async function main() {
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
     service, hub, coordinator, mcpHandler, catalogRepo: catalog,
-    appSettings, candleRepo, snapshotRepo, historicalService, snapshotService
+    appSettings, candleRepo, snapshotRepo, historicalService, snapshotService, activityRepo
   });
 
   try {

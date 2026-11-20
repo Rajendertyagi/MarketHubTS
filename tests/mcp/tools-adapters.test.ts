@@ -171,7 +171,7 @@ function fakeDeps() {
     getSnapshot: (id: string) => { calls.push(`getSnapshot:${id}`); return id === "missing" ? null : { id, configId: null, capturedAt: "2026-01-01T00:00:00.000Z", provider: "UPSTOX", envelope: { strikes: [] }, provenance: {} }; },
     captureOnDemand: async (req: { underlyingCanonicalId: string }) => { calls.push(`captureOnDemand:${req.underlyingCanonicalId}`); return { snapshot: null, error: "no provider available" }; }
   } as never;
-  return { services: createHttpMcpServices(config, db, catalog, hub, registry, service, historicalService, snapshotService), calls, auth };
+  return { services: createHttpMcpServices(config, db, catalog, hub, registry, service, historicalService, snapshotService, {} as never), calls, auth };
 }
 
 describe("M6-B2 HTTP adapter (direct factory)", () => {
@@ -246,7 +246,7 @@ describe("M6-B2 HTTP adapter (direct factory)", () => {
       const json = await res.json();
       expect(Array.isArray(json.candles)).toBe(true);
       // The MCP adapter built from the same instance returns the same empty result.
-      const mcp = createHttpMcpServices(config, db, {} as never, {} as never, {} as never, {} as never, historicalService, snapshotService);
+      const mcp = createHttpMcpServices(config, db, {} as never, {} as never, {} as never, {} as never, historicalService, snapshotService, {} as never);
       const mcpResult = await mcp.getCachedCandles({ canonicalId: A, interval: "1D", fromMs: 1, toMs: 2 });
       expect(mcpResult.ok).toBe(true);
       if (mcpResult.ok) expect(mcpResult.value.candles).toEqual(json.candles);

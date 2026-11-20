@@ -46,7 +46,9 @@ describe("mcp real HTTP smoke (M6-A exit gate)", () => {
       listSnapshots: async () => ({ ok: true, value: { snapshots: [] } }),
       listSnapshotsPage: async () => ({ ok: true, value: { snapshots: [], nextCursor: null } }),
       getSnapshot: async (id) => ({ ok: true, value: { id } as never }),
-      captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } })
+      captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } }),
+      startActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } }),
+      completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } })
     };
     const handler = createMcpHandler((ctx) => createMcpServer(ctx, services));
     const app = createApp({ config, db, logger: createLogger("error"), startedAt: Date.now(), mcpHandler: handler });

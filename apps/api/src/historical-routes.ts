@@ -10,7 +10,7 @@ import {
   type CandleRangeRequest
 } from "@markethub/contracts";
 import type { HistoricalCandleService } from "@markethub/market-core";
-import type { AppSettings, CandleRepository, SnapshotRepository } from "@markethub/database";
+import type { AppSettings, CandleRepository, SnapshotRepository, McpActivityRepository } from "@markethub/database";
 import { isLocalPeer } from "./lib/net";
 
 export interface HistoricalRouteDependencies {
@@ -18,6 +18,7 @@ export interface HistoricalRouteDependencies {
   candles: CandleRepository;
   snapshots: SnapshotRepository;
   settings: AppSettings;
+  activities?: McpActivityRepository;
 }
 
 export interface RetentionCleanupResult {
@@ -25,6 +26,7 @@ export interface RetentionCleanupResult {
   reason: string | null;
   candlesDeleted: number;
   snapshotsDeleted: number;
+  activitiesDeleted: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -38,20 +40,23 @@ export function applyRetentionCleanup(
   settings: AppSettings,
   candles: CandleRepository,
   snapshots: SnapshotRepository,
+  activities: McpActivityRepository | undefined,
   now: () => number = () => Date.now()
 ): RetentionCleanupResult {
   const read = settings.getRetention();
   if (!read.valid || !read.settings) {
-    return { ran: false, reason: read.error ?? "retention settings unavailable", candlesDeleted: 0, snapshotsDeleted: 0 };
+    return { ran: false, reason: read.error ?? "retention settings unavailable", candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 };
   }
   const current = now();
   const candleDays = read.settings.classes.CANDLE?.maxAgeDays;
   const snapshotDays = read.settings.classes.SNAPSHOT?.maxAgeDays;
+  const activityDays = read.settings.classes.ACTIVITY?.maxAgeDays;
   return {
     ran: true,
     reason: null,
     candlesDeleted: candleDays !== undefined ? candles.cleanupCandles(current - candleDays * DAY_MS) : 0,
-    snapshotsDeleted: snapshotDays !== undefined ? snapshots.cleanupSnapshots(current - snapshotDays * DAY_MS) : 0
+    snapshotsDeleted: snapshotDays !== undefined ? snapshots.cleanupSnapshots(current - snapshotDays * DAY_MS) : 0,
+    activitiesDeleted: activityDays !== undefined && activities ? activities.cleanupActivities(current - activityDays * DAY_MS) : 0
   };
 }
 
@@ -149,6 +154,6 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Retention cleanup is local-owner only" }), 403);
     }
-    return c.json(applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots));
+    return c.json(applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots, deps.activities));
   });
 }

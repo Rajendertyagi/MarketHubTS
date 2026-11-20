@@ -44,7 +44,9 @@ const services: McpServices = {
     return { ok: true, value: { snapshots: [], nextCursor: null } };
   },
   getSnapshot: async (id) => ({ ok: true, value: { id, configId: null, capturedAt: "2026-01-01T00:00:00.000Z", provider: "UPSTOX", envelope: { strikes: [] }, provenance: {} } as never }),
-  captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } })
+  captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } }),
+  startActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } }),
+  completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } })
 };
 
 async function connect() {

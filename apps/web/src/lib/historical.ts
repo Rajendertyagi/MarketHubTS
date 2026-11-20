@@ -149,6 +149,7 @@ export interface RetentionCleanupResult {
   reason: string | null;
   candlesDeleted: number;
   snapshotsDeleted: number;
+  activitiesDeleted: number;
 }
 
 export async function runRetentionCleanup(): Promise<RetentionCleanupResult> {
@@ -156,5 +157,5 @@ export async function runRetentionCleanup(): Promise<RetentionCleanupResult> {
   const payload = await readPayload(response);
   if (!response.ok) throw new HistoricalHttpError(classify(response.status), messageOf(payload, response.status));
   const p = payload as RetentionCleanupResult;
-  return { ran: p.ran === true, reason: p.reason ?? null, candlesDeleted: p.candlesDeleted ?? 0, snapshotsDeleted: p.snapshotsDeleted ?? 0 };
+  return { ran: p.ran === true, reason: p.reason ?? null, candlesDeleted: p.candlesDeleted ?? 0, snapshotsDeleted: p.snapshotsDeleted ?? 0, activitiesDeleted: p.activitiesDeleted ?? 0 };
 }

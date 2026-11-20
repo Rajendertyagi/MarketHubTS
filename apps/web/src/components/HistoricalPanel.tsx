@@ -125,7 +125,7 @@ export function HistoricalPanel() {
     try {
       const result = await runRetentionCleanup();
       setMessage(result.ran
-        ? `Cleanup complete: ${result.candlesDeleted} candles, ${result.snapshotsDeleted} snapshots deleted.`
+        ? `Cleanup complete: ${result.candlesDeleted} candles, ${result.snapshotsDeleted} snapshots, ${result.activitiesDeleted} activity records deleted.`
         : `Cleanup disabled: ${result.reason ?? "invalid settings"}. Nothing deleted.`);
     } catch (cause) { setError(toError(cause)); }
   };
@@ -251,6 +251,21 @@ export function HistoricalPanel() {
                   const classes = { ...(prev?.classes ?? {}) };
                   if (raw !== "" && Number.isInteger(days) && days > 0) classes.SNAPSHOT = { maxAgeDays: days };
                   else delete classes.SNAPSHOT; // clearing the input removes the limit
+                  return { version: 1, classes };
+                });
+              }} />
+          </label>
+          <label className="text-xs text-slate-300">
+            Activity max age (days)
+            <input aria-label="Activity max age days" type="number" min="1" className={`${input} mt-1 w-32`}
+              value={retention?.classes.ACTIVITY?.maxAgeDays ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                const days = Number(raw);
+                setRetention((prev) => {
+                  const classes = { ...(prev?.classes ?? {}) };
+                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.ACTIVITY = { maxAgeDays: days };
+                  else delete classes.ACTIVITY; // clearing the input removes the limit
                   return { version: 1, classes };
                 });
               }} />

@@ -1,5 +1,5 @@
 import type { AppConfig } from "@markethub/config";
-import { checkDatabase, type DatabaseHandle } from "@markethub/database";
+import { checkDatabase, type DatabaseHandle, type McpActivityRepository } from "@markethub/database";
 import { healthStatusSchema, providerStatusMapSchema } from "@markethub/contracts";
 import { nowIso } from "@markethub/shared";
 import type { McpServices } from "@markethub/mcp-core";
@@ -23,9 +23,12 @@ export function createHttpMcpServices(
   registry: import("@markethub/market-core").ProviderRegistry,
   service: MarketDataService,
   historicalService: HistoricalCandleService,
-  snapshotService: OptionChainSnapshotService
+  snapshotService: OptionChainSnapshotService,
+  activityRepo: McpActivityRepository,
+  onActivityError?: (error: unknown) => void
 ): McpServices {
   return {
+    ...(onActivityError ? { onActivityError } : {}),
     getHealth: async () => {
       const parsed = healthStatusSchema.safeParse({
         status: "ok",
@@ -96,6 +99,23 @@ export function createHttpMcpServices(
         ? { ok: true, value: snapshot }
         : { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
     },
-    captureSnapshot: async (req) => ({ ok: true, value: await snapshotService.captureOnDemand(req) })
+    captureSnapshot: async (req) => ({ ok: true, value: await snapshotService.captureOnDemand(req) }),
+    startActivity: async (req) => {
+      const result = activityRepo.start(req);
+      return result.ok
+        ? { ok: true, value: result.value }
+        : { ok: false, error: { category: "internal", message: result.message } };
+    },
+    completeActivity: async (req) => {
+      const result = activityRepo.complete(req);
+      if (result.ok) return { ok: true, value: result.value };
+      return {
+        ok: false,
+        error: {
+          category: result.reason === "not_found" ? "unavailable" : "validation",
+          message: result.message
+        }
+      };
+    }
   };
 }

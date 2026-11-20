@@ -4,7 +4,9 @@ import type {
 } from "@markethub/contracts";
 import {
   candleGapSchema, candleRangeNoteSchema, historicalCandleSchema, liveSnapshotSchema,
-  optionChainSnapshotSchema, providerStatusMapSchema, type SnapshotPageSelector
+  optionChainSnapshotSchema, providerStatusMapSchema, type SnapshotPageSelector,
+  type McpActivityStartRequest, type McpActivityStartResult,
+  type McpActivityCompleteRequest, type McpActivityCompleteResult
 } from "@markethub/contracts";
 
 /** Uniform result shape shared by all MCP service operations. */
@@ -92,8 +94,8 @@ export interface McpOptionChainRequest {
  * The seam through which shared MCP registration reaches application capabilities.
  * M6-A exposed `getHealth()`; M6-B1 added catalog search and event-feed reads;
  * M6-B2 added the operations consumed by the nine registered tools; M6-B3 adds
- * `listSnapshotsPage`. No activity hooks (M6-C), no subscription methods
- * (M6-D), no speculative methods.
+ * `listSnapshotsPage`; M6-C adds activity start/complete and an optional
+ * diagnostic hook. No subscription methods (M6-D), no speculative methods.
  */
 export interface McpServices {
   getHealth(): Promise<McpResult<HealthStatus>>;
@@ -109,4 +111,9 @@ export interface McpServices {
   listSnapshotsPage(req: { selector: SnapshotPageSelector; limit: number; cursor?: string }): Promise<McpSnapshotPageResult>;
   getSnapshot(id: string): Promise<McpResult<McpOptionChainSnapshot>>;
   captureSnapshot(req: McpOptionChainRequest): Promise<McpResult<McpCaptureResult>>;
+  /** M6-C — durable activity recording (best-effort). */
+  startActivity(req: McpActivityStartRequest): Promise<McpResult<McpActivityStartResult>>;
+  completeActivity(req: McpActivityCompleteRequest): Promise<McpResult<McpActivityCompleteResult>>;
+  /** Optional diagnostic sink for activity-write failures; never affects operation outcomes. */
+  onActivityError?: (error: unknown) => void;
 }

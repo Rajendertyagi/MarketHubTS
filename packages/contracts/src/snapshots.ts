@@ -137,14 +137,15 @@ export type SnapshotPageSelector =
 
 // --- Retention (validated app_meta value, user-controlled) ---
 
-export const retentionDataClassSchema = z.enum(["CANDLE", "SNAPSHOT"]);
+export const retentionDataClassSchema = z.enum(["CANDLE", "SNAPSHOT", "ACTIVITY"]);
 export type RetentionDataClass = z.infer<typeof retentionDataClassSchema>;
 
 export const retentionSettingsSchema = z.object({
   version: z.literal(1),
   classes: z.object({
     CANDLE: z.object({ maxAgeDays: z.number().int().positive() }).optional(),
-    SNAPSHOT: z.object({ maxAgeDays: z.number().int().positive() }).optional()
+    SNAPSHOT: z.object({ maxAgeDays: z.number().int().positive() }).optional(),
+    ACTIVITY: z.object({ maxAgeDays: z.number().int().positive() }).optional()
   })
 });
 export type RetentionSettings = z.infer<typeof retentionSettingsSchema>;

@@ -364,6 +364,44 @@ export const optionChainSnapshots = sqliteTable(
   ]
 );
 
+// --- M6-C durable MCP activity history ---
+// One row per executed MCP callback. API-generated timestamps are authoritative
+// for ordering, retention and monotonicity; client timestamps are diagnostics only.
+export const mcpActivity = sqliteTable(
+  "mcp_activity",
+  {
+    id: text("id").primaryKey(),
+    operationId: text("operation_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    transport: text("transport").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    durationMs: integer("duration_ms"),
+    clientStartedAt: text("client_started_at"),
+    clientFinishedAt: text("client_finished_at"),
+    clientName: text("client_name"),
+    clientVersion: text("client_version"),
+    status: text("status").notNull(),
+    errorCategory: text("error_category"),
+    errorMessage: text("error_message"),
+    summaryJson: text("summary_json"),
+    dataResultRef: text("data_result_ref")
+  },
+  (t) => [
+    uniqueIndex("mcp_activity_operation_uq").on(t.operationId),
+    index("mcp_activity_started_id_idx").on(t.startedAt, t.id),
+    index("mcp_activity_status_idx").on(t.status),
+    index("mcp_activity_tool_idx").on(t.toolName),
+    index("mcp_activity_transport_idx").on(t.transport),
+    check("mcp_activity_status_ck", sql`${t.status} IN ('started','succeeded','failed','interrupted')`),
+    check("mcp_activity_transport_ck", sql`${t.transport} IN ('HTTP','STDIO')`),
+    check("mcp_activity_duration_ck", sql`${t.durationMs} IS NULL OR ${t.durationMs} >= 0`)
+  ]
+);
+
+export type McpActivityRow = typeof mcpActivity.$inferSelect;
+export type NewMcpActivityRow = typeof mcpActivity.$inferInsert;
+
 export type HistoricalCandleRow = typeof historicalCandles.$inferSelect;
 export type NewHistoricalCandleRow = typeof historicalCandles.$inferInsert;
 export type CandleRangeNoteRow = typeof candleRangeNotes.$inferSelect;

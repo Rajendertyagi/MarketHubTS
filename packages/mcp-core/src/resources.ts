@@ -1,9 +1,10 @@
 import {
   INTERNAL_ERROR, INVALID_PARAMS, ProtocolError, ResourceNotFoundError, ResourceTemplate,
-  type ReadResourceResult, type Variables
+  type ReadResourceResult, type ServerContext, type Variables
 } from "@modelcontextprotocol/server";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { candleIntervalSchema } from "@markethub/contracts";
+import { withActivity, safeSummary, type ActivityTransport } from "./activity";
 import { parseRange } from "./schemas";
 import type { McpServices } from "./services";
 
@@ -52,12 +53,31 @@ function contents(uri: URL, value: unknown): ReadResourceResult {
   };
 }
 
+/** Record one resource-read callback without changing its result or exception. */
+function record<T>(
+  services: McpServices, transport: ActivityTransport, toolName: string,
+  ctx: ServerContext, variables: Variables, keys: readonly string[],
+  operation: () => Promise<T>, extra: Record<string, unknown> = {}
+): Promise<T> {
+  return withActivity({
+    services, transport, toolName, context: ctx,
+    summary: { ...safeSummary(variables as Record<string, unknown>, keys), ...safeSummary(extra, Object.keys(extra)) },
+    operation
+  });
+}
+
+/** Whether a cursor/after variable was supplied (never the opaque value itself). */
+function hasCursor(variables: Variables, name: string): boolean {
+  const raw = variables[name];
+  return typeof raw === "string" && raw.length > 0 && raw !== "first";
+}
+
 /**
  * Register the six logical M6-B3 resources (2 static + 5 templates — snapshot
  * pagination is split into two templates so "none" stays a valid config ID).
- * Pure registration only; called once per request/connection by createMcpServer.
+ * M6-C wraps each read callback for durable activity recording.
  */
-export function registerResources(server: McpServer, services: McpServices): void {
+export function registerResources(server: McpServer, services: McpServices, transport: ActivityTransport): void {
   // 1. Catalog instruments (template) — requires a non-empty query.
   server.registerResource(
     "catalog-instruments",
@@ -67,7 +87,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Bounded, keyset-paginated canonical instrument search. Requires a non-empty query; no unfiltered listing.",
       mimeType: "application/json"
     },
-    async (uri, variables) => {
+    async (uri, variables, ctx) => record(services, transport, "catalog-instruments", ctx, variables, ["query", "limit"], async () => {
       const query = decodeVar(variables, "query");
       if (query.trim().length === 0) invalid("query must be non-empty");
       const limit = parseLimit(decodeVar(variables, "limit"));
@@ -79,7 +99,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       });
       if (!result.ok) return mapFailure(result.error);
       return contents(uri, result.value);
-    }
+    }, { hasCursor: hasCursor(variables, "cursor") })
   );
 
   // 2. Market snapshot (static).
@@ -91,11 +111,11 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Canonical live market snapshot (quotes/depth). Empty state is honest, never fabricated.",
       mimeType: "application/json"
     },
-    async (uri) => {
+    async (uri, ctx) => record(services, transport, "market-snapshot", ctx, {}, [], async () => {
       const result = await services.getLiveSnapshot();
       if (!result.ok) return mapFailure(result.error);
       return contents(uri, result.value);
-    }
+    })
   );
 
   // 3. Historical candles + coverage (template).
@@ -107,7 +127,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Cached candles plus derived coverage for a canonical instrument and ISO-8601 range.",
       mimeType: "application/json"
     },
-    async (uri, variables) => {
+    async (uri, variables, ctx) => record(services, transport, "historical-candles", ctx, variables, ["canonicalId", "interval", "from", "to"], async () => {
       const canonicalId = decodeVar(variables, "canonicalId");
       const intervalParsed = candleIntervalSchema.safeParse(decodeVar(variables, "interval"));
       if (!intervalParsed.success) invalid("invalid candle interval");
@@ -123,7 +143,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       if (!candles.ok) return mapFailure(candles.error);
       if (!coverage.ok) return mapFailure(coverage.error);
       return contents(uri, { candles: candles.value.candles, coverage: coverage.value });
-    }
+    })
   );
 
   // 4a. Snapshots by real config id (template). "none" is a valid config id here.
@@ -135,7 +155,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Newest-first bounded page of snapshots for a real capture configuration ID (including 'none'). Stored-data opaque cursor.",
       mimeType: "application/json"
     },
-    async (uri, variables) => {
+    async (uri, variables, ctx) => record(services, transport, "snapshots-config", ctx, variables, ["configId"], async () => {
       const configId = decodeVar(variables, "configId");
       const cursor = cursorFrom(decodeVar(variables, "cursor"));
       const result = await services.listSnapshotsPage({
@@ -147,7 +167,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
         return mapFailure(result.error);
       }
       return contents(uri, result.value);
-    }
+    }, { hasCursor: hasCursor(variables, "cursor") })
   );
 
   // 4b. Null-config partition (template) — on-demand + config-deleted snapshots.
@@ -159,7 +179,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Newest-first bounded page of snapshots with no capture config: on-demand captures and snapshots retained after config deletion. Stored-data opaque cursor.",
       mimeType: "application/json"
     },
-    async (uri, variables) => {
+    async (uri, variables, ctx) => record(services, transport, "snapshots-null-config", ctx, variables, [], async () => {
       const cursor = cursorFrom(decodeVar(variables, "cursor"));
       const result = await services.listSnapshotsPage({
         selector: { kind: "null-config" }, limit: 25,
@@ -167,7 +187,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       });
       if (!result.ok) return mapFailure(result.error);
       return contents(uri, result.value);
-    }
+    }, { hasCursor: hasCursor(variables, "cursor") })
   );
 
   // 5. Live event feed (template) — runtime-scoped cursor, not restart-safe.
@@ -179,13 +199,13 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Bounded replay page from the in-memory live event hub. Cursor is runtime-scoped and does not survive restart; snapshot-required is an explicit recovery result.",
       mimeType: "application/json"
     },
-    async (uri, variables) => {
+    async (uri, variables, ctx) => record(services, transport, "events-live", ctx, variables, ["limit"], async () => {
       const after = cursorFrom(decodeVar(variables, "after"));
       const limit = parseLimit(decodeVar(variables, "limit"));
       const result = await services.readEventFeed({ limit, ...(after !== undefined ? { after } : {}) });
       if (!result.ok) return mapFailure(result.error);
       return contents(uri, result.value);
-    }
+    }, { hasCursor: hasCursor(variables, "after") })
   );
 
   // 6. Alerts feed (static) — contract-only, explicitly unavailable in M6.
@@ -197,6 +217,7 @@ export function registerResources(server: McpServer, services: McpServices): voi
       description: "Contract-only placeholder. Durable alert records are an M7 dependency; reads return an explicit unavailable error, never an empty feed.",
       mimeType: "application/json"
     },
-    async () => unavailable("unavailable in M6 — alert events are an M7 dependency")
+    async (_uri, ctx) => record(services, transport, "events-alerts", ctx, {}, [], async () =>
+      unavailable("unavailable in M6 — alert events are an M7 dependency"))
   );
 }

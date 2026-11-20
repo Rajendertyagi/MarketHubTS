@@ -47,7 +47,11 @@ export const systemStatusSchema = z.object({
   timestamp: z.string(),
   uptimeMs: z.number(),
   health: healthStatusSchema,
-  readiness: readinessStatusSchema
+  readiness: readinessStatusSchema,
+  /** M6-C: reports only whether the MCP HTTP handler is mounted, not runtime health. */
+  mcp: z.object({
+    httpHandlerMounted: z.boolean()
+  })
 });
 
 export type SystemStatus = z.infer<typeof systemStatusSchema>;
@@ -66,4 +70,5 @@ export * from "./live";
 export * from "./live-components";
 export * from "./historical";
 export * from "./snapshots";
+export * from "./mcp-activity";
 export * from "./market-dates";

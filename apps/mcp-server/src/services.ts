@@ -1,6 +1,7 @@
 import {
   healthStatusSchema, providerStatusMapSchema, liveSnapshotSchema, historicalCandleSchema,
-  candleGapSchema, candleRangeNoteSchema, optionChainSnapshotSchema
+  candleGapSchema, candleRangeNoteSchema, optionChainSnapshotSchema,
+  mcpActivityStartResultSchema, mcpActivityCompleteResultSchema
 } from "@markethub/contracts";
 import type { McpServices } from "@markethub/mcp-core";
 
@@ -230,6 +231,48 @@ export function createStdioServices(apiBase: string): McpServices {
         return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
       }
     },
+    startActivity: async (req) => {
+      try {
+        const res = await fetchWithTimeout(`${apiBase}/api/mcp/activity/start`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req)
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          activityDiagnostic(`activity start failed (status ${res.status})`);
+          return { ok: false, error: { category: "unavailable", message: `activity start failed (status ${res.status})` } };
+        }
+        const parsed = mcpActivityStartResultSchema.safeParse(json);
+        if (!parsed.success) {
+          activityDiagnostic("invalid activity start response");
+          return { ok: false, error: { category: "unavailable", message: "Invalid activity start response" } };
+        }
+        return { ok: true, value: parsed.data };
+      } catch (error) {
+        activityDiagnostic(error instanceof Error ? error.message : String(error));
+        return { ok: false, error: { category: "unavailable", message: "activity start unavailable" } };
+      }
+    },
+    completeActivity: async (req) => {
+      try {
+        const res = await fetchWithTimeout(`${apiBase}/api/mcp/activity/complete`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req)
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          activityDiagnostic(`activity complete failed (status ${res.status})`);
+          return { ok: false, error: { category: "unavailable", message: `activity complete failed (status ${res.status})` } };
+        }
+        const parsed = mcpActivityCompleteResultSchema.safeParse(json);
+        if (!parsed.success) {
+          activityDiagnostic("invalid activity complete response");
+          return { ok: false, error: { category: "unavailable", message: "Invalid activity complete response" } };
+        }
+        return { ok: true, value: parsed.data };
+      } catch (error) {
+        activityDiagnostic(error instanceof Error ? error.message : String(error));
+        return { ok: false, error: { category: "unavailable", message: "activity complete unavailable" } };
+      }
+    },
     captureSnapshot: async (req) => {
       try {
         const body: Record<string, unknown> = { underlyingCanonicalId: req.underlyingCanonicalId, expiryDate: req.expiryDate };
@@ -256,6 +299,24 @@ export function createStdioServices(apiBase: string): McpServices {
       }
     }
   };
+}
+
+/** Bounded activity write so a slow API cannot indefinitely delay a tool operation. */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Activity diagnostics go to stderr only — stdout is reserved for the MCP protocol. */
+function activityDiagnostic(message: string): void {
+  try {
+    process.stderr.write(`[markethub-activity] ${sanitizeMessage(message, "activity diagnostic").slice(0, 300)}\n`);
+  } catch { /* diagnostics are best-effort */ }
 }
 
 /** Strip credentials/tokens from an API error message before surfacing it. */

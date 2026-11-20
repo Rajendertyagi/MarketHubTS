@@ -18,6 +18,23 @@ function fakeFetch(handler: (url: string, init?: RequestInit) => { status: numbe
   }) as typeof fetch;
 }
 
+describe("retention client with ACTIVITY", () => {
+  test("cleanup result includes activitiesDeleted and settings preserve ACTIVITY", async () => {
+    fakeFetch(() => ({ status: 200, body: { ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2, activitiesDeleted: 3 } }));
+    const result = await runRetentionCleanup();
+    expect(result.activitiesDeleted).toBe(3);
+
+    fakeFetch(() => ({
+      status: 200,
+      body: { settings: { version: 1, classes: { CANDLE: { maxAgeDays: 5 }, SNAPSHOT: { maxAgeDays: 7 }, ACTIVITY: { maxAgeDays: 9 } } }, valid: true, error: null }
+    }));
+    const view = await fetchRetention();
+    expect(view.settings?.classes.ACTIVITY?.maxAgeDays).toBe(9);
+    expect(view.settings?.classes.CANDLE?.maxAgeDays).toBe(5);
+    expect(view.settings?.classes.SNAPSHOT?.maxAgeDays).toBe(7);
+  });
+});
+
 const candle: HistoricalCandle = {
   canonicalId: "A", interval: "1D", tsMs: 1700000000000, open: 10, high: 12, low: 9, close: 11,
   volume: 100, oi: null, provider: "UPSTOX",

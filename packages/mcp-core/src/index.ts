@@ -3,6 +3,7 @@ export { registerTools } from "./tools";
 export { registerResources } from "./resources";
 export { registerPrompts } from "./prompts";
 export { parseRange } from "./schemas";
+export { withActivity, safeSummary, type ActivityTransport } from "./activity";
 export type {
   McpCandleGap, McpCandleRangeNote, McpCaptureResult, McpCatalogPage, McpCoverageStatus,
   McpFeedEvent, McpFeedPage, McpHistoricalCandle, McpHistoricalFetchResult, McpLiveSnapshot,

@@ -22,7 +22,9 @@ const services: McpServices = {
   listSnapshots: async () => { serviceCalls++; return { ok: true, value: { snapshots: [] } }; },
   listSnapshotsPage: async () => { serviceCalls++; return { ok: true, value: { snapshots: [], nextCursor: null } }; },
   getSnapshot: async (id) => { serviceCalls++; return { ok: true, value: { id } as never }; },
-  captureSnapshot: async () => { serviceCalls++; return { ok: true, value: { snapshot: null, error: "x" } }; }
+  captureSnapshot: async () => { serviceCalls++; return { ok: true, value: { snapshot: null, error: "x" } }; },
+  startActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } }),
+  completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } })
 };
 
 async function connect() {

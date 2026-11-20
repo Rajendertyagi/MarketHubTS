@@ -26,7 +26,9 @@ const services: McpServices = {
   listSnapshots: async () => ({ ok: true, value: { snapshots: [] } }),
   listSnapshotsPage: async () => ({ ok: true, value: { snapshots: [], nextCursor: null } }),
   getSnapshot: async (id) => ({ ok: true, value: { id } as never }),
-  captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "x" } })
+  captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "x" } }),
+  startActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } }),
+  completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured in test" } })
 };
 
 function makeHandler() {
