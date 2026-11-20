@@ -34,8 +34,8 @@ function withRuntimeStreamingState(deps: ProviderRouteDependencies, status: Prov
   };
 }
 
-/** Compose the full provider status map with runtime streaming state. */
-function composeProviderStatuses(deps: ProviderRouteDependencies) {
+/** Compose the full provider status map with runtime streaming state. Exported so the HTTP MCP adapter reuses the same composition as REST. */
+export function composeProviderStatuses(deps: ProviderRouteDependencies) {
   const auth = deps.providerRegistry?.getStatuses() ?? null;
   if (!auth) return null;
   return providerStatusMapSchema.parse({

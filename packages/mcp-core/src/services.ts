@@ -1,9 +1,24 @@
-import type { CanonicalInstrument, HealthStatus } from "@markethub/contracts";
+import type { z } from "zod/v4";
+import type {
+  CandleRangeRequest, CanonicalInstrument, DataUnavailableReport, HealthStatus, ProviderId
+} from "@markethub/contracts";
+import {
+  candleGapSchema, candleRangeNoteSchema, historicalCandleSchema, liveSnapshotSchema,
+  optionChainSnapshotSchema, providerStatusMapSchema
+} from "@markethub/contracts";
 
 /** Uniform result shape shared by all MCP service operations. */
 export type McpResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: { category: "validation" | "unavailable" | "provider" | "internal"; message: string } };
+
+/** Zod-inferred canonical shapes (assignable from both service interfaces and validated API responses). */
+export type McpProviderStatusMap = z.infer<typeof providerStatusMapSchema>;
+export type McpLiveSnapshot = z.infer<typeof liveSnapshotSchema>;
+export type McpOptionChainSnapshot = z.infer<typeof optionChainSnapshotSchema>;
+export type McpHistoricalCandle = z.infer<typeof historicalCandleSchema>;
+export type McpCandleGap = z.infer<typeof candleGapSchema>;
+export type McpCandleRangeNote = z.infer<typeof candleRangeNoteSchema>;
 
 /**
  * Structural mirror of realtime OutboundEvent, kept local so mcp-core needs no
@@ -25,8 +40,6 @@ export interface McpCatalogPage {
  * Bounded event-feed result. A successful page always carries a runtime-scoped
  * `resumeCursor` checkpoint (including final and empty caught-up pages); a
  * snapshot-recovery result carries no checkpoint and forces a fresh snapshot.
- * `nextCursor` is only the pagination continuation token and may be null on a
- * successful final page.
  */
 export type McpFeedPage =
   | {
@@ -42,14 +55,46 @@ export type McpFeedPage =
       resumeCursor?: never;
     };
 
+// Structural mirrors of market-core result types without Zod schemas.
+export interface McpCoverageStatus {
+  gaps: McpCandleGap[];
+  unavailableNotes: McpCandleRangeNote[];
+}
+export interface McpHistoricalFetchResult {
+  candles: McpHistoricalCandle[];
+  gaps: McpCandleGap[];
+  unavailable: DataUnavailableReport[];
+  conflicts: number;
+  providersTried: ProviderId[];
+}
+export interface McpCaptureResult {
+  snapshot: McpOptionChainSnapshot | null;
+  error: string | null;
+}
+export interface McpOptionChainRequest {
+  underlyingCanonicalId: string;
+  expiryDate: string;
+  provider?: ProviderId;
+  strikeRangeJson?: string | null;
+  nativeIdentifier?: string;
+}
+
 /**
  * The seam through which shared MCP registration reaches application capabilities.
- * M6-A exposed only `getHealth()`; M6-B1 adds only the two operations needed by
- * the catalog-search and event-feed parity endpoints. No tools/resources/prompts
- * are registered in B1, and no activity hooks (M6-C) are present.
+ * M6-A exposed `getHealth()`; M6-B1 added catalog search and event-feed reads;
+ * M6-B2 adds only the operations consumed by the nine registered tools. No
+ * activity hooks (M6-C), no snapshot pagination (B3), no speculative methods.
  */
 export interface McpServices {
   getHealth(): Promise<McpResult<HealthStatus>>;
   searchCatalog(req: { text: string; limit: number; afterCanonicalId?: string }): Promise<McpResult<McpCatalogPage>>;
   readEventFeed(req: { after?: string; limit: number }): Promise<McpResult<McpFeedPage>>;
+  getProviderStatus(): Promise<McpResult<McpProviderStatusMap>>;
+  getLiveSnapshot(): Promise<McpResult<McpLiveSnapshot>>;
+  getCachedCandles(req: CandleRangeRequest): Promise<McpResult<{ candles: McpHistoricalCandle[] }>>;
+  getCoverage(req: CandleRangeRequest): Promise<McpResult<McpCoverageStatus>>;
+  fetchHistorical(req: CandleRangeRequest): Promise<McpResult<McpHistoricalFetchResult>>;
+  listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number }): Promise<McpResult<{ snapshots: McpOptionChainSnapshot[] }>>;
+  getSnapshot(id: string): Promise<McpResult<McpOptionChainSnapshot>>;
+  captureSnapshot(req: McpOptionChainRequest): Promise<McpResult<McpCaptureResult>>;
 }

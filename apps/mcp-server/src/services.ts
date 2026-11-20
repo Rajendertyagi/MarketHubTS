@@ -1,4 +1,7 @@
-import { healthStatusSchema } from "@markethub/contracts";
+import {
+  healthStatusSchema, providerStatusMapSchema, liveSnapshotSchema, historicalCandleSchema,
+  candleGapSchema, candleRangeNoteSchema, optionChainSnapshotSchema
+} from "@markethub/contracts";
 import type { McpServices } from "@markethub/mcp-core";
 
 /**
@@ -101,6 +104,154 @@ export function createStdioServices(apiBase: string): McpServices {
         const message = error instanceof Error ? error.message : String(error);
         return { ok: false, error: { category: "unavailable", message } };
       }
+    },
+    getProviderStatus: async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/providers/status`);
+        const json = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: { category: "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        }
+        const parsed = providerStatusMapSchema.safeParse(json?.providers);
+        return parsed.success
+          ? { ok: true, value: parsed.data }
+          : { ok: false, error: { category: "unavailable", message: "Invalid provider status response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    getLiveSnapshot: async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/market/snapshot`);
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: { category: "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const parsed = liveSnapshotSchema.safeParse(json);
+        return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: { category: "unavailable", message: "Invalid snapshot response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    getCachedCandles: async (req) => {
+      try {
+        const params = new URLSearchParams({
+          canonicalId: req.canonicalId, interval: req.interval, from: String(req.fromMs), to: String(req.toMs)
+        });
+        const res = await fetch(`${apiBase}/api/historical/candles?${params}`);
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: { category: res.status === 400 ? "validation" : "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const parsed = zArray(json?.candles, historicalCandleSchema);
+        return parsed.ok ? { ok: true, value: { candles: parsed.value } } : { ok: false, error: { category: "unavailable", message: "Invalid candles response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    getCoverage: async (req) => {
+      try {
+        const params = new URLSearchParams({
+          canonicalId: req.canonicalId, interval: req.interval, from: String(req.fromMs), to: String(req.toMs)
+        });
+        const res = await fetch(`${apiBase}/api/historical/coverage?${params}`);
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: { category: res.status === 400 ? "validation" : "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const gaps = zArray(json?.gaps, candleGapSchema);
+        const notes = zArray(json?.unavailableNotes, candleRangeNoteSchema);
+        return gaps.ok && notes.ok
+          ? { ok: true, value: { gaps: gaps.value, unavailableNotes: notes.value } }
+          : { ok: false, error: { category: "unavailable", message: "Invalid coverage response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    fetchHistorical: async (req) => {
+      try {
+        const res = await fetch(`${apiBase}/api/historical/fetch`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ canonicalId: req.canonicalId, interval: req.interval, fromMs: req.fromMs, toMs: req.toMs })
+        });
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: { category: res.status === 400 ? "validation" : "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const candles = zArray(json?.candles, historicalCandleSchema);
+        const gaps = zArray(json?.gaps, candleGapSchema);
+        if (!candles.ok || !gaps.ok || !Array.isArray(json?.unavailable) || typeof json?.conflicts !== "number" || !Array.isArray(json?.providersTried)) {
+          return { ok: false, error: { category: "unavailable", message: "Invalid historical fetch response" } };
+        }
+        return { ok: true, value: { candles: candles.value, gaps: gaps.value, unavailable: json.unavailable, conflicts: json.conflicts, providersTried: json.providersTried } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    listSnapshots: async (filter) => {
+      try {
+        const params = new URLSearchParams();
+        if (filter.configId !== undefined) params.set("configId", filter.configId);
+        if (filter.fromMs !== undefined) params.set("from", String(filter.fromMs));
+        if (filter.toMs !== undefined) params.set("to", String(filter.toMs));
+        const res = await fetch(`${apiBase}/api/snapshots?${params}`);
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: { category: "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const parsed = zArray(json?.snapshots, optionChainSnapshotSchema);
+        return parsed.ok ? { ok: true, value: { snapshots: parsed.value } } : { ok: false, error: { category: "unavailable", message: "Invalid snapshots response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    getSnapshot: async (id) => {
+      try {
+        const res = await fetch(`${apiBase}/api/snapshots/${encodeURIComponent(id)}`);
+        const json = await res.json();
+        if (res.status === 404) return { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
+        if (!res.ok) return { ok: false, error: { category: "unavailable", message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        const parsed = optionChainSnapshotSchema.safeParse(json?.snapshot);
+        return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: { category: "unavailable", message: "Invalid snapshot response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+    captureSnapshot: async (req) => {
+      try {
+        const body: Record<string, unknown> = { underlyingCanonicalId: req.underlyingCanonicalId, expiryDate: req.expiryDate };
+        if (req.provider !== undefined) body.provider = req.provider;
+        if (req.strikeRangeJson !== undefined) body.strikeRangeJson = req.strikeRangeJson;
+        if (req.nativeIdentifier !== undefined) body.nativeIdentifier = req.nativeIdentifier;
+        const res = await fetch(`${apiBase}/api/snapshots/capture`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (res.status === 422 && json?.error === "capture_unavailable") {
+          return { ok: true, value: { snapshot: null, error: sanitizeMessage(json?.message, "Capture unavailable") } };
+        }
+        if (!res.ok) {
+          const category = res.status === 400 ? "validation" : "unavailable";
+          return { ok: false, error: { category, message: sanitizeMessage(json?.message, `status ${res.status}`) } };
+        }
+        const parsed = optionChainSnapshotSchema.safeParse(json?.snapshot);
+        return parsed.success
+          ? { ok: true, value: { snapshot: parsed.data, error: null } }
+          : { ok: false, error: { category: "unavailable", message: "Invalid capture response" } };
+      } catch (error) {
+        return { ok: false, error: { category: "unavailable", message: error instanceof Error ? error.message : String(error) } };
+      }
     }
   };
+}
+
+/** Strip credentials/tokens from an API error message before surfacing it. */
+function sanitizeMessage(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string" || raw.length === 0) return fallback;
+  return raw
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted]")
+    .replace(/(authorization|token|secret|password|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[redacted]")
+    .slice(0, 300);
+}
+
+/** Validate an array of canonical values from an untrusted API response. */
+function zArray<T>(value: unknown, schema: { safeParse(v: unknown): { success: true; data: T } | { success: false } }): { ok: true; value: T[] } | { ok: false } {
+  if (!Array.isArray(value)) return { ok: false };
+  const out: T[] = [];
+  for (const item of value) {
+    const parsed = schema.safeParse(item);
+    if (!parsed.success) return { ok: false };
+    out.push(parsed.data);
+  }
+  return { ok: true, value: out };
 }

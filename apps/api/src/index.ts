@@ -1,17 +1,22 @@
 import { loadConfig, providerConfigFromAppConfig, redactConfigForLog, type AppConfig } from "@markethub/config";
 import {
   openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings,
-  SqliteSubscriptionRepository, SqliteCatalogRepository, checkDatabase, type DatabaseHandle
+  SqliteSubscriptionRepository, SqliteCatalogRepository, AppSettings, CandleRepository, SnapshotRepository,
+  checkDatabase, type DatabaseHandle
 } from "@markethub/database";
-import { healthStatusSchema } from "@markethub/contracts";
+import { healthStatusSchema, providerStatusMapSchema } from "@markethub/contracts";
 import { nowIso } from "@markethub/shared";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createMcpServer, type McpServices } from "@markethub/mcp-core";
-import { MarketDataService, ProviderRegistry, type CatalogRepository } from "@markethub/market-core";
+import {
+  MarketDataService, ProviderRegistry, HistoricalCandleService, OptionChainSnapshotService,
+  type CatalogRepository
+} from "@markethub/market-core";
 import { LiveEventHub } from "@markethub/realtime";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
+import { composeProviderStatuses } from "./provider-routes";
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
@@ -31,7 +36,11 @@ function createHttpMcpServices(
   config: AppConfig,
   db: DatabaseHandle,
   catalog: CatalogRepository,
-  hub: LiveEventHub
+  hub: LiveEventHub,
+  registry: ProviderRegistry,
+  service: MarketDataService,
+  historicalService: HistoricalCandleService,
+  snapshotService: OptionChainSnapshotService
 ): McpServices {
   return {
     getHealth: async () => {
@@ -70,7 +79,27 @@ function createHttpMcpServices(
         };
       }
       return { ok: true, value: { events: result.events, nextCursor: result.nextCursor, resumeCursor: result.resumeCursor } };
-    }
+    },
+    getProviderStatus: async () => {
+      const composed = composeProviderStatuses({ providerRegistry: registry, service });
+      if (!composed) return { ok: false, error: { category: "unavailable", message: "Provider registry unavailable" } };
+      const parsed = providerStatusMapSchema.safeParse(composed);
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: { category: "internal", message: "Invalid provider status" } };
+    },
+    getLiveSnapshot: async () => ({ ok: true, value: service.getSnapshot() }),
+    getCachedCandles: async (req) => ({ ok: true, value: { candles: historicalService.getCached(req) } }),
+    getCoverage: async (req) => ({ ok: true, value: historicalService.getCoverageStatus(req) }),
+    fetchHistorical: async (req) => ({ ok: true, value: await historicalService.fetchOnDemand(req) }),
+    listSnapshots: async (filter) => ({ ok: true, value: { snapshots: snapshotService.listSnapshots(filter.configId, filter.fromMs, filter.toMs) } }),
+    getSnapshot: async (id) => {
+      const snapshot = snapshotService.getSnapshot(id);
+      return snapshot
+        ? { ok: true, value: snapshot }
+        : { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
+    },
+    captureSnapshot: async (req) => ({ ok: true, value: await snapshotService.captureOnDemand(req) })
   };
 }
 
@@ -155,19 +184,30 @@ async function main() {
   await fyersRuntime.start();
   await coordinator.start();
 
+  // M6-B2: construct the M5 services once and share the same instances with
+  // REST routes and the MCP adapter. No second app/DB/provider/service.
+  const appSettings = new AppSettings(db.db);
+  const candleRepo = new CandleRepository(db.db, db.sqlite);
+  const snapshotRepo = new SnapshotRepository(db.db, db.sqlite);
+  const historicalService = new HistoricalCandleService({ candles: candleRepo, settings: appSettings, providers: [] });
+  const snapshotService = new OptionChainSnapshotService({ snapshots: snapshotRepo, settings: appSettings, providers: [] });
+
   // M6-A: one handler for the process lifetime; its factory builds a fresh
   // McpServer per request over the existing services. No second app/DB/provider.
   const runtimeDb = db;
   const runtimeHub = hub;
   const runtimeCatalog = catalog;
   mcpHandler = createMcpHandler((ctx) =>
-    createMcpServer(ctx, createHttpMcpServices(config, runtimeDb, runtimeCatalog, runtimeHub))
+    createMcpServer(ctx, createHttpMcpServices(
+      config, runtimeDb, runtimeCatalog, runtimeHub, registry, service, historicalService, snapshotService
+    ))
   );
 
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
-    service, hub, coordinator, mcpHandler, catalogRepo: catalog
+    service, hub, coordinator, mcpHandler, catalogRepo: catalog,
+    appSettings, candleRepo, snapshotRepo, historicalService, snapshotService
   });
 
   try {
