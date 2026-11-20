@@ -10,7 +10,7 @@
 Register the **resource** and **prompt** halves of the M6 capability inventory through the **single** shared factory in `packages/mcp-core`, for **both** HTTP and STDIO, and satisfy the 2026-07-28 cache-hint requirement. No duplicate registration, no second app/DB/provider, no new runtime dependency, no migration.
 
 **In scope (M6-B3):**
-- Register the six resources in §4 and three prompts in §5 through one shared registration module in `packages/mcp-core`.
+- Register the six **logical** resource capabilities in §4 (implemented as **seven** registrations: 2 static + 5 templates, because snapshot pagination is split into two URI forms) and three prompts in §5, through one shared registration module in `packages/mcp-core`.
 - Add **one** `McpServices` method — `listSnapshotsPage` — with one opaque cursor codec owned by market-core, one repository page method, and one read-only STDIO-parity endpoint (§7).
 - Configure cache hints correctly on the `McpServer` constructor (§6) and prove them on the 2026 wire.
 - Conformance items **C13** (standard resource/prompt operations, deterministic list order), **C14** (opaque pagination), **C15** (cache hints on six cacheable results). C16/C18/C19/C20/C21 remain B4/whole-M6 verification and are **not** claimed here.
@@ -100,7 +100,7 @@ These are measured behaviors of `UriTemplate.match()` / `partToRegExp`, not RFC 
 - **Static string-URI resources** are matched by exact `uri.toString()`; they cannot carry inputs.
 - `ResourceTemplate` requires a `list` callback even if `undefined`; for non-enumerable templates pass `list: undefined` and rely on `resources/templates/list` for discovery.
 
-### 4.2 Canonical resources (six)
+### 4.2 Canonical resources (six logical capabilities / seven registrations)
 
 | # | Canonical template / URI | Example concrete URI | Required inputs | Service call | Success body | Failure / special |
 |---|---|---|---|---|---|---|

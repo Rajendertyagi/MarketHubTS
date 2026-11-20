@@ -81,6 +81,29 @@ describe("M6-B3 snapshot page selector and cursor", () => {
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 
+  test("cursor timestamp validation rejects impossible calendar dates", () => {
+    const cursorFor = (c: string) =>
+      "v1." + Buffer.from(JSON.stringify({ c, i: "s1", s: { kind: "null-config" } }), "utf8").toString("base64url");
+
+    // Date.parse alone normalizes these; strict component validation must reject them.
+    for (const invalid of [
+      "2026-02-31T00:00:00.000Z", // February has 31 days -> normalized to Mar 3
+      "2025-02-29T00:00:00.000Z", // non-leap year -> normalized to Mar 1
+      "2026-13-01T00:00:00.000Z", // month out of range
+      "2026-01-32T00:00:00.000Z", // day out of range
+      "2026-01-01T25:00:00.000Z"  // hour out of range
+    ]) {
+      expect(decodeSnapshotCursor(cursorFor(invalid), nullConfig), invalid).toBeNull();
+    }
+    // Valid leap day and ordinary dates still decode.
+    expect(decodeSnapshotCursor(cursorFor("2024-02-29T00:00:00.000Z"), nullConfig)).toEqual({
+      capturedAt: "2024-02-29T00:00:00.000Z", id: "s1"
+    });
+    expect(decodeSnapshotCursor(cursorFor("2026-01-15T10:30:00.000Z"), nullConfig)).toEqual({
+      capturedAt: "2026-01-15T10:30:00.000Z", id: "s1"
+    });
+  });
+
   test('a real configuration whose id is exactly "none" is addressable', () => {
     const h = harness();
     try {

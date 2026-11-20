@@ -18,11 +18,38 @@ interface CursorPayload {
 
 const CURSOR_PREFIX = "v1.";
 const MAX_CURSOR_LENGTH = 4096;
-/** ISO-8601 datetime with explicit timezone, matching the contract's z.string().datetime(). */
-const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+/** ISO-8601 datetime with explicit timezone and captured calendar components. */
+const ISO_DATETIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/**
+ * Strict ISO-8601 validation: Date.parse alone normalizes impossible calendar
+ * dates (e.g. 2026-02-31 -> Mar 3, 2025-02-29 -> Mar 1), so validate each
+ * component — including month length and leap years — before accepting.
+ */
 function isIsoDateTime(value: string): boolean {
-  return ISO_DATETIME.test(value) && Number.isFinite(Date.parse(value));
+  const m = ISO_DATETIME.exec(value);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6]);
+  if (month < 1 || month > 12) return false;
+  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  if (day < 1 || day > daysInMonth) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  const zone = m[7]!;
+  if (zone !== "Z") {
+    const offsetHour = Number(zone.slice(1, 3));
+    const offsetMinute = Number(zone.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return Number.isFinite(Date.parse(value));
 }
 
 /** Encode a self-contained, versioned, opaque keyset cursor. */

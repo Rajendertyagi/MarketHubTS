@@ -37,7 +37,7 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 | Existing boundary | `isLocalPeer` guards mutating HTTP routes; WebUI owns operational config; no app-level login |
 | Registered tools (M6-B2, implemented) | Nine tools via the shared factory: `markethub_health`, `catalog_search`, `provider_status`, `market_snapshot`, `historical_candles`, `option_chain_snapshot`, `on_demand_retrieval`, `futures_chain`, `market_information` (`packages/mcp-core/src/tools.ts`) |
 | Tests (implemented) | `tests/mcp/` contains transport, real-HTTP smoke, STDIO modern, catalog-search, event-feed, seams, STDIO-adapter, tools and tools-adapter tests |
-| Not present | No registered resources/prompts (B3), no cache hints (B3), no activity history (M6-C), no `subscriptions/listen`/event bridge (M6-D), no `@modelcontextprotocol/node` dependency |
+| Not present | No activity history (M6-C), no `subscriptions/listen`/event bridge (M6-D), no `@modelcontextprotocol/node` dependency. B3 resources/prompts/cache hints are implemented and published (`0d58bbb`); see `M6_B3_PLAN.md` §4 for the canonical URI contract |
 
 ## 3. Official protocol/SDK research findings (source URLs)
 
