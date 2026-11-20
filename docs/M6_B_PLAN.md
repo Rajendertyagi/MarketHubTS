@@ -65,8 +65,11 @@ listSnapshotsPage(filter: { configId?: string; fromMs?: number; toMs?: number; l
   Promise<McpResult<{ snapshots: OptionChainSnapshot[]; nextCursor: string | null }>>;
 getSnapshot(id: string): Promise<McpResult<OptionChainSnapshot>>;
 captureSnapshot(req: OptionChainRequest): Promise<McpResult<CaptureResult>>;
-readEventFeed(req: { after?: string; limit: number }):
-  Promise<McpResult<{ events: OutboundEvent[]; nextCursor: string | null; snapshotRequired?: { reason: string } }>>;
+// Discriminated: successful pages always carry resumeCursor; recovery never does.
+readEventFeed(req: { after?: string; limit: number }): Promise<McpResult<
+  | { events: OutboundEvent[]; nextCursor: string | null; resumeCursor: string; snapshotRequired?: never }
+  | { events: []; nextCursor: null; snapshotRequired: { reason: string }; resumeCursor?: never }
+>>;
 ```
 
 **Implementations:**

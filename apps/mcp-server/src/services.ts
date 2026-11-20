@@ -55,31 +55,36 @@ export function createStdioServices(apiBase: string): McpServices {
             error: { category: res.status === 400 ? "validation" : "unavailable", message: String(json?.message ?? `status ${res.status}`) }
           };
         }
-        // Snapshot-recovery results carry no checkpoint; successful pages must
-        // carry a string resumeCursor. Validate rather than defaulting.
-        if (json.snapshotRequired) {
+        // Validate the complete envelope before returning ok:true. Snapshot
+        // recovery requires a non-empty reason and carries no checkpoint; a
+        // successful page requires an events array, a string|null nextCursor
+        // and a string resumeCursor. No defaulting or casts.
+        if (json.snapshotRequired !== undefined) {
+          const reason = json.snapshotRequired?.reason;
+          if (typeof reason !== "string" || reason.length === 0) {
+            return {
+              ok: false,
+              error: { category: "unavailable", message: "Invalid feed response: malformed snapshotRequired" }
+            };
+          }
           return {
             ok: true,
-            value: {
-              events: [],
-              nextCursor: null,
-              snapshotRequired: { reason: String(json.snapshotRequired.reason) }
-            }
+            value: { events: [], nextCursor: null, snapshotRequired: { reason } }
           };
         }
-        if (typeof json.resumeCursor !== "string") {
+        if (
+          !Array.isArray(json.events) ||
+          !(json.nextCursor === null || typeof json.nextCursor === "string") ||
+          typeof json.resumeCursor !== "string"
+        ) {
           return {
             ok: false,
-            error: { category: "unavailable", message: "Invalid feed response: missing resumeCursor" }
+            error: { category: "unavailable", message: "Invalid feed response: malformed page envelope" }
           };
         }
         return {
           ok: true,
-          value: {
-            events: json.events ?? [],
-            nextCursor: json.nextCursor ?? null,
-            resumeCursor: json.resumeCursor
-          }
+          value: { events: json.events, nextCursor: json.nextCursor, resumeCursor: json.resumeCursor }
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

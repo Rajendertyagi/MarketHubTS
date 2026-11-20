@@ -14,8 +14,25 @@ function stubApi() {
         return Response.json({ instruments: [], nextCursor: null });
       }
       if (url.pathname === "/api/market/events") {
-        if (url.searchParams.get("after") === "bad") {
+        const after = url.searchParams.get("after");
+        if (after === "bad") {
           return Response.json({ events: [], nextCursor: null, snapshotRequired: { reason: "invalid-cursor" } });
+        }
+        if (after === "malformed-recovery") {
+          return Response.json({ events: [], nextCursor: null, snapshotRequired: {} });
+        }
+        if (after === "final") {
+          return Response.json({
+            events: [{ event: "item-updated", id: "2", data: {} }],
+            nextCursor: null,
+            resumeCursor: "runtime-1:2"
+          });
+        }
+        if (after === "empty") {
+          return Response.json({ events: [], nextCursor: null, resumeCursor: "runtime-1:2" });
+        }
+        if (after === "malformed-page") {
+          return Response.json({ events: "not-an-array", nextCursor: null, resumeCursor: "runtime-1:2" });
         }
         return Response.json({
           events: [{ event: "item-updated", id: "1", data: {} }],
@@ -86,6 +103,52 @@ describe("M6-B1 STDIO adapter", () => {
         expect(recovery.value.snapshotRequired?.reason).toBe("invalid-cursor");
         expect("resumeCursor" in recovery.value ? recovery.value.resumeCursor : undefined).toBeUndefined();
       }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed preserves resumeCursor on final and empty caught-up pages", async () => {
+    const { server, base } = stubApi();
+    try {
+      const services = createStdioServices(base);
+
+      // Final page: nextCursor null but resumeCursor still present.
+      const final = await services.readEventFeed({ after: "final", limit: 5 });
+      expect(final.ok).toBe(true);
+      if (final.ok) {
+        expect(final.value.nextCursor).toBeNull();
+        expect(final.value.resumeCursor).toBe("runtime-1:2");
+        expect(final.value.events.length).toBe(1);
+        expect(final.value.snapshotRequired).toBeUndefined();
+      }
+
+      // Empty caught-up page: events empty, nextCursor null, resumeCursor present.
+      const empty = await services.readEventFeed({ after: "empty", limit: 5 });
+      expect(empty.ok).toBe(true);
+      if (empty.ok) {
+        expect(empty.value.events).toEqual([]);
+        expect(empty.value.nextCursor).toBeNull();
+        expect(empty.value.resumeCursor).toBe("runtime-1:2");
+        expect(empty.value.snapshotRequired).toBeUndefined();
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed rejects malformed recovery and success envelopes", async () => {
+    const { server, base } = stubApi();
+    try {
+      const services = createStdioServices(base);
+
+      const malformedRecovery = await services.readEventFeed({ after: "malformed-recovery", limit: 5 });
+      expect(malformedRecovery.ok).toBe(false);
+      if (!malformedRecovery.ok) expect(malformedRecovery.error.message).toContain("malformed snapshotRequired");
+
+      const malformedPage = await services.readEventFeed({ after: "malformed-page", limit: 5 });
+      expect(malformedPage.ok).toBe(false);
+      if (!malformedPage.ok) expect(malformedPage.error.message).toContain("malformed page envelope");
     } finally {
       await server.stop(true);
     }
