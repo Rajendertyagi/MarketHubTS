@@ -60,8 +60,10 @@ fetchHistorical(req: CandleRangeRequest): Promise<McpResult<HistoricalFetchResul
 // B2 — existing non-paginated read (oldest-first, 200-record default cap)
 listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number }):
   Promise<McpResult<{ snapshots: OptionChainSnapshot[] }>>;
-// B3 — separate newest-first bounded page seam (not in B2 scope)
-listSnapshotsPage(filter: { configId?: string; fromMs?: number; toMs?: number; limit: number; afterCapturedAt?: string; afterId?: string }):
+// B3 — separate newest-first bounded page seam (not in B2 scope).
+// Opaque cursor end-to-end; one codec in market-core. No fromMs/toMs, no split keyset fields.
+// configId is an explicit selector: real id or reserved "none" => config_id IS NULL.
+listSnapshotsPage(filter: { configId: string; limit: number; cursor?: string }):
   Promise<McpResult<{ snapshots: OptionChainSnapshot[]; nextCursor: string | null }>>;
 getSnapshot(id: string): Promise<McpResult<OptionChainSnapshot>>;
 captureSnapshot(req: OptionChainRequest): Promise<McpResult<CaptureResult>>;
@@ -110,19 +112,22 @@ This is a composition-only change; it must not alter M6-A transport, CORS, Host/
 
 ### 4.2 Resources
 
-| URI | Kind | Query | Notes |
+> **Canonical URI contract:** the exact template strings, required variables, first-page sentinel and percent-decoding rules are defined in [`M6_B3_PLAN.md`](M6_B3_PLAN.md) §4 (verified against the installed SDK 2.4.0 matcher). That section is the single authority; this table is a capability summary only.
+
+| Capability | Kind | Inputs | Notes |
 |---|---|---|---|
-| `markethub://catalog/instruments` | template | `query`, `limit`, `cursor` | requires non-empty query; no unfiltered listing |
-| `markethub://market/snapshot` | direct | none | `liveSnapshotSchema` |
-| `markethub://historical/{canonicalId}/{interval}` | template | `from`, `to` | candles + coverage |
-| `markethub://snapshots/{configId?}` | template | `cursor` | stored snapshot page (contract below) |
-| `markethub://events/live` | direct | `after`, `limit` | bounded replay page or `snapshot-required` |
-| `markethub://events/alerts` | direct | none | contract-only; handler returns explicit `unavailable` (M7) |
+| catalog instruments | template | non-empty `query`, `limit`, opaque `cursor` | no unfiltered listing |
+| market snapshot | direct | none | `liveSnapshotSchema` |
+| historical candles | template | canonical ID, interval, ISO `from`/`to` | candles + coverage |
+| snapshots | template | explicit config selector, opaque `cursor` | newest-first page (contract below); selector required by SQLite plan |
+| events/live | template | opaque `after`, `limit` | bounded replay page or `snapshot-required` |
+| events/alerts | direct | none | contract-only; handler returns explicit `unavailable` (M7) |
 
 **Snapshot resource pagination contract (bounded newest-first seam):** the existing `SnapshotStore.listSnapshots(configId?, fromMs?, toMs?)` (`packages/market-core/src/snapshots/service.ts:8-15`) and its repository implementation order by `capturedAt ASC` with a default cap of 200 — re-sorting that oldest-first subset cannot surface the newest snapshots. M6-B therefore adds one bounded page method, symmetric with the catalog search extension:
-- `SnapshotStore.listSnapshotsPage(filter: { configId?, fromMs?, toMs?, limit, afterCapturedAt?, afterId? }): { snapshots: OptionChainSnapshot[]; nextCursor: string | null }` in `packages/market-core/src/snapshots/service.ts`, implemented in `packages/database/src/repositories/snapshots.ts` with `ORDER BY captured_at DESC, id DESC`, `LIMIT ?` (default 25, max 100), and keyset predicate `(captured_at < afterCapturedAt) OR (captured_at = afterCapturedAt AND id < afterId)`. `nextCursor` encodes the last returned `(capturedAt, id)` pair opaquely when more rows exist.
-- `OptionChainSnapshotService.listSnapshotsPage(...)` delegates to the store; the existing `listSnapshots` stays unchanged for REST/WebUI.
-- **B2** uses only `McpServices.listSnapshots` (no pagination) over the existing `OptionChainSnapshotService.listSnapshots()` — oldest-first with a 200-record default cap; it is not described as returning the latest snapshots. **B3** adds `McpServices.listSnapshotsPage` and the resource handler decodes/encodes its opaque cursor and returns `nextCursor`. No MCP-layer re-sorting of a capped oldest-first set. An invalid/expired cursor returns an explicit `unavailable`/`snapshot-required` result, never a silent empty page.
+- `McpServices.listSnapshotsPage(filter: { configId: string; limit: number; cursor?: string })` accepts and returns an **opaque** cursor. One versioned cursor codec in market-core decodes it to internal keyset fields (`afterCapturedAt`, `afterId`) bound to the config selector; the repository receives only those internal fields. No `afterCapturedAt`/`afterId` in the public seam, no `fromMs`/`toMs`, and no duplicate codec in MCP/REST/adapters. Cursors do not expire (no expiry is implemented). Full contract: `M6_B3_PLAN.md` §7.1.
+- `SnapshotStore.listSnapshotsPage` / `OptionChainSnapshotService.listSnapshotsPage` use `ORDER BY captured_at DESC, id DESC`, `LIMIT limit + 1` lookahead, and keyset predicate `(captured_at < afterCapturedAt) OR (captured_at = afterCapturedAt AND id < afterId)`. `nextCursor` is null when the lookahead finds no extra row. The existing `listSnapshots` stays unchanged for REST/WebUI.
+- **B2** uses only `McpServices.listSnapshots` (no pagination) over the existing `OptionChainSnapshotService.listSnapshots()` — oldest-first with a 200-record default cap; it is not described as returning the latest snapshots. **B3** adds the paginated seam; no MCP-layer re-sorting of a capped oldest-first set. Malformed/mismatched cursors return an explicit validation error, never a silent empty page.
+- **Index evidence:** the existing `(config_id, captured_at)` index does not support the `id` tie-break or unfiltered newest-first ordering (verified with `EXPLAIN QUERY PLAN`; `M6_B3_PLAN.md` §7.3). The paginated resource therefore requires an explicit config selector (real id or reserved `none` for `config_id IS NULL`); unfiltered browsing remains in the B2 tool. **No migration in B3**; a future unfiltered index needs separate authorization.
 
 ### 4.3 Prompts
 
@@ -134,7 +139,7 @@ This is a composition-only change; it must not alter M6-A transport, CORS, Host/
 2. **`GET /api/catalog/search`** — query `text`, `limit`, `cursor`; response `{ instruments, nextCursor }`. Read-only under existing LAN model; no `isLocalPeer`. New `apps/api/src/catalog-routes.ts`, registered in `app.ts` before SPA fallback.
 3. **`LiveEventHub.readAfter(cursor, limit)`** — bounded read from retained in-memory history; returns events with revision > cursor, or explicit `snapshot-required` (invalid/expired/future cursor, cursor from a previous hub instance, empty history after restart). Must not create a client session or consume the SSE stream. No new storage. Cursors are runtime-scoped (`<runtimeId>:<revision>`); every page outcome returns an always-present `resumeCursor` checkpoint (last returned revision, or current revision for an empty caught-up page) distinct from the lookahead-only `nextCursor`. SSE `Last-Event-ID` stays bare numeric and unchanged.
 4. **`GET /api/market/events`** — query `after`, `limit`; response `{ events, nextCursor, resumeCursor, snapshotRequired? }` (`resumeCursor` absent on `snapshot-required`). Read-only under existing LAN model. Add to `apps/api/src/market-routes.ts`.
-5. **Snapshot page seam** — add `listSnapshotsPage` to `SnapshotStore` (`packages/market-core/src/snapshots/service.ts`), `OptionChainSnapshotService` and `SqliteSnapshotRepository` (`packages/database/src/repositories/snapshots.ts`) per §4.2. No new table/migration; the existing `(configId, capturedAt)` index supports the ordered scan.
+5. **Snapshot page seam** — add `listSnapshotsPage` to `SnapshotStore` (`packages/market-core/src/snapshots/service.ts`), `OptionChainSnapshotService` and `SqliteSnapshotRepository` (`packages/database/src/repositories/snapshots.ts`) per §4.2 and `M6_B3_PLAN.md` §7. No new table/migration. The existing `(config_id, captured_at)` index serves only the config-selector prefix; the `id` tie-break uses a bounded temp B-tree and unfiltered newest-first ordering is deliberately out of scope (evidence in `M6_B3_PLAN.md` §7.3).
 
 Parameter translation (normative, from `M6_PLAN.md` §5.1): tool/resource `query` → service/repo `text`; external opaque `cursor`/`nextCursor` ↔ `afterCanonicalId` (last returned `canonical_id`); `limit` identical across layers.
 

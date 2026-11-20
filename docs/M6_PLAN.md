@@ -301,7 +301,7 @@ Group related capabilities; do not create one tool per field. All capabilities g
 **WebUI visibility of results:** candles cached by on-demand retrieval and snapshots persisted by on-demand capture appear in the existing History & snapshots tab through the canonical stores; the MCP Activity section (§9.2) links to them via `data_result_ref`. The owner can inspect what was stored without SQL.
 
 **Resources (discoverable, cursor-based):**
-- `markethub://catalog/instruments` (filterable), `markethub://market/snapshot`, `markethub://historical/{canonicalId}/{interval}` with `from`/`to`, `markethub://snapshots/{configId?}` with cursor, `markethub://events/live` and `markethub://events/alerts` (feeds with stable event IDs/cursors). Resource URIs are implementation details to finalize against shared contracts; keep them stable and documented.
+- Catalog search, market snapshot, historical candles, snapshot pages, live events and a contract-only alerts feed. **The canonical URI templates, required variables, first-page sentinel and percent-decoding rules are defined in [`M6_B3_PLAN.md`](M6_B3_PLAN.md) §4** (verified against the installed SDK 2.4.0 matcher); that section is the single authority and must not be restated here. Resource URIs are stable public identifiers.
 
 **Prompts (guided workflows, no hidden actions):**
 - `explain_market_snapshot`, `interpret_coverage_gaps`, `how_to_capture_snapshot` — read-only guidance that calls the tools above; no operational changes.
@@ -322,12 +322,12 @@ Shared registration implements exactly this set. Inputs/outputs reuse existing c
 | `option_chain_snapshot` | tool | `configId?`, `snapshotId?`, `mode: list\|get\|capture`, capture request fields | snapshot envelope(s) | read for list/get; persistence for capture | existing services |
 | `on_demand_retrieval` | tool | grouped request (instrument, data kind, range) | dispatch result referencing the specific tool outcome | persistence (delegates to historical/capture) | existing services; never mutates config |
 | `futures_chain`, `market_information` | tool | — | — | — | **unavailable in M6** (no shared service); report honestly |
-| `markethub://catalog/instruments` | resource template | `?query=&limit=&cursor=` | bounded instrument page | read | needs search extension |
-| `markethub://market/snapshot` | resource | none | `liveSnapshotSchema` | read | existing |
-| `markethub://historical/{canonicalId}/{interval}` | resource template | `?from=&to=` | candles + coverage | read | existing |
-| `markethub://snapshots/{configId?}` | resource template | `?cursor=` | snapshot page | read | existing |
-| `markethub://events/live` | resource | `?after=<cursor>` | bounded replay page or `snapshot-required` (§6.1) | read | in-memory only |
-| `markethub://events/alerts` | resource | — | — | — | **unavailable/contract-only in M6** (M7 dependency) |
+| catalog instruments | resource template | bounded query + opaque cursor | bounded instrument page | read | canonical template in `M6_B3_PLAN.md` §4 |
+| market snapshot | resource | none | `liveSnapshotSchema` | read | canonical template in `M6_B3_PLAN.md` §4 |
+| historical candles | resource template | canonical ID, interval, ISO range | candles + coverage | read | canonical template in `M6_B3_PLAN.md` §4 |
+| snapshots | resource template | explicit config selector + opaque cursor | newest-first snapshot page | read | selector required by SQLite plan (`M6_B3_PLAN.md` §7.3); canonical template in §4 |
+| events/live | resource template | opaque cursor + limit | bounded replay page or `snapshot-required` (§6.1) | read | in-memory only; canonical template in `M6_B3_PLAN.md` §4 |
+| events/alerts | resource | — | — | — | **unavailable/contract-only in M6** (M7 dependency) |
 | `explain_market_snapshot`, `interpret_coverage_gaps`, `how_to_capture_snapshot` | prompt | guided args | text guidance calling tools above | read | existing |
 
 Event→notification mapping: canonical live changes map to `resources/updated` for the affected resource URI (e.g. `markethub://market/snapshot`, `markethub://historical/{id}/{interval}`) and `resources/list_changed` when the available resource set changes; clients then re-read the resource (read-after-notify). No custom notification types.
