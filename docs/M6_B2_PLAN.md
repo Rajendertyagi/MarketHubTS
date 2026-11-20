@@ -2,7 +2,7 @@
 
 > **Status:** Implementation plan only. Awaiting separate authorization. No B2 source exists yet.
 > **Last updated:** 2026-11-20
-> **Depends on:** M6-A (transport/factory/health tool) and M6-B1 (catalog search + event-feed seams) — both implemented and published on `develop` (`6fd088d`).
+> **Baseline:** M6-A (transport/factory/health tool) implemented and published at `7860c7f`; M6-B1 (catalog search + event-feed seams) implemented and published at `d50b372`, with the restart-safe event-feed checkpoint and always-present `resumeCursor` fixes published at `6fd088d` and `be94219`. **Final B1 implementation baseline: `be9421911ad74766a200ef091fcacdcef8448177`.** This B2 plan was published at `9510e8e` — that documentation commit is not the B1 implementation baseline.
 > **Governing design:** [`M6_B_PLAN.md`](M6_B_PLAN.md) §4.1 (tool inventory), §6 (file scope), §7 (B2 sub-phase), §8–§9 (tests/acceptance); [`M6_PLAN.md`](M6_PLAN.md) §4.1.2 (McpServices), §5.2 (side-effect annotations), §5.3 (capability inventory), §3.1 (conformance C13–C16/C18–C19). This document adds execution detail; it does not change that design.
 
 ## 1. Objective and boundaries
@@ -62,7 +62,19 @@ captureSnapshot(req: OptionChainRequest): Promise<McpResult<CaptureResult>>;
 
 ## 4. Tool registration contracts
 
-All tools are registered in `packages/mcp-core/src/tools.ts` via `registerTools(server, services)` in a **fixed order** (B4 will assert deterministic `tools/list`). Each handler maps `McpResult` failure to `{ content: [{ type: "text", text: JSON.stringify({ ok: false, error }) }], isError: true }` and success to `{ content: [...], structuredContent: value }`, matching the existing `markethub_health` pattern.
+All tools are registered in `packages/mcp-core/src/tools.ts` via `registerTools(server, services)` in this **normative order** (B4 may verify deterministic `tools/list`; B2 only needs to implement this sequence):
+
+1. `markethub_health`
+2. `catalog_search`
+3. `provider_status`
+4. `market_snapshot`
+5. `historical_candles`
+6. `option_chain_snapshot`
+7. `on_demand_retrieval`
+8. `futures_chain`
+9. `market_information`
+
+Each handler maps `McpResult` failure to `{ content: [{ type: "text", text: JSON.stringify({ ok: false, error }) }], isError: true }` and success to `{ content: [...], structuredContent: value }`, matching the existing `markethub_health` pattern.
 
 | Tool | Input (Zod) | Service call(s) | Output / `structuredContent` | Annotations |
 |---|---|---|---|---|
@@ -71,10 +83,16 @@ All tools are registered in `packages/mcp-core/src/tools.ts` via `registerTools(
 | `provider_status` | `{}` | `getProviderStatus()` | `ProviderStatusMap` | readOnly |
 | `market_snapshot` | `{ canonicalId?: string }` | `getLiveSnapshot()` then tool-side project `items` by `canonicalId`, preserving `revision`/`capturedAtMs`/`connections` | `LiveSnapshot` | readOnly |
 | `historical_candles` | `{ canonicalId, interval, from, to, mode: cached\|coverage\|onDemand }` | parse `from`/`to` via shared ISO→ms helper; `getCachedCandles` / `getCoverage` / `fetchHistorical` | `{ candles }` / `CoverageStatus` / `HistoricalFetchResult` | **not readOnly** (onDemand may cache); description states which modes are reads |
-| `option_chain_snapshot` | `{ configId?, snapshotId?, mode: list\|get\|capture, capture fields }` | `listSnapshots` / `getSnapshot` / `captureSnapshot` | `{ snapshots }` / `OptionChainSnapshot` / `CaptureResult` | **not readOnly** (capture persists `configId = null`); `idempotentHint: false` for capture |
+| `option_chain_snapshot` | strict discriminated union on `mode` (below) | `listSnapshots` / `getSnapshot` / `captureSnapshot` per mode | `{ snapshots }` / `OptionChainSnapshot` / `CaptureResult` | **not readOnly** (capture persists `configId = null`); `idempotentHint: false` for capture |
 | `on_demand_retrieval` | `{ kind: historical\|option_chain, canonicalId, interval?, from?, to?, expiryDate?, provider? }` | dispatch to `fetchHistorical` or `captureSnapshot` per `M6_B_PLAN.md` §4.1 contract | `{ kind, status, tool, result?, error? }` per §4.1 | **not readOnly**; description states delegated side effect |
 | `futures_chain` | `{}` | none | `isError: true`, "unavailable in M6 — no shared service" | readOnly |
 | `market_information` | `{}` | none | `isError: true`, "unavailable in M6 — no shared service" | readOnly |
+
+**`option_chain_snapshot` input — strict mode-specific schemas** (Zod discriminated union on `mode`; reject unknown modes and mode-foreign fields where practical):
+
+- **`list`**: `{ mode: "list", configId?: string, fromMs?: number, toMs?: number }`. `fromMs`/`toMs` must be finite; reject `fromMs > toMs`. Service call: `listSnapshots({ configId, fromMs, toMs })`. Output: `{ snapshots: OptionChainSnapshot[] }`. Uses the existing `OptionChainSnapshotService.listSnapshots()` — oldest-first, 200-record default cap (see §9). No pagination in B2.
+- **`get`**: `{ mode: "get", snapshotId: string.min(1) }`. Service call: `getSnapshot(snapshotId)`. Output: `OptionChainSnapshot`; a missing snapshot maps to an `unavailable` tool result (service `null` → `McpResult` failure).
+- **`capture`**: `{ mode: "capture", underlyingCanonicalId: string.min(1), expiryDate: string.min(1), provider?: ProviderId, strikeRangeJson?: string, nativeIdentifier?: string }`. Service call: `captureSnapshot({ underlyingCanonicalId, expiryDate, ...(provider ? { provider } : {}), ...(strikeRangeJson !== undefined ? { strikeRangeJson } : {}), ...(nativeIdentifier ? { nativeIdentifier } : {}) })`. Output: `CaptureResult`. Capture uses `captureOnDemand()` and stores with `configId = null`; it must not read, create, modify or depend on saved capture configurations. Existing capture/retention behavior is preserved.
 
 **ISO→epoch-ms helper** (`packages/mcp-core/src/schemas.ts`): `parseRange(from, to): { fromMs, toMs } | { error }` using `Date.parse`, rejecting non-finite values and `fromMs > toMs`. Used by `historical_candles` and `on_demand_retrieval` (historical kind). No service change.
 
@@ -85,6 +103,8 @@ All tools are registered in `packages/mcp-core/src/tools.ts` via `registerTools(
 ### 5.1 HTTP (`apps/api/src/index.ts`)
 Expand `createHttpMcpServices` to accept `registry`, `service`, `historicalService`, `snapshotService` in addition to `config`, `db`, `catalog`, `hub`. Implement each B2 method by direct in-process calls to those instances. No new state, no second app/DB/provider.
 
+**`getProviderStatus` must reuse the existing composition, not call `registry.getStatuses()` alone.** The REST route composes auth/configuration status from `ProviderRegistry.getStatuses()` with authoritative runtime streaming state from `MarketDataService.getConnectionStatus(id)?.state` via `withRuntimeStreamingState()` / `composeProviderStatuses()` (`apps/api/src/provider-routes.ts:24-45`). To avoid two implementations of the same rules, export the existing `composeProviderStatuses` (or a narrow equivalent) from `provider-routes.ts` and call it from the HTTP MCP adapter with the same `ProviderRouteDependencies` (`providerRegistry`, `service`, etc.). Return the composed `ProviderStatusMap` validated by `providerStatusMapSchema`. Do not duplicate the streaming-state overlay logic.
+
 **Composition change (required):** in `index.ts`, construct `AppSettings`, `CandleRepository`, `SnapshotRepository`, `HistoricalCandleService` and `OptionChainSnapshotService` once (the objects `createApp` currently builds internally at `app.ts:174-182`), pass them to `createApp` via the existing `AppDependencies` overrides, and pass the same instances to `createHttpMcpServices`. REST routes keep using the same instances. No REST behavior change.
 
 ### 5.2 STDIO (`apps/mcp-server/src/services.ts`)
@@ -92,16 +112,33 @@ Add B2 methods using `fetch` to the existing local API. Map responses to `McpRes
 
 | Method | Endpoint | Response mapping |
 |---|---|---|
-| `getProviderStatus` | `GET /api/providers/status` | extract `json.providers`, validate with `providerStatusMapSchema` |
+| `getProviderStatus` | `GET /api/providers/status` | extract `json.providers` (the REST-composed map including runtime `streamingState` for both providers), validate with `providerStatusMapSchema`; do not return the `{ providers, localManagement, note }` wrapper |
 | `getLiveSnapshot` | `GET /api/market/snapshot` | validate with `liveSnapshotSchema` |
 | `getCachedCandles` | `GET /api/historical/candles?canonicalId=&interval=&from=&to=` | `json.candles` |
 | `getCoverage` | `GET /api/historical/coverage?...` | `{ gaps: json.gaps, unavailableNotes: json.unavailableNotes }` |
 | `fetchHistorical` | `POST /api/historical/fetch` (loopback-guarded; STDIO is local) | `{ candles, gaps, unavailable, conflicts, providersTried }` |
 | `listSnapshots` | `GET /api/snapshots?configId=&from=&to=` | `json.snapshots` |
 | `getSnapshot` | `GET /api/snapshots/:id` | `json.snapshot`; 404 → `unavailable` |
-| `captureSnapshot` | `POST /api/snapshots/capture` (loopback-guarded) | `json.snapshot` + `error`; 422 → `unavailable` with sanitized message |
+| `captureSnapshot` | `POST /api/snapshots/capture` (loopback-guarded) | see exact 422 contract below |
 
-Non-2xx → `ok: false` with `validation` for 400 and `unavailable` otherwise; network errors → `unavailable`. No credential/token leakage. No new endpoints — all already exist.
+**`captureSnapshot` — identical HTTP/STDIO semantics (normative):** a valid capture attempt that produces no snapshot is a **completed service operation**, not a transport failure. `OptionChainSnapshotService.captureOnDemand()` returns `CaptureResult { snapshot: null, error }` as a normal outcome; the REST route maps that outcome to HTTP 422 with `{ error: "capture_unavailable", message }` (`apps/api/src/snapshot-routes.ts:77-79`). Both adapters must expose the **same** `McpResult<CaptureResult>`:
+
+- **HTTP direct service:** `captureSnapshot(req)` → `ok: true, value: { snapshot: null, error: <sanitized service error> }` when no provider succeeds.
+- **STDIO:** a 422 response with `error === "capture_unavailable"` is translated to the **same** `ok: true, value: { snapshot: null, error: <sanitized message> }` — never `ok: false`. The MCP tool then maps `snapshot === null` to the documented `unavailable` tool outcome (§4.1 of `M6_B_PLAN.md`).
+- **Genuine failures remain errors:** 400 → `ok: false` category `validation`; 403 → `ok: false` category `unavailable` (local-owner guard); other non-2xx and network errors → `ok: false` category `unavailable`. Sanitize all messages — never expose credentials, tokens, authorization headers or sensitive request data.
+
+Exact examples:
+```
+HTTP direct:   captureSnapshot(validReq) -> { ok: true, value: { snapshot: null, error: "no provider available" } }
+STDIO 422:     { error: "capture_unavailable", message: "no provider available" }
+            -> { ok: true, value: { snapshot: null, error: "no provider available" } }
+STDIO 400:     { error: "invalid_request", message: "Invalid capture request" }
+            -> { ok: false, error: { category: "validation", message: "Invalid capture request" } }
+STDIO 403:     { error: "forbidden", message: "Manual capture is local-owner only" }
+            -> { ok: false, error: { category: "unavailable", message: "Manual capture is local-owner only" } }
+```
+
+No credential/token leakage. No new endpoints — all already exist.
 
 ## 6. File scope
 
@@ -128,6 +165,9 @@ Non-2xx → `ok: false` with `validation` for 400 and `unavailable` otherwise; n
 - **In-process (`handler.fetch` + pinned `2026-07-28` client):** each tool with valid input returns `structuredContent`; invalid input returns `isError: true`; unavailable tools return `isError: true` with the sanitized message; `market_snapshot` projection filters `items` and preserves other fields; `historical_candles` rejects bad ISO ranges and `fromMs > toMs`; `on_demand_retrieval` dispatches both `kind` values and maps `CaptureResult.snapshot === null` to `status: "unavailable"`.
 - **Annotations:** `tools/list` shows `readOnlyHint: true` only for pure reads; persistence-capable tools are not read-only; descriptions state side effects. (Full deterministic-order and cache-hint assertions are B4/B3.)
 - **Adapters:** HTTP methods call the injected instances (verify via a fake service); STDIO methods call the correct local API paths with translated params and map errors consistently. No operational config mutation.
+- **Capture 422 parity (both adapters):** with a fake service returning `{ snapshot: null, error: "no provider available" }`, the HTTP adapter returns `ok: true, value: { snapshot: null, error }`; with a stub API returning 422 `{ error: "capture_unavailable", message }`, the STDIO adapter returns the identical `ok: true, value: { snapshot: null, error: message }`. Assert 400 → `validation`, 403/other non-2xx → `unavailable`, and that no credential/token/authorization header appears in any result.
+- **Provider status composition (both providers):** with a fake registry returning auth status and a fake `MarketDataService.getConnectionStatus()` returning distinct runtime states for UPSTOX and FYERS, assert the HTTP adapter's `getProviderStatus()` preserves each provider's `streamingState` (not just registry auth fields); assert the STDIO adapter extracts and validates the composed `providers` map from a stub REST response containing both providers' runtime states.
+- **Option-chain modes:** assert each `option_chain_snapshot` mode builds the exact service request (list filters, get id, capture fields with `configId = null` persistence), rejects `fromMs > toMs` and non-finite values, and that capture does not read/write saved capture configs.
 - **Regression:** existing M6-A/M6-B1 tests must still pass unchanged.
 
 ## 8. Acceptance criteria (B2 exit)

@@ -1,8 +1,8 @@
 # M6-B — MCP Capabilities over Shared Services
 
-> **Status:** Implementation plan only. Awaiting separate authorization. No M6-B source exists yet.
-> **Last updated:** 2026-11-19
-> **Depends on:** M6-A (implemented at `7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory, `markethub_health` only).
+> **Status:** Implementation plan only. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 plan published** (`9510e8e`), B2/B3/B4 implementation not started. Awaiting separate authorization for each remaining sub-phase.
+> **Last updated:** 2026-11-20
+> **Depends on:** M6-A (implemented at `7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory, `markethub_health` only) and M6-B1 (catalog search + event-feed seams; final implementation baseline `be9421911ad74766a200ef091fcacdcef8448177`).
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §4.1.2 (McpServices), §4.1.3 (STDIO parity), §5 (inventory), §5.1–§5.3 (catalog search, annotations, capability table), §10 (M6-B), §11–§12 (tests/acceptance). This document adds execution detail; it does not change that design.
 
 ## 1. Objective and boundaries
@@ -57,7 +57,11 @@ getLiveSnapshot(): Promise<McpResult<LiveSnapshot>>;
 getCachedCandles(req: CandleRangeRequest): Promise<McpResult<{ candles: HistoricalCandle[] }>>;
 getCoverage(req: CandleRangeRequest): Promise<McpResult<CoverageStatus>>;
 fetchHistorical(req: CandleRangeRequest): Promise<McpResult<HistoricalFetchResult>>;
-listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number; limit?: number; afterCapturedAt?: string; afterId?: string }):
+// B2 — existing non-paginated read (oldest-first, 200-record default cap)
+listSnapshots(filter: { configId?: string; fromMs?: number; toMs?: number }):
+  Promise<McpResult<{ snapshots: OptionChainSnapshot[] }>>;
+// B3 — separate newest-first bounded page seam (not in B2 scope)
+listSnapshotsPage(filter: { configId?: string; fromMs?: number; toMs?: number; limit: number; afterCapturedAt?: string; afterId?: string }):
   Promise<McpResult<{ snapshots: OptionChainSnapshot[]; nextCursor: string | null }>>;
 getSnapshot(id: string): Promise<McpResult<OptionChainSnapshot>>;
 captureSnapshot(req: OptionChainRequest): Promise<McpResult<CaptureResult>>;
@@ -115,7 +119,7 @@ This is a composition-only change; it must not alter M6-A transport, CORS, Host/
 **Snapshot resource pagination contract (bounded newest-first seam):** the existing `SnapshotStore.listSnapshots(configId?, fromMs?, toMs?)` (`packages/market-core/src/snapshots/service.ts:8-15`) and its repository implementation order by `capturedAt ASC` with a default cap of 200 — re-sorting that oldest-first subset cannot surface the newest snapshots. M6-B therefore adds one bounded page method, symmetric with the catalog search extension:
 - `SnapshotStore.listSnapshotsPage(filter: { configId?, fromMs?, toMs?, limit, afterCapturedAt?, afterId? }): { snapshots: OptionChainSnapshot[]; nextCursor: string | null }` in `packages/market-core/src/snapshots/service.ts`, implemented in `packages/database/src/repositories/snapshots.ts` with `ORDER BY captured_at DESC, id DESC`, `LIMIT ?` (default 25, max 100), and keyset predicate `(captured_at < afterCapturedAt) OR (captured_at = afterCapturedAt AND id < afterId)`. `nextCursor` encodes the last returned `(capturedAt, id)` pair opaquely when more rows exist.
 - `OptionChainSnapshotService.listSnapshotsPage(...)` delegates to the store; the existing `listSnapshots` stays unchanged for REST/WebUI.
-- `McpServices.listSnapshots` passes the page params through; the resource handler decodes/encodes the opaque cursor and returns `nextCursor`. No MCP-layer re-sorting of a capped oldest-first set. An invalid/expired cursor returns an explicit `unavailable`/`snapshot-required` result, never a silent empty page.
+- **B2** uses only `McpServices.listSnapshots` (no pagination) over the existing `OptionChainSnapshotService.listSnapshots()` — oldest-first with a 200-record default cap; it is not described as returning the latest snapshots. **B3** adds `McpServices.listSnapshotsPage` and the resource handler decodes/encodes its opaque cursor and returns `nextCursor`. No MCP-layer re-sorting of a capped oldest-first set. An invalid/expired cursor returns an explicit `unavailable`/`snapshot-required` result, never a silent empty page.
 
 ### 4.3 Prompts
 

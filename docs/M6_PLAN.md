@@ -1,7 +1,7 @@
 # M6 — MCP Market-Data and Event Interface Plan
 
-> **Status:** Research complete; execution-ready plan awaiting separate implementation authorization. No M6 source, transport, dependency or MCP market tool has been implemented. This document is a plan only.
-> **Last updated:** 2026-11-19
+> **Status:** Research complete; execution-ready plan. **M6-A is implemented and published** (`7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, shared factory, `markethub_health`). **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`: catalog-search seam, event-feed read seam, their HTTP endpoints and MCP service adapters). **M6-B2 plan published** (`9510e8e`); B2/B3/B4 implementation not started. M6-C/D/E pending. Stage G separately gated and locked. This document remains the governing plan; it does not claim M6 complete.
+> **Last updated:** 2026-11-20
 > **Related:** [MCP_INTERFACE.md](MCP_INTERFACE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) (M6), [PROJECT_STATUS.md](PROJECT_STATUS.md), [STAGE_5_PLAN.md](STAGE_5_PLAN.md) §15, [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [REFERENCES.md](REFERENCES.md) §8
 
 ## 1. Objective and scope
@@ -181,7 +181,7 @@ Shared registration calls only the operations below. Each returns canonical cont
 | `getLiveSnapshot()` | Canonical live snapshot | `MarketDataService.getSnapshot()` / `liveSnapshotSchema` |
 | `getCachedCandles(req)` / `getCoverage(req)` | Cached reads + derived coverage | `HistoricalCandleService.getCached/getCoverageStatus` |
 | `fetchHistorical(req)` | On-demand retrieval (may cache candles) | `HistoricalCandleService.fetchOnDemand` |
-| `listSnapshots(filter)` / `getSnapshot(id)` | Stored snapshot reads | `OptionChainSnapshotService.listSnapshots/getSnapshot` |
+| `listSnapshots(filter)` / `getSnapshot(id)` | Stored snapshot reads (B2: non-paginated, oldest-first, 200 cap; B3 adds `listSnapshotsPage` newest-first) | `OptionChainSnapshotService.listSnapshots/getSnapshot` |
 | `captureSnapshot(req)` | On-demand capture (persists `configId = null`) | `OptionChainSnapshotService.captureOnDemand` |
 | `readEventFeed({ after, limit })` | Bounded in-memory replay read (§6.1); returns `{ events, nextCursor, snapshotRequired? }` | `LiveEventHub` bounded history read seam |
 | `startActivity(rec)` / `completeActivity(rec)` | Durable activity recording (§9.1.1), best-effort/non-fatal | `McpActivityRepository` via API |
@@ -467,7 +467,7 @@ Two minimal internal endpoints on the existing Hono app, following current conve
 
 **Target addition — one "MCP / Activity" section integrated into the existing navigation** (no separate admin app or dashboard framework):
 - **Transport availability — distinct, honest states per transport:**
-  - **HTTP MCP** (runs in the API process): `Not implemented` (current state until M6-A), then `Configured`, `Available`, or `Unavailable/error`. Once implemented, derive these from actual API handler/readiness information — never from package installation alone.
+  - **HTTP MCP** (runs in the API process): `Configured`, `Available`, or `Unavailable/error`, derived from actual API handler/readiness information — never from package installation alone. M6-A is implemented; the WebUI status must reflect the running handler, not a planned state.
   - **STDIO MCP** (separate process): only `Activity observed` or `No activity observed / status unknown`. The API **cannot inspect an external MCP client's configuration**, so `Not configured`/`Configured` are **not** shown — there is no configuration signal to derive them from. Durable activity records provide evidence of *observed past activity* only; they are **not** proof the process is currently running or configured. Do not claim "connected", "running", "configured" or "not configured" without an actual signal. If an explicit configuration signal is introduced later (e.g. a WebUI-owned registration record), configuration states may be added with a documented source; none exists in M6.
   - No heartbeat service, polling solely to simulate STDIO connection status, background monitoring process, or new infrastructure component. HTTP readiness and STDIO process status are not interchangeable.
 - **Recent tool calls:** a bounded, paginated list from `mcp_activity` with tool name, transport, timestamp, duration, status and client name/version.
