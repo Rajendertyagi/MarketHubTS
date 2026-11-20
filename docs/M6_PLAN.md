@@ -1,6 +1,6 @@
 # M6 — MCP Market-Data and Event Interface Plan
 
-> **Status:** Research complete; execution-ready plan. **M6-A is implemented and published** (`7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, shared factory, `markethub_health`). **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`: catalog-search seam, event-feed read seam, their HTTP endpoints and MCP service adapters). **M6-B2 plan published** (`9510e8e`); B2/B3/B4 implementation not started. M6-C/D/E pending. Stage G separately gated and locked. This document remains the governing plan; it does not claim M6 complete.
+> **Status:** Research complete; execution-ready plan. **M6-A is implemented and published** (`7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, shared factory, `markethub_health`). **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`: catalog-search seam, event-feed read seam, their HTTP endpoints and MCP service adapters). **M6-B2 is implemented and published** (`0e0ec6d`: nine tools registered through the shared factory over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is pending publication). **M6-B3/B4 pending** (resources/prompts/cache hints, conformance/parity). M6-C/D/E pending. Stage G separately gated and locked. This document remains the governing plan; it does not claim M6 complete.
 > **Last updated:** 2026-11-20
 > **Related:** [MCP_INTERFACE.md](MCP_INTERFACE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) (M6), [PROJECT_STATUS.md](PROJECT_STATUS.md), [STAGE_5_PLAN.md](STAGE_5_PLAN.md) §15, [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [REFERENCES.md](REFERENCES.md) §8
 
@@ -14,7 +14,7 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 
 **Out of scope for the remaining phases:** provider activation (M5 Phase 4B / Stage G), live provider auth/network/sockets, watchlist/alert/scanner workflow services (M7), new third-party dependencies (the thin shared workspace package in §4.1 reuses the existing SDK version), production-driver unlock, MCP mutation of operational configuration. **Database migrations are out of scope except for one narrow exception:** a single additive SQLite migration for the `mcp_activity` table is permitted within M6-C (§9.1, §13). That exception does not authorize any other schema change; further migrations require separate justification. The activity table remains a design — no migration or schema is created in this documentation task.
 
-**Document role:** this is the governing plan for M6 as a whole. M6-A and M6-B1 are already implemented and published (§2); B2/B3/B4 and M6-C/D/E remain planned and require separate authorization. This document does not itself implement anything, but it no longer describes an entirely unimplemented M6.
+**Document role:** this is the governing plan for M6 as a whole. M6-A, M6-B1 and M6-B2 are already implemented and published (§2); B3/B4 and M6-C/D/E remain planned and require separate authorization. This document does not itself implement anything, but it no longer describes an entirely unimplemented M6.
 
 **M6 must work while M5 Phase 4B remains gated.** It operates on cached/stored data and honest empty/unavailable states; it is not a reason to connect providers.
 
@@ -35,8 +35,9 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 | Shared services available | `MarketDataService`, `LiveEventHub` (`packages/realtime`), `HistoricalCandleService`, `OptionChainSnapshotService`, `CatalogSyncService`, repositories, `ProviderRegistry` (`packages/market-core`, `packages/database`) |
 | Shared contracts available | `liveSnapshotSchema`/`LiveSnapshot`, `providerStatusMapSchema`, `subscriptionStateViewSchema`, historical/snapshot schemas, `market-dates` IST helpers (`packages/contracts`) |
 | Existing boundary | `isLocalPeer` guards mutating HTTP routes; WebUI owns operational config; no app-level login |
-| Tests (implemented) | `tests/mcp/` contains transport, real-HTTP smoke, STDIO modern, catalog-search, event-feed, seams and STDIO-adapter tests |
-| Not present | No registered market-data tools/resources/prompts (B2/B3), no activity history (M6-C), no `subscriptions/listen`/event bridge (M6-D), no `@modelcontextprotocol/node` dependency |
+| Registered tools (M6-B2, implemented) | Nine tools via the shared factory: `markethub_health`, `catalog_search`, `provider_status`, `market_snapshot`, `historical_candles`, `option_chain_snapshot`, `on_demand_retrieval`, `futures_chain`, `market_information` (`packages/mcp-core/src/tools.ts`) |
+| Tests (implemented) | `tests/mcp/` contains transport, real-HTTP smoke, STDIO modern, catalog-search, event-feed, seams, STDIO-adapter, tools and tools-adapter tests |
+| Not present | No registered resources/prompts (B3), no cache hints (B3), no activity history (M6-C), no `subscriptions/listen`/event bridge (M6-D), no `@modelcontextprotocol/node` dependency |
 
 ## 3. Official protocol/SDK research findings (source URLs)
 

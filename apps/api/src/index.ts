@@ -1,22 +1,17 @@
-import { loadConfig, providerConfigFromAppConfig, redactConfigForLog, type AppConfig } from "@markethub/config";
+import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@markethub/config";
 import {
   openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings,
   SqliteSubscriptionRepository, SqliteCatalogRepository, AppSettings, CandleRepository, SnapshotRepository,
-  checkDatabase, type DatabaseHandle
+  type DatabaseHandle
 } from "@markethub/database";
-import { healthStatusSchema, providerStatusMapSchema } from "@markethub/contracts";
-import { nowIso } from "@markethub/shared";
 import { createMcpHandler } from "@modelcontextprotocol/server";
-import { createMcpServer, type McpServices } from "@markethub/mcp-core";
-import {
-  MarketDataService, ProviderRegistry, HistoricalCandleService, OptionChainSnapshotService,
-  type CatalogRepository
-} from "@markethub/market-core";
+import { createMcpServer } from "@markethub/mcp-core";
+import { MarketDataService, ProviderRegistry, HistoricalCandleService, OptionChainSnapshotService } from "@markethub/market-core";
 import { LiveEventHub } from "@markethub/realtime";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
-import { composeProviderStatuses } from "./provider-routes";
+import { createHttpMcpServices } from "./mcp-services";
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
@@ -31,77 +26,6 @@ let hub: LiveEventHub | null = null;
 let coordinator: SubscriptionCoordinator | null = null;
 let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
 
-/** Build the HTTP-backed MCP services from the existing injected state. */
-function createHttpMcpServices(
-  config: AppConfig,
-  db: DatabaseHandle,
-  catalog: CatalogRepository,
-  hub: LiveEventHub,
-  registry: ProviderRegistry,
-  service: MarketDataService,
-  historicalService: HistoricalCandleService,
-  snapshotService: OptionChainSnapshotService
-): McpServices {
-  return {
-    getHealth: async () => {
-      const parsed = healthStatusSchema.safeParse({
-        status: "ok",
-        service: "markethub-api",
-        timestamp: nowIso(),
-        version: config.version,
-        checks: { api: "ok", database: checkDatabase(db.sqlite) === "ok" ? "ok" : "error" }
-      });
-      return parsed.success
-        ? { ok: true, value: parsed.data }
-        : { ok: false, error: { category: "internal", message: "Failed to build health status" } };
-    },
-    searchCatalog: async (req) => {
-      const text = req.text.trim();
-      if (!text) {
-        return { ok: false, error: { category: "validation", message: "text must be non-empty" } };
-      }
-      const limit = Math.max(1, Math.min(Math.trunc(req.limit), 100));
-      const rows = await catalog.searchInstruments({
-        text,
-        limit,
-        ...(req.afterCanonicalId !== undefined ? { afterCanonicalId: req.afterCanonicalId } : {})
-      });
-      const page = rows.slice(0, limit);
-      const nextCursor = rows.length > limit && page.length > 0 ? page[page.length - 1]!.canonicalId : null;
-      return { ok: true, value: { instruments: page, nextCursor } };
-    },
-    readEventFeed: async (req) => {
-      const result = hub.readAfter(req.after, req.limit);
-      if (result.outcome === "snapshot-required") {
-        return {
-          ok: true,
-          value: { events: [], nextCursor: null, snapshotRequired: { reason: result.reason } }
-        };
-      }
-      return { ok: true, value: { events: result.events, nextCursor: result.nextCursor, resumeCursor: result.resumeCursor } };
-    },
-    getProviderStatus: async () => {
-      const composed = composeProviderStatuses({ providerRegistry: registry, service });
-      if (!composed) return { ok: false, error: { category: "unavailable", message: "Provider registry unavailable" } };
-      const parsed = providerStatusMapSchema.safeParse(composed);
-      return parsed.success
-        ? { ok: true, value: parsed.data }
-        : { ok: false, error: { category: "internal", message: "Invalid provider status" } };
-    },
-    getLiveSnapshot: async () => ({ ok: true, value: service.getSnapshot() }),
-    getCachedCandles: async (req) => ({ ok: true, value: { candles: historicalService.getCached(req) } }),
-    getCoverage: async (req) => ({ ok: true, value: historicalService.getCoverageStatus(req) }),
-    fetchHistorical: async (req) => ({ ok: true, value: await historicalService.fetchOnDemand(req) }),
-    listSnapshots: async (filter) => ({ ok: true, value: { snapshots: snapshotService.listSnapshots(filter.configId, filter.fromMs, filter.toMs) } }),
-    getSnapshot: async (id) => {
-      const snapshot = snapshotService.getSnapshot(id);
-      return snapshot
-        ? { ok: true, value: snapshot }
-        : { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
-    },
-    captureSnapshot: async (req) => ({ ok: true, value: await snapshotService.captureOnDemand(req) })
-  };
-}
 
 async function main() {
   const config = loadConfig();
@@ -240,7 +164,7 @@ async function main() {
         logger.warn("hub_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
       // 5) close the MCP handler and its in-flight exchanges before the HTTP
-      // server and DB go away — no MCP handler may outlive its database.
+      // server and DB go away - no MCP handler may outlive its database.
       try { if (mcpHandler) await mcpHandler.close(); } catch (error) {
         logger.warn("mcp_handler_close_error", { message: error instanceof Error ? error.message : String(error) });
       }

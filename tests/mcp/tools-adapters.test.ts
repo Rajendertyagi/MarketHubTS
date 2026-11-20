@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../../apps/api/src/app";
+import { createHttpMcpServices } from "../../apps/api/src/mcp-services";
 import { createLogger } from "../../apps/api/src/lib/logger";
 import { composeProviderStatuses } from "../../apps/api/src/provider-routes";
 import { createStdioServices } from "../../apps/mcp-server/src/services";
@@ -136,5 +137,117 @@ describe("M6-B2 STDIO adapter", () => {
         expect(result.error.message).not.toContain("Bearer");
       }
     } finally { await server.stop(true); }
+  });
+});
+
+/** Fake injected services that record calls, for direct HTTP-adapter verification. */
+function fakeDeps() {
+  const calls: string[] = [];
+  const auth = {
+    UPSTOX: { id: "UPSTOX", enabled: true, authState: "AUTHENTICATED", streamingState: "STREAMING", validatedAt: null, expiresAt: null, expiryKnown: false, capabilities: [], limits: [], restrictions: [], error: null, lastErrorAt: null },
+    FYERS: { id: "FYERS", enabled: true, authState: "NOT_CONFIGURED", streamingState: "NOT_STARTED", validatedAt: null, expiresAt: null, expiryKnown: false, capabilities: [], limits: [], restrictions: [], error: null, lastErrorAt: null }
+  };
+  const config = { version: "0.1.0" } as never;
+  const db = { sqlite: {} } as never;
+  const catalog = { searchInstruments: async () => [] } as never;
+  const hub = { readAfter: () => ({ outcome: "page", events: [], nextCursor: null, resumeCursor: "r:0" }) } as never;
+  const registry = { getStatuses: () => auth } as never;
+  const service = {
+    getSnapshot: () => { calls.push("getSnapshot"); return { revision: 1, capturedAtMs: 1, items: [], connections: [] }; },
+    getConnectionStatus: (id: string) => ({ state: id === "UPSTOX" ? "STREAMING" : "NOT_STARTED" })
+  } as never;
+  const historicalService = {
+    getCached: (req: { canonicalId: string }) => { calls.push(`getCached:${req.canonicalId}`); return []; },
+    getCoverageStatus: (req: { canonicalId: string }) => { calls.push(`getCoverage:${req.canonicalId}`); return { gaps: [], unavailableNotes: [] }; },
+    fetchOnDemand: async (req: { canonicalId: string }) => { calls.push(`fetchOnDemand:${req.canonicalId}`); return { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] }; }
+  } as never;
+  const snapshotService = {
+    listSnapshots: (configId?: string) => { calls.push(`listSnapshots:${configId ?? ""}`); return []; },
+    getSnapshot: (id: string) => { calls.push(`getSnapshot:${id}`); return id === "missing" ? null : { id, configId: null, capturedAt: "2026-01-01T00:00:00.000Z", provider: "UPSTOX", envelope: { strikes: [] }, provenance: {} }; },
+    captureOnDemand: async (req: { underlyingCanonicalId: string }) => { calls.push(`captureOnDemand:${req.underlyingCanonicalId}`); return { snapshot: null, error: "no provider available" }; }
+  } as never;
+  return { services: createHttpMcpServices(config, db, catalog, hub, registry, service, historicalService, snapshotService), calls, auth };
+}
+
+describe("M6-B2 HTTP adapter (direct factory)", () => {
+  test("B2 methods call the injected service instances", async () => {
+    const { services, calls } = fakeDeps();
+    await services.getLiveSnapshot();
+    await services.getCachedCandles({ canonicalId: A, interval: "1D", fromMs: 1, toMs: 2 });
+    await services.getCoverage({ canonicalId: A, interval: "1D", fromMs: 1, toMs: 2 });
+    await services.fetchHistorical({ canonicalId: A, interval: "1D", fromMs: 1, toMs: 2 });
+    await services.listSnapshots({ configId: "cfg" });
+    await services.getSnapshot("snap-1");
+    await services.captureSnapshot({ underlyingCanonicalId: A, expiryDate: "2026-03-26" });
+    expect(calls).toContain("getSnapshot");
+    expect(calls).toContain(`getCached:${A}`);
+    expect(calls).toContain(`getCoverage:${A}`);
+    expect(calls).toContain(`fetchOnDemand:${A}`);
+    expect(calls).toContain("listSnapshots:cfg");
+    expect(calls).toContain("getSnapshot:snap-1");
+    expect(calls).toContain(`captureOnDemand:${A}`);
+  });
+
+  test("captureSnapshot returns ok:true with null snapshot (service boundary)", async () => {
+    const { services } = fakeDeps();
+    const result = await services.captureSnapshot({ underlyingCanonicalId: A, expiryDate: "2026-03-26" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.snapshot).toBeNull();
+      expect(result.value.error).toBe("no provider available");
+    }
+  });
+
+  test("getProviderStatus maps composed status with runtime streaming for both providers", async () => {
+    const { services } = fakeDeps();
+    const result = await services.getProviderStatus();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.UPSTOX.streamingState).toBe("STREAMING");
+      expect(result.value.FYERS.streamingState).toBe("NOT_STARTED");
+      expect(result.value.UPSTOX.authState).toBe("AUTHENTICATED");
+    }
+  });
+
+  test("getSnapshot missing maps to unavailable", async () => {
+    const { services } = fakeDeps();
+    const result = await services.getSnapshot("missing");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.category).toBe("unavailable");
+  });
+
+  test("HTTP adapter shares the same instances as REST via AppDependencies overrides", async () => {
+    resetConfigCache();
+    const dir = mkdtempSync(join(tmpdir(), "markethub-b2-share-"));
+    const dbPath = join(dir, "test.sqlite");
+    const config = loadConfig({ env: { MARKETHUB_ENV: "test", MARKETHUB_DB_PATH: dbPath, MARKETHUB_LAN: "false" } });
+    const db = openDatabase({ dbPath });
+    runMigrations(db.db, defaultMigrationsFolder);
+    try {
+      const { AppSettings, CandleRepository, SnapshotRepository } = await import("../../packages/database/src/index");
+      const { HistoricalCandleService, OptionChainSnapshotService } = await import("../../packages/market-core/src/index");
+      const appSettings = new AppSettings(db.db);
+      const candleRepo = new CandleRepository(db.db, db.sqlite);
+      const snapshotRepo = new SnapshotRepository(db.db, db.sqlite);
+      const historicalService = new HistoricalCandleService({ candles: candleRepo, settings: appSettings, providers: [] });
+      const snapshotService = new OptionChainSnapshotService({ snapshots: snapshotRepo, settings: appSettings, providers: [] });
+      const app = createApp({
+        config, db, logger: createLogger("error"), startedAt: Date.now(),
+        appSettings, candleRepo, snapshotRepo, historicalService, snapshotService
+      });
+      // The REST historical route reads from the same injected service instance.
+      const res = await app.request("/api/historical/candles?canonicalId=A&interval=1D&from=1&to=2");
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(Array.isArray(json.candles)).toBe(true);
+      // The MCP adapter built from the same instance returns the same empty result.
+      const mcp = createHttpMcpServices(config, db, {} as never, {} as never, {} as never, {} as never, historicalService, snapshotService);
+      const mcpResult = await mcp.getCachedCandles({ canonicalId: A, interval: "1D", fromMs: 1, toMs: 2 });
+      expect(mcpResult.ok).toBe(true);
+      if (mcpResult.ok) expect(mcpResult.value.candles).toEqual(json.candles);
+    } finally {
+      closeDatabaseHandle(db);
+      removeTempDir(dir);
+    }
   });
 });

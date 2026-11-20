@@ -1,7 +1,7 @@
 # MCP Interface
 
-> **Status:** Confirmed requirements + established direction. Current implementation remains a minimal STDIO health tool only. Official MCP 2026-07-28 / SDK 2.4.0 research is complete (2026-11-19) and recorded below and in [REFERENCES.md](REFERENCES.md) §8; the execution-ready plan is [M6_PLAN.md](M6_PLAN.md). Items still marked **(verify)** are implementation-time details, not unresolved product scope.
-> **Last updated:** 2026-11-19 (research reconciliation; no behavior change)
+> **Status:** Confirmed requirements + established direction. Current implementation includes M6-A (Streamable HTTP at `/mcp` + retained STDIO, shared factory), M6-B1 (catalog-search and event-feed read seams with runtime-scoped cursors) and M6-B2 (nine tools over both transports). Resources/prompts (B3), activity history (M6-C) and subscriptions/notifications (M6-D) remain pending. Official MCP 2026-07-28 / SDK 2.4.0 research is complete (2026-11-19) and recorded below and in [REFERENCES.md](REFERENCES.md) §8; the governing plan is [M6_PLAN.md](M6_PLAN.md). Items still marked **(verify)** are implementation-time details, not unresolved product scope.
+> **Last updated:** 2026-11-20 (current-state reconciliation; no behavior change)
 > **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [REFERENCES.md](REFERENCES.md), [M6_PLAN.md](M6_PLAN.md)
 
 ## 1. Role and principles
@@ -11,17 +11,18 @@
 - **No independent market-data interpretation or duplicate business logic in MCP.**
 - Multiple MCP clients may connect simultaneously, share the same canonical data/services, and must be isolated (one client’s subscriptions/disconnection must not corrupt another’s operation).
 
-## 2. Current implementation (verified scaffold)
+## 2. Current implementation (verified)
 
 | Item | Status |
 |---|---|
-| App | `apps/mcp-server` |
+| Apps | `apps/api` (HTTP `/mcp`) and `apps/mcp-server` (STDIO); shared registration in `packages/mcp-core` |
 | SDK | `@modelcontextprotocol/server` **2.4.0 (v2), Zod 4** — version confirmed 2026-11-19 from `bun.lock` and the installed package metadata, not assumed from the manifest |
-| Transport | STDIO via `serveStdio` from `@modelcontextprotocol/server/stdio` |
-| Tools | `markethub_health` (no inputs): fetches `${MARKETHUB_API_URL:-http://localhost:3001}/health`, validates against shared contract, returns result |
-| Behavior | Reuses local API (no duplicate logic); stdout reserved for protocol; diagnostics to stderr |
+| Transports | Streamable HTTP at `/mcp` on the existing Hono app (SDK `createMcpHandler`, Host/Origin validation, registered before SPA fallback) + retained STDIO via `serveStdio` |
+| Tools (M6-B2) | Nine tools through one shared factory: `markethub_health`, `catalog_search`, `provider_status`, `market_snapshot`, `historical_candles`, `option_chain_snapshot`, `on_demand_retrieval`, `futures_chain`, `market_information` |
+| Seams (M6-B1) | Bounded catalog search and event-feed read with runtime-scoped cursors and always-present `resumeCursor`; HTTP endpoints `GET /api/catalog/search` and `GET /api/market/events` |
+| Behavior | HTTP uses injected services directly; STDIO is a thin local-API client; one canonical service foundation, no duplicate market logic; stdout reserved for protocol on STDIO |
 
-**Not implemented yet:** Streamable HTTP, SSE event/subscription delivery, market data tools, watchlists/alerts/scanners tools, resources/prompts, multi-client HTTP serving, auth beyond local deployment model. **Streamable HTTP is a mandatory M6 deliverable (M6-A/M6-D/M6-E), not optional or deferrable** — see §3 and [M6_PLAN.md](M6_PLAN.md) §1/§10/§12.
+**Not implemented yet:** resources/prompts and cache hints (M6-B3), activity history and WebUI inspection (M6-C), `subscriptions/listen`/SSE notifications and event bridge (M6-D), broad conformance/parity and LAN acceptance (M6-E), watchlists/alerts/scanners tools (M7), auth beyond local deployment model. **Streamable HTTP is a mandatory M6 deliverable (M6-A/M6-D/M6-E), not optional or deferrable** — see §3 and [M6_PLAN.md](M6_PLAN.md) §1/§10/§12.
 
 ## 3. Transport requirements (confirmed requirements + verified protocol behavior)
 

@@ -1,14 +1,16 @@
 # MCP
 
 > **Status:** Aligned summary. Authoritative details: [MCP_INTERFACE.md](MCP_INTERFACE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md).
-> **Last updated:** 2026-11-15
+> **Last updated:** 2026-11-20
 
-## Current implementation (verified scaffold)
-- App: `apps/mcp-server`
+## Current implementation (verified)
+- Apps: `apps/api` (HTTP `/mcp`) and `apps/mcp-server` (STDIO); shared registration in `packages/mcp-core`
 - SDK: `@modelcontextprotocol/server` 2.4.0 (v2), Zod 4
-- Transport: **STDIO** via `serveStdio` from `@modelcontextprotocol/server/stdio`
-- Tool: `markethub_health` (no inputs) — fetches `${MARKETHUB_API_URL:-http://localhost:3001}/health`, validates against shared contract, returns result. Reuses local API (no duplicate logic).
-- STDIO rules: stdout reserved for MCP protocol messages; diagnostics to stderr.
+- Transports: **Streamable HTTP** at `/mcp` on the existing Hono app (SDK `createMcpHandler`, Host/Origin validation, before SPA fallback) + retained **STDIO** via `serveStdio`
+- Tools (M6-B2): nine tools through one shared factory — `markethub_health`, `catalog_search`, `provider_status`, `market_snapshot`, `historical_candles`, `option_chain_snapshot`, `on_demand_retrieval`, `futures_chain`, `market_information`
+- Seams (M6-B1): bounded catalog search and event-feed read with runtime-scoped cursors and always-present `resumeCursor`; endpoints `GET /api/catalog/search` and `GET /api/market/events`
+- Behavior: HTTP uses injected services directly; STDIO is a thin local-API client; one canonical foundation, no duplicate market logic; STDIO stdout reserved for protocol, diagnostics to stderr
+- Pending: resources/prompts (B3), activity history (M6-C), subscriptions/notifications (M6-D), broad conformance/LAN acceptance (M6-E)
 
 ## Target (confirmed; research verified 2026-11-19)
 - MCP is a **primary interface** backed by shared application services/canonical data (no separate market calculations).
