@@ -55,17 +55,28 @@ export function createStdioServices(apiBase: string): McpServices {
             error: { category: res.status === 400 ? "validation" : "unavailable", message: String(json?.message ?? `status ${res.status}`) }
           };
         }
-        // Validate the complete envelope before returning ok:true. Snapshot
-        // recovery requires a non-empty reason and carries no checkpoint; a
-        // successful page requires an events array, a string|null nextCursor
-        // and a string resumeCursor. No defaulting or casts.
+        // Validate the complete discriminated envelope before returning ok:true.
+        // A snapshot-recovery result must be internally consistent: a non-null
+        // object reason, zero events, an explicitly null nextCursor and no
+        // resumeCursor property at all (even null). A successful page must have
+        // an events array, a string|null nextCursor, a string resumeCursor and
+        // no snapshotRequired. No defaulting, casts or coercion; fixed messages
+        // so malformed payload data is never echoed back.
+        const recoveryMessage = "Invalid feed response: malformed snapshot-recovery envelope";
         if (json.snapshotRequired !== undefined) {
-          const reason = json.snapshotRequired?.reason;
-          if (typeof reason !== "string" || reason.length === 0) {
-            return {
-              ok: false,
-              error: { category: "unavailable", message: "Invalid feed response: malformed snapshotRequired" }
-            };
+          const recovery = json.snapshotRequired;
+          const reason = recovery !== null && typeof recovery === "object" && !Array.isArray(recovery)
+            ? recovery.reason
+            : undefined;
+          if (
+            typeof reason !== "string" ||
+            reason.trim().length === 0 ||
+            !Array.isArray(json.events) ||
+            json.events.length !== 0 ||
+            json.nextCursor !== null ||
+            Object.prototype.hasOwnProperty.call(json, "resumeCursor")
+          ) {
+            return { ok: false, error: { category: "unavailable", message: recoveryMessage } };
           }
           return {
             ok: true,

@@ -21,6 +21,46 @@ function stubApi() {
         if (after === "malformed-recovery") {
           return Response.json({ events: [], nextCursor: null, snapshotRequired: {} });
         }
+        if (after === "recovery-with-events") {
+          return Response.json({
+            events: [{ event: "item-updated", id: "9", data: {} }],
+            nextCursor: null,
+            snapshotRequired: { reason: "invalid-cursor" }
+          });
+        }
+        if (after === "recovery-with-next-cursor") {
+          return Response.json({ events: [], nextCursor: "5", snapshotRequired: { reason: "invalid-cursor" } });
+        }
+        if (after === "recovery-with-resume-cursor") {
+          return Response.json({
+            events: [], nextCursor: null, resumeCursor: "runtime-1:9",
+            snapshotRequired: { reason: "invalid-cursor" }
+          });
+        }
+        if (after === "recovery-with-null-resume-cursor") {
+          return Response.json({
+            events: [], nextCursor: null, resumeCursor: null,
+            snapshotRequired: { reason: "invalid-cursor" }
+          });
+        }
+        if (after === "recovery-whitespace-reason") {
+          return Response.json({ events: [], nextCursor: null, snapshotRequired: { reason: "   " } });
+        }
+        if (after === "recovery-missing-reason") {
+          return Response.json({ events: [], nextCursor: null, snapshotRequired: {} });
+        }
+        if (after === "recovery-missing-events") {
+          return Response.json({ nextCursor: null, snapshotRequired: { reason: "invalid-cursor" } });
+        }
+        if (after === "recovery-non-array-events") {
+          return Response.json({ events: "nope", nextCursor: null, snapshotRequired: { reason: "invalid-cursor" } });
+        }
+        if (after === "recovery-missing-next-cursor") {
+          return Response.json({ events: [], snapshotRequired: { reason: "invalid-cursor" } });
+        }
+        if (after === "recovery-array-snapshot-required") {
+          return Response.json({ events: [], nextCursor: null, snapshotRequired: ["invalid-cursor"] });
+        }
         if (after === "final") {
           return Response.json({
             events: [{ event: "item-updated", id: "2", data: {} }],
@@ -144,11 +184,60 @@ describe("M6-B1 STDIO adapter", () => {
 
       const malformedRecovery = await services.readEventFeed({ after: "malformed-recovery", limit: 5 });
       expect(malformedRecovery.ok).toBe(false);
-      if (!malformedRecovery.ok) expect(malformedRecovery.error.message).toContain("malformed snapshotRequired");
+      if (!malformedRecovery.ok) expect(malformedRecovery.error.message).toBe("Invalid feed response: malformed snapshot-recovery envelope");
 
       const malformedPage = await services.readEventFeed({ after: "malformed-page", limit: 5 });
       expect(malformedPage.ok).toBe(false);
       if (!malformedPage.ok) expect(malformedPage.error.message).toContain("malformed page envelope");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed accepts a valid snapshot-recovery envelope", async () => {
+    const { server, base } = stubApi();
+    try {
+      const services = createStdioServices(base);
+      const result = await services.readEventFeed({ after: "bad", limit: 5 });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.events).toEqual([]);
+        expect(result.value.nextCursor).toBeNull();
+        expect(result.value.snapshotRequired?.reason).toBe("invalid-cursor");
+        expect("resumeCursor" in result.value).toBe(false);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed rejects contradictory snapshot-recovery envelopes", async () => {
+    const { server, base } = stubApi();
+    const cases = [
+      "recovery-with-events",
+      "recovery-with-next-cursor",
+      "recovery-with-resume-cursor",
+      "recovery-with-null-resume-cursor",
+      "recovery-whitespace-reason",
+      "recovery-missing-reason",
+      "recovery-missing-events",
+      "recovery-non-array-events",
+      "recovery-missing-next-cursor",
+      "recovery-array-snapshot-required"
+    ];
+    try {
+      const services = createStdioServices(base);
+      for (const after of cases) {
+        const result = await services.readEventFeed({ after, limit: 5 });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.category).toBe("unavailable");
+          expect(result.error.message).toBe("Invalid feed response: malformed snapshot-recovery envelope");
+          // Fixed message must not echo any payload data.
+          expect(result.error.message).not.toContain("runtime-1");
+          expect(result.error.message).not.toContain("invalid-cursor");
+        }
+      }
     } finally {
       await server.stop(true);
     }
