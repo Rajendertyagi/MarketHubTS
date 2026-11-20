@@ -17,7 +17,11 @@ function stubApi() {
         if (url.searchParams.get("after") === "bad") {
           return Response.json({ events: [], nextCursor: null, snapshotRequired: { reason: "invalid-cursor" } });
         }
-        return Response.json({ events: [{ event: "item-updated", id: "1", data: {} }], nextCursor: "1" });
+        return Response.json({
+          events: [{ event: "item-updated", id: "1", data: {} }],
+          nextCursor: "1",
+          resumeCursor: "runtime-1:1"
+        });
       }
       return new Response("not found", { status: 404 });
     }
@@ -54,6 +58,50 @@ describe("M6-B1 STDIO adapter", () => {
       const bad = await services.readEventFeed({ after: "bad", limit: 5 });
       expect(bad.ok).toBe(true);
       if (bad.ok) expect(bad.value.snapshotRequired?.reason).toBe("invalid-cursor");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed enforces the discriminated page contract", async () => {
+    const { server, base } = stubApi();
+    try {
+      const services = createStdioServices(base);
+
+      // Successful non-empty page: resumeCursor present, no snapshotRequired.
+      const page = await services.readEventFeed({ limit: 5 });
+      expect(page.ok).toBe(true);
+      if (page.ok) {
+        expect(typeof page.value.resumeCursor).toBe("string");
+        expect(page.value.snapshotRequired).toBeUndefined();
+        expect(page.value.events.length).toBe(1);
+      }
+
+      // Snapshot-recovery result: no resumeCursor, empty events, null nextCursor.
+      const recovery = await services.readEventFeed({ after: "bad", limit: 5 });
+      expect(recovery.ok).toBe(true);
+      if (recovery.ok) {
+        expect(recovery.value.events).toEqual([]);
+        expect(recovery.value.nextCursor).toBeNull();
+        expect(recovery.value.snapshotRequired?.reason).toBe("invalid-cursor");
+        expect("resumeCursor" in recovery.value ? recovery.value.resumeCursor : undefined).toBeUndefined();
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("readEventFeed rejects a successful response missing resumeCursor", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ events: [], nextCursor: null })
+    });
+    try {
+      const services = createStdioServices(`http://127.0.0.1:${server.port}`);
+      const result = await services.readEventFeed({ limit: 5 });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.category).toBe("unavailable");
     } finally {
       await server.stop(true);
     }

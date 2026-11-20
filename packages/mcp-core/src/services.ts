@@ -21,15 +21,26 @@ export interface McpCatalogPage {
   nextCursor: string | null;
 }
 
-/** Bounded event-feed page. `snapshotRequired` is distinct from an empty page. */
-export interface McpFeedPage {
-  events: McpFeedEvent[];
-  /** Pagination continuation: present only when the lookahead row exists. */
-  nextCursor: string | null;
-  /** Runtime-scoped checkpoint for the next read; absent only on snapshot-required. */
-  resumeCursor?: string;
-  snapshotRequired?: { reason: string };
-}
+/**
+ * Bounded event-feed result. A successful page always carries a runtime-scoped
+ * `resumeCursor` checkpoint (including final and empty caught-up pages); a
+ * snapshot-recovery result carries no checkpoint and forces a fresh snapshot.
+ * `nextCursor` is only the pagination continuation token and may be null on a
+ * successful final page.
+ */
+export type McpFeedPage =
+  | {
+      events: McpFeedEvent[];
+      nextCursor: string | null;
+      resumeCursor: string;
+      snapshotRequired?: never;
+    }
+  | {
+      events: [];
+      nextCursor: null;
+      snapshotRequired: { reason: string };
+      resumeCursor?: never;
+    };
 
 /**
  * The seam through which shared MCP registration reaches application capabilities.

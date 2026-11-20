@@ -12,25 +12,31 @@ Give AI clients first-class MCP access to the **existing canonical market-data f
 
 **Non-negotiable M6 deliverable:** MarketHub must support the **latest stable official MCP protocol**, not merely a working HTTP endpoint. Verified target as of 2026-11-19: specification **`2026-07-28`**, TypeScript SDK **`2.4.0`** (§3). **Re-verify both against official sources when implementation begins; if a newer stable specification or SDK exists then, target that instead and update the conformance matrix (§3.1) before coding.** Streamable HTTP MCP must be **fully implemented and working** at `/mcp` on the running Hono/Bun server — over both localhost and the configured LAN interface, subject to Host/Origin security. It is **mandatory, not optional and not deferrable**. M6 **cannot be declared complete** unless the target revision's mandatory requirements are verified, the HTTP transport works, and the conformance tests pass (§3.1, §11, §12). A passing mocked or in-process `handler.fetch` test alone never satisfies this requirement. STDIO compatibility is retained but is not a substitute for the HTTP transport.
 
-**Out of scope:** M6 source implementation (this is a plan), provider activation (M5 Phase 4B / Stage G), live provider auth/network/sockets, watchlist/alert/scanner workflow services (M7), new third-party dependencies (the thin shared workspace package in §4.1 reuses the existing SDK version), production-driver unlock, MCP mutation of operational configuration. **Database migrations are out of scope except for one narrow exception:** a single additive SQLite migration for the `mcp_activity` table is permitted within M6-C (§9.1, §13). That exception does not authorize any other schema change; further migrations require separate justification. The activity table remains a design — no migration or schema is created in this documentation task.
+**Out of scope for the remaining phases:** provider activation (M5 Phase 4B / Stage G), live provider auth/network/sockets, watchlist/alert/scanner workflow services (M7), new third-party dependencies (the thin shared workspace package in §4.1 reuses the existing SDK version), production-driver unlock, MCP mutation of operational configuration. **Database migrations are out of scope except for one narrow exception:** a single additive SQLite migration for the `mcp_activity` table is permitted within M6-C (§9.1, §13). That exception does not authorize any other schema change; further migrations require separate justification. The activity table remains a design — no migration or schema is created in this documentation task.
+
+**Document role:** this is the governing plan for M6 as a whole. M6-A and M6-B1 are already implemented and published (§2); B2/B3/B4 and M6-C/D/E remain planned and require separate authorization. This document does not itself implement anything, but it no longer describes an entirely unimplemented M6.
 
 **M6 must work while M5 Phase 4B remains gated.** It operates on cached/stored data and honest empty/unavailable states; it is not a reason to connect providers.
 
 ## 2. Verified current MCP implementation and repository baseline
 
-| Item | Verified fact (from code/manifests/lockfile, 2026-11-19) |
+| Item | Verified fact (from code/manifests/lockfile, 2026-11-20) |
 |---|---|
-| App | `apps/mcp-server`, single source file `src/index.ts` |
-| Declared dependency | `@modelcontextprotocol/server` **2.4.0** in `apps/mcp-server/package.json`; `zod` 4.6.7; `@markethub/contracts` workspace |
-| **Installed version** | **2.4.0 confirmed** — `bun.lock` resolves `@modelcontextprotocol/server@2.4.0` and `@modelcontextprotocol/core@2.4.0`; installed package at `node_modules/.bun/@modelcontextprotocol+server@2.4.0/.../server/package.json` reports `2.4.0`. Not assumed from the manifest alone. |
-| Current transport | `serveStdio(() => new McpServer(...))` from `@modelcontextprotocol/server/stdio` |
-| Current tool | `markethub_health` (no inputs): fetches `${MARKETHUB_API_URL}/health`, validates with `healthStatusSchema`, returns text + structured content; stdout reserved for protocol, diagnostics to stderr |
-| STDIO service path | **Already a thin local-API client** — STDIO does not instantiate a market-data service or open the application DB. M6 generalizes this pattern; it must not create a second application or database state. |
-| HTTP app | Hono + Bun in `apps/api`; `createApp(deps)` registers provider, M5 historical/snapshot and market routes; M5 services composed with **empty provider collections** (`apps/api/src/app.ts`) |
+| MCP apps | `apps/mcp-server` (`src/index.ts` + `src/services.ts` STDIO adapter) and `apps/api` (HTTP `/mcp` route); shared registration in `packages/mcp-core` (`src/{index,factory,services}.ts`) |
+| Declared dependency | `@modelcontextprotocol/server` **2.4.0** in `apps/mcp-server/package.json`, `apps/api/package.json` and `packages/mcp-core/package.json`; `zod` 4.6.7; `@markethub/contracts` workspace. `@modelcontextprotocol/client` 2.4.0 is dev-only for tests. |
+| **Installed version** | **2.4.0 confirmed** — `bun.lock` resolves `@modelcontextprotocol/server@2.4.0` and `@modelcontextprotocol/core@2.4.0`; installed package reports `2.4.0`. Not assumed from the manifest alone. |
+| HTTP transport (M6-A, implemented) | `createMcpHandler` created once at composition; `app.all("/mcp", ...)` registered before the SPA fallback with SDK Host/Origin validation; `handler.close()` in shutdown (`apps/api/src/{index,app,mcp-routes}.ts`) |
+| STDIO transport (M6-A, implemented) | `serveStdio((ctx) => createMcpServer(ctx, stdioServices))` with retained handle and `close()` on signals/stdin (`apps/mcp-server/src/index.ts`) |
+| Shared factory (M6-A, implemented) | `createMcpServer(ctx, services)` in `packages/mcp-core/src/factory.ts`; `McpServices` seam in `src/services.ts` |
+| Registered tool (M6-A, implemented) | `markethub_health` (no inputs): fetches `${MARKETHUB_API_URL}/health`, validates with `healthStatusSchema`, returns text + structured content; stdout reserved for protocol, diagnostics to stderr |
+| STDIO service path | **Thin local-API client** (`apps/mcp-server/src/services.ts`) — STDIO does not instantiate a market-data service or open the application DB. No second application or database state. |
+| B1 seams (implemented) | `CatalogRepository.searchInstruments` + `GET /api/catalog/search`; `LiveEventHub.readAfter` + `GET /api/market/events`; HTTP/STDIO MCP adapters expose `searchCatalog`/`readEventFeed`; runtime-scoped cursors with always-present `resumeCursor` |
+| HTTP app | Hono + Bun in `apps/api`; `createApp(deps)` registers provider, M5 historical/snapshot, market, catalog and MCP routes; M5 services composed with **empty provider collections** (`apps/api/src/app.ts`) |
 | Shared services available | `MarketDataService`, `LiveEventHub` (`packages/realtime`), `HistoricalCandleService`, `OptionChainSnapshotService`, `CatalogSyncService`, repositories, `ProviderRegistry` (`packages/market-core`, `packages/database`) |
 | Shared contracts available | `liveSnapshotSchema`/`LiveSnapshot`, `providerStatusMapSchema`, `subscriptionStateViewSchema`, historical/snapshot schemas, `market-dates` IST helpers (`packages/contracts`) |
 | Existing boundary | `isLocalPeer` guards mutating HTTP routes; WebUI owns operational config; no app-level login |
-| Not present | No MCP HTTP transport, no market tools/resources/prompts, no event bus wiring, no `@modelcontextprotocol/node` dependency, no `tests/mcp/` suite |
+| Tests (implemented) | `tests/mcp/` contains transport, real-HTTP smoke, STDIO modern, catalog-search, event-feed, seams and STDIO-adapter tests |
+| Not present | No registered market-data tools/resources/prompts (B2/B3), no activity history (M6-C), no `subscriptions/listen`/event bridge (M6-D), no `@modelcontextprotocol/node` dependency |
 
 ## 3. Official protocol/SDK research findings (source URLs)
 

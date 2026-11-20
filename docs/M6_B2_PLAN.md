@@ -150,6 +150,7 @@ No credential/token leakage. No new endpoints — all already exist.
 
 **Modified in `apps/api`:**
 - `src/index.ts` — composition change + B2 HTTP service methods.
+- `src/provider-routes.ts` — narrowly limited to exposing or reusing the existing `composeProviderStatuses()` logic so the HTTP MCP adapter can return the same composed provider status as REST. Preserve provider registry auth/configuration information, runtime streaming state from `MarketDataService.getConnectionStatus()`, existing REST behavior, and no credential exposure. Do not move provider logic into `mcp-core`, duplicate status composition, or refactor unrelated provider routes.
 
 **Modified in `apps/mcp-server`:**
 - `src/services.ts` — B2 STDIO methods.

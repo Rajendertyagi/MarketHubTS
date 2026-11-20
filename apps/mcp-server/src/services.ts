@@ -55,13 +55,30 @@ export function createStdioServices(apiBase: string): McpServices {
             error: { category: res.status === 400 ? "validation" : "unavailable", message: String(json?.message ?? `status ${res.status}`) }
           };
         }
+        // Snapshot-recovery results carry no checkpoint; successful pages must
+        // carry a string resumeCursor. Validate rather than defaulting.
+        if (json.snapshotRequired) {
+          return {
+            ok: true,
+            value: {
+              events: [],
+              nextCursor: null,
+              snapshotRequired: { reason: String(json.snapshotRequired.reason) }
+            }
+          };
+        }
+        if (typeof json.resumeCursor !== "string") {
+          return {
+            ok: false,
+            error: { category: "unavailable", message: "Invalid feed response: missing resumeCursor" }
+          };
+        }
         return {
           ok: true,
           value: {
             events: json.events ?? [],
             nextCursor: json.nextCursor ?? null,
-            ...(json.resumeCursor !== undefined ? { resumeCursor: String(json.resumeCursor) } : {}),
-            ...(json.snapshotRequired ? { snapshotRequired: { reason: String(json.snapshotRequired.reason) } } : {})
+            resumeCursor: json.resumeCursor
           }
         };
       } catch (error) {
