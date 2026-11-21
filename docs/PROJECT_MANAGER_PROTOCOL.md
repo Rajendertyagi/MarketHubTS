@@ -107,8 +107,47 @@ Every implementation assignment must specify:
 9. **Required tests** — targeted and regression checks to run.
 10. **Verification instructions** — how to validate.
 11. **Expected report format** — including evidence, diffs summary, test results, `git status`, complete/incomplete/unverified items.
+12. **Option and Metadata Impact Assessment** — mandatory for every implementation assignment (see §4.1). An assignment without a completed assessment is incomplete.
 
 Do not repeatedly ask OpenCode to make product decisions or research the entire product from scratch; provide bounded, well-scoped assignments.
+
+### 4.1 Option and Metadata Impact Assessment (mandatory)
+
+Every new feature must answer all of the following before implementation is authorized:
+
+1. What new selectable options, capabilities, entities or configuration fields does it introduce?
+2. Who owns their source of truth?
+3. Are they shared contract enums, backend capabilities, domain data or user-managed values?
+4. How will the WebUI discover them?
+5. Does an existing API or schema already provide the information?
+6. Is a new discovery/read API actually necessary?
+7. How will the UI update when new values/capabilities are registered?
+8. What cache invalidation or refresh behavior is needed?
+9. Are any metadata fields sensitive or unsafe to expose?
+10. What tests prove that the frontend and backend remain consistent?
+
+**Mandatory future rule:** no implementation assignment may introduce a new backend-owned dropdown, selector, tool list, provider list or domain-data choice as a separately maintained frontend constant when a backend registry, shared contract or domain API should own it. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) and AD-025 in [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md).
+
+### 4.2 Implementation checklist (every implementation assignment)
+
+- [ ] The Option and Metadata Impact Assessment (§4.1) is completed and recorded in the assignment/report.
+- [ ] New fixed value sets are defined in `@markethub/contracts` (or derived from an existing shared schema), not duplicated as frontend literals.
+- [ ] New backend capabilities are exposed from their owning registry/module; no second unrelated backend list is created.
+- [ ] New domain-data choices use a bounded, paginated domain API; no exchange/provider data is copied into frontend constants.
+- [ ] New user-managed configuration persists through the owning backend service/repository and API.
+- [ ] WebUI controls discover options from the owning source; presentation-only local values are explicitly identified as such.
+- [ ] Metadata responses are read-only, schema-validated and free of credentials, tokens, secrets, internal provider identifiers and sensitive configuration.
+- [ ] Unknown/unavailable metadata has an honest loading/empty/unavailable/error/stale/refresh state; no invented fallback values for dynamic market or provider data.
+- [ ] Tests prove the source-to-API-to-WebUI relationship, including that a newly registered backend option appears without a frontend options-list edit.
+
+### 4.3 Independent-review checklist
+
+- [ ] The Option and Metadata Impact Assessment is present and answered; no backend-owned option was introduced as a separately maintained frontend constant.
+- [ ] Shared contract enums/schemas are consumed rather than re-declared in React; verify with a concrete diff check (for example interval/status/transport options).
+- [ ] MCP tool/provider/domain pickers are populated from the owning registry/API, not a hardcoded list; a new registered value would appear without a WebUI edit.
+- [ ] Metadata endpoints are read-only, contract-validated and expose no sensitive fields; backend validation and permission enforcement remain authoritative.
+- [ ] Dynamic lists are bounded/paginated; unavailable/unknown values are reported honestly rather than fabricated.
+- [ ] Existing real-HTTP integration, Host/Origin, subscription, fan-out and conformance tests remain unchanged unless the assignment explicitly authorized their change.
 
 ## 5. Reporting standards
 

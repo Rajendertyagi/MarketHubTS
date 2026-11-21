@@ -4,6 +4,9 @@
 > **Last updated:** 2026-11-17
 
 ## Current checks (verified 2026-11-17)
+
+> Historical figures preserved as recorded on that date. For current suite size and latest results, see [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
 - `bun test`: **PASS** — 301 tests, 0 fail, 1162 expect() calls, 26 files (local verification; not GitHub CI evidence).
 - Focused web tests: **PASS** — 45 tests, 0 fail, 159 expect() calls, 3 files (local verification; not CI evidence).
 - Focused Stage D tests: **PASS** — 69 tests, 0 fail, 270 expect() calls, 6 files.

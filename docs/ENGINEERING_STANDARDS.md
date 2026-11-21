@@ -76,6 +76,7 @@ These rules apply to any supervisor, reconciler or bounded delivery buffer. They
 - **No scattered styling:** avoid inline CSS and ad-hoc style values except where technically necessary and localized; prefer the project’s styling system consistently.
 - **Separation of concerns:** keep UI presentation separate from business/data logic. UI consumes shared services/contracts; it must not duplicate market-data interpretation or become a second source of truth.
 - **State ownership:** keep UI/client state ownership clear (local vs shared vs server-derived). Handle loading, empty, stale, error, and partial-data states explicitly.
+- **Option and metadata ownership:** backend and shared contracts own selectable options, capabilities and domain entities consumed by the WebUI. Derive fixed option sets from shared Zod schemas and dynamic sets from the owning registry/domain API; never maintain a second frontend list of backend-owned values. Presentation-only local choices may remain in the frontend. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025) and the mandatory Option and Metadata Impact Assessment in [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1.
 
 ## 7. Testing and maintenance
 

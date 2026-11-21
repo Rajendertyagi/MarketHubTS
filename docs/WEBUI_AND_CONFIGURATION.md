@@ -1,6 +1,6 @@
 # WebUI and Configuration
 
-> **Status:** Confirmed requirements and target design. Current WebUI already includes system overview, provider status, live-data, streaming-selection, historical-candle and option-chain-snapshot panels; MCP/Activity inspection is a planned M6 addition.
+> **Status:** Confirmed requirements and target design. Current WebUI includes system overview, provider status, live-data, streaming-selection, historical-candle, option-chain-snapshot and MCP/Activity inspection panels (M6-C accepted and closed at `32b034a`). WebUI selectors currently use manual canonical-ID entry and some hardcoded option lists; backend/contract-owned option discovery is an owner-approved architecture requirement, not implemented behavior — see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025).
 > **Last updated:** 2026-11-19 (WebUI implementation reconciliation; no behavior change)
 > **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [M6_PLAN.md](M6_PLAN.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md), [OPERATIONS_BACKUP_AND_RECOVERY.md](OPERATIONS_BACKUP_AND_RECOVERY.md)
 
@@ -53,7 +53,7 @@ AI/MCP **must not** modify these; all belong in WebUI:
 | Market-wide | Indices, VIX, breadth, sectors, FII/DII, participant OI, reports/bhavcopies, calendars/status (as available) |
 | Settings | All operational configuration areas listed above |
 | Diagnostics | Provider/system health, logs, connectivity, data freshness/availability |
-| MCP / Activity **(M6 planned)** | MCP HTTP handler mounted state and STDIO activity-observed state; recent tool calls with filters (operation, time, outcome); duration and sanitized error detail; incomplete/interrupted operations; on-demand retrieval attempts and outcomes; navigation to stored candles/snapshots; notification/subscription activity shown separately from data-operation success |
+| MCP / Activity **(implemented, M6-C)** | MCP HTTP handler mounted state and STDIO activity-observed state; recent tool calls with filters (operation, time, outcome); duration and sanitized error detail; incomplete/interrupted operations; on-demand retrieval attempts and outcomes; navigation to stored candles/snapshots; notification/subscription activity shown separately from data-operation success. Current tool-name filter is free text and transport/status options are hardcoded; the owner-approved requirement is to populate these from backend/contract sources ([METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md), AD-025) — not yet implemented. |
 
 All modules consume **shared application services** and canonical data (no duplicate business logic).
 

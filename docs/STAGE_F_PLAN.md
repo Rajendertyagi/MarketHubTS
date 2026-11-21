@@ -1,6 +1,6 @@
 # M4 Stage F — Reconnect, Concurrency and Resource Hardening Plan (Final)
 
-> **Status:** Planning only. No implementation, file modification, commit or push of source/tests performed for Stage F. Awaiting independent review and explicit implementation authorization.
+> **Status (historical, at plan authoring):** Planning only; awaiting independent review and explicit implementation authorization. **Current status:** Stage F is implemented, has passed independent code review, and was integrated into `main` by an authorized fast-forward to `865d86f` (see [PROJECT_STATUS.md](PROJECT_STATUS.md)). The plan body below is preserved as the original design record.
 > **Order:** D → E → F → C → G. Production Upstox driver remains locked.
 
 ## 1. Verified current state and baseline

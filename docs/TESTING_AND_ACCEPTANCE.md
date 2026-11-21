@@ -15,6 +15,8 @@
 
 ## 2. Current checks (verified 2026-11-17)
 
+> These are the historical verification figures recorded on that date and are preserved as-is. For the current suite size and latest results, see [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
 | Check | Command | Result |
 |---|---|---|
 | Full test suite | `bun test` | PASS — **301 tests, 0 fail, 1162 expect() calls, 26 files** (local verification; not GitHub CI evidence) |
@@ -115,9 +117,24 @@ Specific numeric targets must be established and evidenced during implementation
 - **M6-A:** in-process SDK client tests over `handler.fetch` plus **one real HTTP smoke test** — start the actual Hono/Bun application on an available local port, connect the official `StreamableHTTPClientTransport` pinned to `2026-07-28`, verify `server/discover` and `markethub_health` through `/mcp`, and verify clean shutdown. `@modelcontextprotocol/client` at the matching SDK version is a **development-only** test dependency, never a runtime dependency. M6-A does not cover market-data tools, activity history or event delivery.
 - **M6:** MCP transport/capability/permission/parity tests pass, including alert-event resource/subscription/read-after-notify, cursor/reconnect recovery, multi-client isolation, and polling/tool fallback behavior (per verified spec/SDK). **M6 also requires: one named test per mandatory server-side requirement C1–C21 in [M6_PLAN.md](M6_PLAN.md) §3.1; the M6-A real HTTP smoke test plus broader M6-E integration with a real Streamable HTTP MCP client pinned to the latest stable revision against a running Hono/Bun HTTP listener; STDIO modern-protocol verification; legacy compatibility tests if dual-era is retained; concurrent clients/subscriptions; error/cancellation/reconnect/shutdown scenarios; and one standalone in-process LAN simulation test. Physical LAN reachability is not verified and is outside the revised M6 scope (user-approved change); the simulation is not proof of real LAN connectivity. An in-process `handler.fetch` test is useful but cannot replace real HTTP integration testing. M6 is not complete until the target revision's mandatory requirements are verified and conformance tests pass.**
 - **M7:** alert waiting-state, scanner limitation reporting, delivery and shared-history tests pass.
-- **M7:** chart/data correctness (backend source of truth), UI responsiveness/customization verified.
-- **M8:** clean-install backup/restore (incl. key material) and diagnostics/config tests pass.
-- **M9:** full end-to-end and non-functional acceptance evidence complete.
+- **M8:** chart/data correctness (backend source of truth), UI responsiveness/customization verified.
+- **M9:** clean-install backup/restore (incl. key material) and diagnostics/config tests pass.
+- **M10:** full end-to-end and non-functional acceptance evidence complete.
+
+### 7.1 Future acceptance — backend-driven metadata and capability discovery
+
+Owner-approved architecture requirement, **not yet implemented**; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) and AD-025. When the cross-cutting initiative is implemented, acceptance must prove:
+
+- a newly registered MCP tool appears in the WebUI selector without a frontend options-list edit;
+- existing catalog results populate instrument selectors;
+- shared interval/status enums are not duplicated in React;
+- provider UI iterates backend-provided provider descriptors;
+- unknown/unavailable metadata is handled honestly (no invented values);
+- metadata responses contain no secrets, tokens, credentials or sensitive configuration;
+- backend schema validation and permission enforcement remain authoritative;
+- query-based lists are bounded/paginated where required.
+
+Tests must prove the actual source-to-API-to-WebUI relationship, not merely match planned filenames. Do not add tests merely to match a filename; add them when the behavior exists.
 
 ## 8. Reporting requirements
 

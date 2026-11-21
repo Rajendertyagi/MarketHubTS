@@ -1,6 +1,6 @@
 # Project Overview
 
-> **Status:** Authoritative product/architecture overview (documentation baseline). Implementation is at Phase 1 scaffold only — see [PROJECT_STATUS.md](PROJECT_STATUS.md).
+> **Status:** Authoritative product/architecture overview (documentation baseline). Implementation spans M1–M5 offline and M6-A/B1/B2/B3/C; see [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verified current state.
 > **Last updated:** 2026-11-16
 > **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md)
 

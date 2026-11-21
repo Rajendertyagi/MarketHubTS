@@ -18,7 +18,7 @@
 - Schema scaffold: `app_meta` table (`src/schema.ts`).
 - Drizzle config: `drizzle.config.ts` (sqlite dialect, `./drizzle` migrations output).
 - Migration runner: `src/migrate.ts` (applies migrations from `./drizzle`).
-- **No generated migration files yet** in `packages/database/drizzle/`.
+- **Versioned migrations `0000`–`0006`** exist in `packages/database/drizzle/` (foundation, catalog, provider settings, streaming subscriptions, M5 historical/snapshot tables, M6-C `mcp_activity`).
 
 ## Target responsibilities (planned)
 - Versioned migrations; domain schemas for catalog/mappings, historical candles, option-chain snapshots, watchlists, alerts/scanners/history, configuration/state.

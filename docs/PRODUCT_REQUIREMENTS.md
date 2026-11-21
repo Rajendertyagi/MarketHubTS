@@ -179,4 +179,6 @@ Details: [MCP_INTERFACE.md](MCP_INTERFACE.md).
 
 ## 12. Current implementation status
 
-Phase 1 scaffold only (health API, web shell, MCP health tool, DB/contracts scaffolding). No market-data, broker, catalog, realtime, alerts/scanners, charts, or operational config implemented. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
+M1–M3, M4 Stages A/B/C/D/E/F and the M5 offline implementation (Phases 1–4A) are published; M6-A, M6-B1, M6-B2 and M6-B3 are implemented and published, and M6-C is accepted and closed. M6-D/E source and tests are present but not accepted; M6-B4 remains separately owned. No live provider connection, real feed, Stage G verification, watchlists/alerts/scanners, charts, or backup/restore is implemented. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verified current state.
+
+WebUI selectable options, capabilities and domain entities must be discovered from the backend and shared contracts rather than duplicated as frontend lists; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025). This is an architecture requirement, not implemented behavior.

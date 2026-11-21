@@ -12,7 +12,7 @@
 - Behavior: HTTP uses injected services directly; STDIO is a thin local-API client; one canonical foundation, no duplicate market logic; STDIO stdout reserved for protocol, diagnostics to stderr
 - Implemented (B3): resources/prompts, cache hints, snapshot pagination — published at `0d58bbb`
 - Accepted: activity history (M6-C, closed at `32b034a`)
-- Pending: subscriptions/notifications (M6-D), broad conformance/in-process LAN simulation (M6-E)
+- Present but not formally accepted: M6-D/E source and tests (subscriptions/notifications, real-HTTP/STDIO/legacy integration, conformance evidence, in-process LAN simulation). Formal acceptance requires the independent review gate in [`M6_D_E_PLAN.md`](M6_D_E_PLAN.md) §8.1–§8.3. M6-B4 remains separately owned.
 
 ## Target (confirmed; research verified 2026-11-19)
 - MCP is a **primary interface** backed by shared application services/canonical data (no separate market calculations).

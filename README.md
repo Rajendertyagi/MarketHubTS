@@ -77,6 +77,7 @@ Start here: [`AGENTS.md`](AGENTS.md) and [`docs/PROJECT_OVERVIEW.md`](docs/PROJE
 | Product scope & requirements | [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) |
 | Engineering standards (canonical) | [`docs/ENGINEERING_STANDARDS.md`](docs/ENGINEERING_STANDARDS.md) |
 | Architecture & decisions | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md) |
+| Metadata & capability discovery (authoritative) | [`docs/METADATA_AND_CAPABILITY_DISCOVERY.md`](docs/METADATA_AND_CAPABILITY_DISCOVERY.md) |
 | Catalog & market data | [`docs/MARKET_DATA_AND_CATALOG.md`](docs/MARKET_DATA_AND_CATALOG.md) |
 | Providers (Upstox/FYERS) | [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md) |
 | MCP interface | [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) |
