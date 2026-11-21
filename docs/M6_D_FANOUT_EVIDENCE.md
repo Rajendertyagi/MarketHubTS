@@ -12,7 +12,14 @@ For each subscriber count N ∈ {8, 32, 64}, the test opens N real SDK clients, 
 MarketDataService.track() → createMcpNotificationBridge → handler.notify.resourceUpdated() → subscribers
 ```
 
-It does **not** call the notifier directly. For each update it records the time until every subscriber observed it, capturing N, M, min/mean/p95/max latency, heap delta, and a real error count (notification-handler exceptions plus subscribers that missed an expected delivery). The sweep was run four times; all individual runs are preserved below.
+It does **not** call the notifier directly. For each update it records the time until every subscriber observed it, capturing N, M, min/mean/p95/max latency and heap delta.
+
+**What the `errors` counter measures (precisely):** `errors = publisherErrors + missing + duplicates`, where
+- `publisherErrors` is the number of times the bridge's `onError` callback fired (i.e. `handler.notify.resourceUpdated` threw and the bridge contained it) — wired to the real `createMcpNotificationBridge(..., onError)` seam;
+- `missing` is the total number of not-delivered notifications across all subscribers (`Σ max(0, M − received_i)`);
+- `duplicates` is the total number of extra notifications across all subscribers (`Σ max(0, received_i − M)`).
+
+It does **not** count client-side notification-handler exceptions (none are thrown by the test handlers) and does not claim to observe anything the test cannot see. The assertion `counts.every(c => c === M)` additionally requires every subscribed client to receive exactly M notifications. The sweep was run four times; all individual runs are preserved below.
 
 ## 2. Individual run results
 
@@ -48,7 +55,7 @@ It does **not** call the notifier directly. For each update it records the time 
 | 32 | 20 | 2.20 ms | 3.25 ms | 3.68 ms | 3.96 ms | 1.04 MB | 0 |
 | 64 | 20 | 2.09 ms | 2.94 ms | 3.74 ms | 4.51 ms | 1.47 MB | 0 |
 
-Across all runs, p95 at N=64 ranged **3.62–3.74 ms** and max **3.65–4.51 ms**. Errors were 0 in every run.
+In every table the `errors` column is the total `publisherErrors + missing + duplicates` defined above (all zero in every run). Across all runs, p95 at N=64 ranged **3.62–7.91 ms** and max **3.65–10.28 ms** (the higher figures came from a run under heavier concurrent load). The 50 ms budget still holds with >6× headroom over the worst observed p95.
 
 ## 3. Selected values and rationale
 

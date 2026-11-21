@@ -33,7 +33,7 @@ function makeServices(): McpServices {
 }
 
 /** Real canonical source + bridge + handler — the complete M6-D publish path. */
-function makeHarness() {
+function makeHarness(onError?: (error: unknown) => void) {
   const service = new MarketDataService({
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     policy: { openMaxAgeMs: 60_000, unknownMaxAgeMs: 60_000, maxRetainedObservationAgeMs: 86_400_000 },
@@ -46,7 +46,7 @@ function makeHarness() {
   });
   hub.start();
   const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
-  const bridge = createMcpNotificationBridge(service, handler.notify);
+  const bridge = createMcpNotificationBridge(service, handler.notify, onError);
   bridge.start();
   return { service, hub, handler, bridge };
 }
@@ -71,10 +71,10 @@ describe("M6-D bounded fan-out (synthetic load through the real bridge)", () => 
       heapDeltaMb: number; errors: number; path: string;
     }> = [];
     for (const N of [8, 32, 64]) {
-      const h = makeHarness();
+      let publisherErrors = 0; // real: bridge onError callbacks (notifier failures)
+      const h = makeHarness(() => { publisherErrors++; });
       const clients: Client[] = [];
       const counts = new Array<number>(N).fill(0);
-      let handlerErrors = 0; // real count: notification-handler exceptions
       try {
         const heapBefore = process.memoryUsage().heapUsed;
         for (let i = 0; i < N; i++) {
@@ -99,17 +99,23 @@ describe("M6-D bounded fan-out (synthetic load through the real bridge)", () => 
         }
         const sorted = [...latencies].sort((a, b) => a - b);
         const heapDeltaMb = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024);
-        // Real error count: handler exceptions + subscribers that missed a delivery.
-        const missedDeliveries = counts.filter((c) => c !== M).length;
-        const errors = handlerErrors + missedDeliveries;
+        // Real delivery errors: total missing + total duplicate notifications
+        // across all subscribers (not just the count of mismatched subscribers).
+        const missing = counts.reduce((sum, c) => sum + Math.max(0, M - c), 0);
+        const duplicates = counts.reduce((sum, c) => sum + Math.max(0, c - M), 0);
+        const deliveryErrors = missing + duplicates;
+        const errors = publisherErrors + deliveryErrors;
         const record = {
           n: N, m: M, minMs: sorted[0]!,
           meanMs: sorted.reduce((a, b) => a + b, 0) / sorted.length,
           p95Ms: percentile(sorted, 95), maxMs: sorted[sorted.length - 1]!,
-          heapDeltaMb, errors, path: "MarketDataService->bridge->handler.notify->subscribers"
+          heapDeltaMb, publisherErrors, missing, duplicates, errors,
+          path: "MarketDataService->bridge->handler.notify->subscribers"
         };
         evidence.push(record);
         console.log(`[M6-D fanout evidence] ${JSON.stringify(record)}`);
+        // Every subscribed client must receive exactly M notifications.
+        expect(counts.every((c) => c === M)).toBe(true);
         expect(errors).toBe(0);
       } finally {
         for (const c of clients) await c.close();
