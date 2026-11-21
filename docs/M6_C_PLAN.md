@@ -20,7 +20,7 @@
 | Verification limitation | These execution results are **agent-reported**, not independently executed by the reviewer. GitHub showed **no workflow runs and no commit status checks** for any of the four SHAs; they must not be represented as independently verified CI results. The acceptance decision rests on the final independent source/diff review plus these reported local results. |
 | Acceptance authority | The independent GitHub review of `32b034a` is the acceptance gate. This record documents that decision; it does not re-run or re-claim the verification. |
 
-M6-C is closed. M6-D and M6-E remain **planned, not implemented**; see [`M6_D_PLAN.md`](M6_D_PLAN.md) and [`M6_E_PLAN.md`](M6_E_PLAN.md).
+M6-C is closed. M6-D and M6-E remain **planned, not implemented**; see the single consolidated [`M6_D_E_PLAN.md`](M6_D_E_PLAN.md).
 
 ## 1. Objective
 
