@@ -201,6 +201,7 @@ Public exposure:   no port-forward / no public exposure confirmed: yes/no
 | LAN acceptance | **NOT TESTED** |
 | Blocker | No second device was driven against the harness in the implementation environment |
 | Executable client | `scripts/m6e-lan-client.ts` (14 steps, PASS/FAIL, exit code) |
+| CI-safe regression test | `tests/mcp/lan-path.test.ts` — same 14-step client on a real `127.0.0.1` listener; runs with `bun test` on any machine, no external dependency (see §8) |
 | Local preflight | Passed (see §8) — **not** LAN evidence |
 | Evidence | None for the real two-device run; template in §6 |
 
@@ -214,5 +215,6 @@ The following were run locally to verify the client/harness mechanics only:
 - Harness start with temp DB / no providers: `lan_test_harness_ready` observed on `127.0.0.1` with `guard: "MARKETHUB_LAN_TEST=1"`.
 - Client typecheck: `tsc --noEmit … scripts/m6e-lan-client.ts` → exit 0.
 - Client end-to-end against the harness on `127.0.0.1` (coordinated `emit`): **14 PASS / 0 FAIL**, exit 0.
+- CI-safe regression test: `bun test tests/mcp/lan-path.test.ts` → 1 pass / 0 fail. It imports the exported `runAcceptance()` from the client and drives the same 14 steps against a real `Bun.serve` listener on `127.0.0.1`, triggering the canonical change in-process. No Mac, WSL, Docker, second PC, or new dependency — runs unchanged on the Windows PC and on a GitHub runner as part of the normal `bun test` suite.
 
-This loopback preflight does **not** satisfy the second-device requirement. Only the §3–§4 procedure on the actual Windows PC and MacBook can close LAN acceptance.
+This loopback preflight (including the CI test) does **not** satisfy the second-device requirement. Only the §3–§4 procedure on the actual Windows PC and MacBook can close LAN acceptance.

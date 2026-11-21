@@ -8,13 +8,17 @@
  * solely for the HTTP Host/Origin boundary checks (HTTP middleware, not MCP
  * protocol messages), which the SDK does not expose.
  *
- * Usage (from the repo root on the MacBook, after `bun install`):
+ * CLI usage (from the repo root on the MacBook, after `bun install`):
  *   bun scripts/m6e-lan-client.ts <PC-LAN-IP> <PORT>
  * or:
  *   M6E_PC_IP=192.168.1.10 M6E_PC_PORT=3001 bun scripts/m6e-lan-client.ts
  *
  * The operator must type `emit` in the Windows harness when this client prints
  * "READY — type 'emit' on the Windows harness now".
+ *
+ * `runAcceptance()` is exported so the same 14-step client can be driven by a
+ * `bun test` against a real listener on 127.0.0.1 (CI-safe regression guard).
+ * That loopback run is NOT second-device LAN acceptance.
  *
  * Prints PASS/FAIL per acceptance step and exits 0 only if every step passes.
  */
@@ -24,27 +28,16 @@ const PROTOCOL_VERSION = "2026-07-28";
 const SNAPSHOT_URI = "markethub://market/snapshot";
 const EVENTS_URI = "markethub://events/live?after=first&limit=100";
 
-const ip = process.env.M6E_PC_IP ?? process.argv[2];
-const portRaw = process.env.M6E_PC_PORT ?? process.argv[3] ?? "3001";
-const port = Number(portRaw);
-const stepTimeoutMs = Number(process.env.M6E_STEP_TIMEOUT_MS ?? "15000");
-const emitTimeoutMs = Number(process.env.M6E_EMIT_TIMEOUT_MS ?? "120000");
+export interface StepRecord { name: string; ok: boolean; detail: string }
 
-if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || !Number.isInteger(port) || port < 1 || port > 65535) {
-  console.error("Usage: bun scripts/m6e-lan-client.ts <PC-LAN-IP> <PORT>  (or set M6E_PC_IP / M6E_PC_PORT)");
-  console.error(`  received ip=${JSON.stringify(ip)} port=${JSON.stringify(portRaw)}`);
-  process.exit(2);
-}
-
-const baseUrl = `http://${ip}:${port}/mcp`;
-
-interface StepRecord { name: string; ok: boolean; detail: string }
-const results: StepRecord[] = [];
-
-function record(name: string, ok: boolean, detail: string): void {
-  results.push({ name, ok, detail });
-  const line = `${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`;
-  if (ok) console.log(line); else console.error(line);
+export interface AcceptanceOptions {
+  baseUrl: string;
+  ip: string;
+  port: number;
+  stepTimeoutMs?: number;
+  emitTimeoutMs?: number;
+  /** Called once the subscription is live; trigger the canonical change here. */
+  onReady?: () => void | Promise<void>;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -55,17 +48,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       (e) => { clearTimeout(timer); reject(e); }
     );
   });
-}
-
-async function step(name: string, fn: () => Promise<string>): Promise<boolean> {
-  try {
-    const detail = await withTimeout(fn(), stepTimeoutMs, name);
-    record(name, true, detail);
-    return true;
-  } catch (err) {
-    record(name, false, err instanceof Error ? err.message : String(err));
-    return false;
-  }
 }
 
 function parseJson(text: string | undefined): Record<string, unknown> {
@@ -82,11 +64,33 @@ async function readJsonResource(client: Client, uri: string): Promise<Record<str
   return parseJson(first.text);
 }
 
-let client: Client | null = null;
-let subscription: McpSubscription | null = null;
+/** Run all 14 acceptance steps against a live /mcp endpoint. */
+export async function runAcceptance(opts: AcceptanceOptions): Promise<StepRecord[]> {
+  const stepTimeoutMs = opts.stepTimeoutMs ?? 15_000;
+  const emitTimeoutMs = opts.emitTimeoutMs ?? 120_000;
+  const results: StepRecord[] = [];
 
-async function main(): Promise<void> {
-  console.log(`M6-E LAN acceptance client — target ${baseUrl} (protocol ${PROTOCOL_VERSION}, SDK 2.4.0)`);
+  const record = (name: string, ok: boolean, detail: string): void => {
+    results.push({ name, ok, detail });
+    const line = `${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`;
+    if (ok) console.log(line); else console.error(line);
+  };
+
+  const step = async (name: string, fn: () => Promise<string>): Promise<boolean> => {
+    try {
+      const detail = await withTimeout(fn(), stepTimeoutMs, name);
+      record(name, true, detail);
+      return true;
+    } catch (err) {
+      record(name, false, err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  };
+
+  let client: Client | null = null;
+  let subscription: McpSubscription | null = null;
+
+  console.log(`M6-E LAN acceptance client — target ${opts.baseUrl} (protocol ${PROTOCOL_VERSION}, SDK 2.4.0)`);
   console.log(`Started ${new Date().toISOString()}`);
 
   // ---- 1. Connect + protocol negotiation ----
@@ -95,7 +99,7 @@ async function main(): Promise<void> {
       { name: "markethub-m6e-lan-client", version: "1.0.0" },
       { versionNegotiation: { mode: { pin: PROTOCOL_VERSION } } }
     );
-    await client.connect(new StreamableHTTPClientTransport(new URL(baseUrl)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(opts.baseUrl)));
     const negotiated = client.getNegotiatedProtocolVersion();
     if (negotiated !== PROTOCOL_VERSION) {
       throw new Error(`negotiated ${JSON.stringify(negotiated)}, expected ${PROTOCOL_VERSION}`);
@@ -104,9 +108,9 @@ async function main(): Promise<void> {
   });
   if (!connected || !client) {
     record("remaining steps", false, "connection failed; aborting dependent steps");
-    return;
+    return results;
   }
-  const c = client;
+  const c = client as Client;
 
   // ---- 2. server/discover + subscribe capability ----
   await step("server/discover + resources.subscribe === true", async () => {
@@ -162,9 +166,10 @@ async function main(): Promise<void> {
 
   // ---- 6. Open subscriptions/listen for exactly the snapshot URI ----
   await step("subscriptions/listen for exactly markethub://market/snapshot", async () => {
-    subscription = await c.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+    const sub = await c.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+    subscription = sub;
     ackDone = true; // listen() resolves only after the acknowledgement
-    const honored = subscription.honoredFilter.resourceSubscriptions;
+    const honored = sub.honoredFilter.resourceSubscriptions;
     if (!honored || honored.length !== 1 || honored[0] !== SNAPSHOT_URI) {
       throw new Error(`honoredFilter.resourceSubscriptions = ${JSON.stringify(honored)}`);
     }
@@ -172,9 +177,13 @@ async function main(): Promise<void> {
     return `ack first, honoredFilter=${JSON.stringify(honored)}`;
   });
 
-  // ---- 7. Wait for the notification caused by the harness `emit` ----
+  // ---- 7. Wait for the notification caused by the canonical change ----
   await step("notification after harness emit", async () => {
-    console.log("\n>>> READY — type 'emit' on the Windows harness now (then 'status' to confirm).\n");
+    if (opts.onReady) {
+      await opts.onReady();
+    } else {
+      console.log("\n>>> READY — type 'emit' on the Windows harness now (then 'status' to confirm).\n");
+    }
     await withTimeout(notificationPromise, emitTimeoutMs, "waiting for harness emit notification");
     if (notificationCount < 1) throw new Error("notification handler did not fire");
     return `received ${notificationCount} resource-updated notification(s)`;
@@ -230,47 +239,47 @@ async function main(): Promise<void> {
     params: { _meta: { "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION, "io.modelcontextprotocol/clientCapabilities": {} } }
   });
   await step("Host/Origin boundary: valid private-LAN values accepted", async () => {
-    const res = await fetch(baseUrl, {
+    const res = await fetch(opts.baseUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         "MCP-Protocol-Version": PROTOCOL_VERSION,
         "Mcp-Method": "server/discover",
-        Host: `${ip}:${port}`,
-        Origin: `http://${ip}`
+        Host: `${opts.ip}:${opts.port}`,
+        Origin: `http://${opts.ip}`
       },
       body: modernDiscoverBody
     });
     if (res.status === 403) throw new Error(`valid Host/Origin rejected with 403: ${await res.text()}`);
-    return `Host=${ip}:${port}, Origin=http://${ip} -> HTTP ${res.status} (not 403)`;
+    return `Host=${opts.ip}:${opts.port}, Origin=http://${opts.ip} -> HTTP ${res.status} (not 403)`;
   });
 
   await step("Host/Origin boundary: unapproved Host rejected with 403", async () => {
-    const res = await fetch(baseUrl, {
+    const res = await fetch(opts.baseUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         "MCP-Protocol-Version": PROTOCOL_VERSION,
         "Mcp-Method": "server/discover",
-        Host: `evil.example:${port}`
+        Host: `evil.example:${opts.port}`
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 9002, method: "server/discover", params: {} })
     });
     if (res.status !== 403) throw new Error(`unapproved Host returned HTTP ${res.status}, expected 403`);
-    return `Host=evil.example:${port} -> HTTP 403`;
+    return `Host=evil.example:${opts.port} -> HTTP 403`;
   });
 
   await step("Host/Origin boundary: unapproved Origin rejected with 403", async () => {
-    const res = await fetch(baseUrl, {
+    const res = await fetch(opts.baseUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         "MCP-Protocol-Version": PROTOCOL_VERSION,
         "Mcp-Method": "server/discover",
-        Host: `${ip}:${port}`,
+        Host: `${opts.ip}:${opts.port}`,
         Origin: "http://evil.example"
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 9003, method: "server/discover", params: {} })
@@ -285,14 +294,27 @@ async function main(): Promise<void> {
     await c.close();
     return "subscription and client closed";
   });
+
+  return results;
 }
 
-main()
-  .catch((err) => record("unexpected client error", false, err instanceof Error ? err.stack ?? err.message : String(err)))
-  .finally(() => {
-    const passed = results.filter((r) => r.ok).length;
-    const failed = results.length - passed;
-    console.log(`\n=== M6-E LAN acceptance summary: ${passed} PASS / ${failed} FAIL ===`);
-    console.log(`Finished ${new Date().toISOString()}`);
-    process.exit(failed === 0 ? 0 : 1);
+// ---- CLI entry point (only when run directly, not when imported by a test) ----
+if (import.meta.main) {
+  const ip = process.env.M6E_PC_IP ?? process.argv[2];
+  const portRaw = process.env.M6E_PC_PORT ?? process.argv[3] ?? "3001";
+  const port = Number(portRaw);
+  if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error("Usage: bun scripts/m6e-lan-client.ts <PC-LAN-IP> <PORT>  (or set M6E_PC_IP / M6E_PC_PORT)");
+    console.error(`  received ip=${JSON.stringify(ip)} port=${JSON.stringify(portRaw)}`);
+    process.exit(2);
+  }
+  const results = await runAcceptance({
+    baseUrl: `http://${ip}:${port}/mcp`, ip, port,
+    stepTimeoutMs: Number(process.env.M6E_STEP_TIMEOUT_MS ?? "15000"),
+    emitTimeoutMs: Number(process.env.M6E_EMIT_TIMEOUT_MS ?? "120000")
   });
+  const failed = results.filter((r) => !r.ok).length;
+  console.log(`\n=== M6-E LAN acceptance summary: ${results.length - failed} PASS / ${failed} FAIL ===`);
+  console.log(`Finished ${new Date().toISOString()}`);
+  process.exit(failed === 0 ? 0 : 1);
+}
