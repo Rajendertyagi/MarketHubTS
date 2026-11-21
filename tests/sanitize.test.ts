@@ -49,6 +49,7 @@ describe("M6-C Finding 1 — comprehensive credential sanitization", () => {
     for (const raw of [
       "clientSecret=my-secret-value",
       "apiSecret=my-secret-value",
+      "appSecret=my-secret-value",
       "accessToken=my-secret-value",
       "UPSTOX_ACCESS_TOKEN=my-secret-value",
       "MY_API_KEY=my-secret-value"

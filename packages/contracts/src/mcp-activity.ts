@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { candleIntervalSchema } from "./historical";
+import { sanitizeSensitiveText } from "./sanitize";
 
 /** MCP operation outcome recorded in the durable activity log. */
 export const mcpActivityStatusSchema = z.enum(["started", "succeeded", "failed", "interrupted"]);
@@ -58,10 +59,12 @@ export type McpActivitySummary = z.infer<typeof mcpActivitySummarySchema>;
 
 /**
  * Project a persisted (possibly legacy) summary JSON through the strict
- * allow-list: unknown keys and invalid values are dropped, and the result is
- * re-serialized. Returns "{}" when nothing survives or the input is malformed.
- * Used on the read path so records written before the strict schema cannot
- * expose arbitrary fields through LAN-readable views.
+ * allow-list: unknown keys and invalid values are dropped, retained string
+ * values are sanitized, and the result is re-serialized. Returns "{}" when
+ * nothing survives or the input is malformed. Used on the read path so records
+ * written before the strict schema cannot expose credentials through
+ * LAN-readable views — including credentials embedded in an otherwise valid
+ * field such as `query`.
  */
 export function projectSafeSummaryJson(raw: string | null): string {
   if (!raw) return "{}";
@@ -71,7 +74,9 @@ export function projectSafeSummaryJson(raw: string | null): string {
     const source = parsed as Record<string, unknown>;
     const filtered: Record<string, unknown> = {};
     for (const key of MCP_ACTIVITY_SUMMARY_KEYS) {
-      if (key in source) filtered[key] = source[key];
+      if (!(key in source)) continue;
+      const value = source[key];
+      filtered[key] = typeof value === "string" ? sanitizeSensitiveText(value, 200) : value;
     }
     const validated = mcpActivitySummarySchema.safeParse(filtered);
     return validated.success ? JSON.stringify(validated.data) : "{}";

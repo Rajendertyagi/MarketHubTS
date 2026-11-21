@@ -182,6 +182,22 @@ describe("M6-C activity repository", () => {
     } finally { h.cleanup(); }
   });
 
+  test("read projection sanitizes credentials inside otherwise valid summary fields", () => {
+    const h = harness();
+    try {
+      h.activities.start(startReq({
+        summaryJson: JSON.stringify({ query: "Bearer old-secret-value", limit: 25 })
+      }), () => Date.parse("2026-01-01T00:00:00.000Z"));
+      const view = h.activities.getByOperationId(OP);
+      expect(view).not.toBeNull();
+      expect(view!.summaryJson).not.toContain("old-secret-value");
+      expect(view!.summaryJson).toContain("[redacted]");
+      const projected = JSON.parse(view!.summaryJson!);
+      expect(projected.limit).toBe(25);
+      expect(projected.query).toContain("[redacted]");
+    } finally { h.cleanup(); }
+  });
+
   test("cleanupActivities deletes in bounded batches", () => {
     const h = harness();
     try {

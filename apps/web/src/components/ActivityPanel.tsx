@@ -193,6 +193,110 @@ export function ActivityPanelView({ state, actions }: { state: ActivityPanelView
   );
 }
 
+/**
+ * Dependencies for the interaction factory. State is read at call time (the
+ * container rebuilds actions each render), and the API client is injectable so
+ * interactions can be exercised in tests without a DOM.
+ */
+export interface ActivityPanelController {
+  state: ActivityPanelViewState;
+  pageCursors: Array<string | undefined>;
+  setRecords: (value: McpActivityView[]) => void;
+  setNextCursor: (value: string | null) => void;
+  setPageCursors: (update: Array<string | undefined> | ((prev: Array<string | undefined>) => Array<string | undefined>)) => void;
+  setPageIndex: (value: number) => void;
+  setStdioObserved: (value: boolean) => void;
+  setDetail: (value: McpActivityView | null) => void;
+  setLoading: (value: boolean) => void;
+  setError: (value: string | null) => void;
+  setOperationId: (value: string) => void;
+  setToolName: (value: string) => void;
+  setTransport: (value: string) => void;
+  setStatus: (value: string) => void;
+  setFrom: (value: string) => void;
+  setTo: (value: string) => void;
+  fetchActivity: typeof fetchActivity;
+  fetchActivityByOperation: typeof fetchActivityByOperation;
+  onOpenSnapshot?: ((snapshotId: string) => void) | undefined;
+  onOpenHistorical?: ((ref: { canonicalId: string; interval: string; fromMs: number; toMs: number }) => void) | undefined;
+}
+
+/** Build the panel's interaction callbacks from an injectable controller. */
+export function createActivityPanelActions(ctrl: ActivityPanelController): ActivityPanelViewActions {
+  const load = async (cursor?: string) => {
+    ctrl.setLoading(true);
+    ctrl.setError(null);
+    try {
+      const { toolName, transport, status, from, to } = ctrl.state;
+      const page = await ctrl.fetchActivity(buildActivityQuery({ toolName, transport, status, from, to }, cursor));
+      ctrl.setRecords(page.records);
+      ctrl.setNextCursor(page.nextCursor);
+    } catch (cause) {
+      ctrl.setError(toError(cause));
+      ctrl.setRecords([]);
+      ctrl.setNextCursor(null);
+    } finally {
+      ctrl.setLoading(false);
+    }
+  };
+
+  // STDIO presence is independent of the current filters/page: a separate
+  // lightweight query keeps the status truthful even when the list is filtered.
+  const loadStdioPresence = () => {
+    void ctrl.fetchActivity({ transport: "STDIO", limit: 1 })
+      .then((page) => ctrl.setStdioObserved(page.records.length > 0))
+      .catch(() => ctrl.setStdioObserved(false));
+  };
+
+  const lookup = async (id?: string) => {
+    const target = (id ?? ctrl.state.operationId).trim();
+    if (!target) { ctrl.setError("Enter an operation ID first."); return; }
+    ctrl.setLoading(true);
+    ctrl.setError(null);
+    try {
+      ctrl.setDetail(await ctrl.fetchActivityByOperation(target));
+    } catch (cause) {
+      ctrl.setError(toError(cause));
+      ctrl.setDetail(null);
+    } finally {
+      ctrl.setLoading(false);
+    }
+  };
+
+  return {
+    onRefresh: () => { void load(); loadStdioPresence(); },
+    onApplyFilters: () => {
+      ctrl.setPageCursors([undefined]);
+      ctrl.setPageIndex(0);
+      void load();
+      loadStdioPresence();
+    },
+    onToolName: ctrl.setToolName,
+    onTransport: ctrl.setTransport,
+    onStatus: ctrl.setStatus,
+    onFrom: ctrl.setFrom,
+    onTo: ctrl.setTo,
+    onOperationId: ctrl.setOperationId,
+    onLookup: () => void lookup(),
+    onViewDetails: (id) => { ctrl.setOperationId(id); void lookup(id); },
+    onPrevPage: () => {
+      const target = ctrl.state.pageIndex - 1;
+      ctrl.setPageIndex(target);
+      void load(ctrl.pageCursors[target]);
+    },
+    onNextPage: () => {
+      const next = ctrl.state.nextCursor;
+      if (!next) return;
+      const target = ctrl.state.pageIndex + 1;
+      ctrl.setPageCursors((prev) => [...prev.slice(0, target), next]);
+      ctrl.setPageIndex(target);
+      void load(next);
+    },
+    onOpenSnapshot: (snapshotId) => ctrl.onOpenSnapshot?.(snapshotId),
+    onOpenHistorical: (ref) => ctrl.onOpenHistorical?.(ref)
+  };
+}
+
 /** Data-loading container: owns state and wires the pure view to the API client. */
 export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistorical }: ActivityPanelProps) {
   const [records, setRecords] = useState<McpActivityView[]>([]);
@@ -211,84 +315,19 @@ export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistor
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async (cursor?: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const page = await fetchActivity(buildActivityQuery({ toolName, transport, status, from, to }, cursor));
-      setRecords(page.records);
-      setNextCursor(page.nextCursor);
-    } catch (cause) {
-      setError(toError(cause));
-      setRecords([]);
-      setNextCursor(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // STDIO presence is independent of the current filters/page: a separate
-  // lightweight query keeps the status truthful even when the list is filtered.
-  const loadStdioPresence = () => {
-    void fetchActivity({ transport: "STDIO", limit: 1 })
-      .then((page) => setStdioObserved(page.records.length > 0))
-      .catch(() => setStdioObserved(false));
-  };
-
-  useEffect(() => { void load(); loadStdioPresence(); }, []);
-
-  const lookup = async (id?: string) => {
-    const target = (id ?? operationId).trim();
-    if (!target) { setError("Enter an operation ID first."); return; }
-    setLoading(true);
-    setError(null);
-    try {
-      setDetail(await fetchActivityByOperation(target));
-    } catch (cause) {
-      setError(toError(cause));
-      setDetail(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const applyFilters = () => {
-    setPageCursors([undefined]);
-    setPageIndex(0);
-    void load();
-    loadStdioPresence();
-  };
-
   const state: ActivityPanelViewState = {
     httpHandlerMounted, stdioObserved, records, nextCursor, pageIndex,
     loading, error, detail, toolName, transport, status, from, to, operationId
   };
-  const actions: ActivityPanelViewActions = {
-    onRefresh: () => { void load(); loadStdioPresence(); },
-    onApplyFilters: applyFilters,
-    onToolName: setToolName,
-    onTransport: setTransport,
-    onStatus: setStatus,
-    onFrom: setFrom,
-    onTo: setTo,
-    onOperationId: setOperationId,
-    onLookup: () => void lookup(),
-    onViewDetails: (id) => { setOperationId(id); void lookup(id); },
-    onPrevPage: () => {
-      const target = pageIndex - 1;
-      setPageIndex(target);
-      void load(pageCursors[target]);
-    },
-    onNextPage: () => {
-      if (!nextCursor) return;
-      const target = pageIndex + 1;
-      setPageCursors((prev) => [...prev.slice(0, target), nextCursor]);
-      setPageIndex(target);
-      void load(nextCursor);
-    },
-    onOpenSnapshot: (snapshotId) => onOpenSnapshot?.(snapshotId),
-    onOpenHistorical: (ref) => onOpenHistorical?.(ref)
-  };
+  const actions = createActivityPanelActions({
+    state, pageCursors, setRecords, setNextCursor, setPageCursors, setPageIndex,
+    setStdioObserved, setDetail, setLoading, setError, setOperationId,
+    setToolName, setTransport, setStatus, setFrom, setTo,
+    fetchActivity, fetchActivityByOperation, onOpenSnapshot, onOpenHistorical
+  });
+
+  // Initial load and STDIO presence probe run once on mount.
+  useEffect(() => { actions.onRefresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <ActivityPanelView state={state} actions={actions} />;
 }

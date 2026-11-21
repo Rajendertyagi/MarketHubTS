@@ -86,6 +86,31 @@ function stubApi() {
   return { server, paths, base: `http://127.0.0.1:${server.port}` };
 }
 
+describe("M6-C STDIO diagnostic sanitization", () => {
+  test("API error messages are redacted with the shared sanitizer (appSecret)", async () => {
+    // JSON-quoted appSecret is the discriminating case: the old weak STDIO
+    // sanitizer (key\s*[:=]\s*\S+) cannot match through the intervening quote
+    // and would leak the value, so this test fails on revert.
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ message: '{"appSecret":"my-secret-value"} Bearer tok123 rejected' }, { status: 500 })
+    });
+    try {
+      const services = createStdioServices(`http://127.0.0.1:${server.port}`);
+      const result = await services.getProviderStatus();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).not.toContain("my-secret-value");
+        expect(result.error.message).not.toContain("tok123");
+        expect(result.error.message).toContain("[redacted]");
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("M6-B1 STDIO adapter", () => {
   test("searchCatalog calls the local catalog endpoint with translated params", async () => {
     const { server, paths, base } = stubApi();

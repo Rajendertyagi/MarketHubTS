@@ -1,7 +1,7 @@
 import {
   healthStatusSchema, providerStatusMapSchema, liveSnapshotSchema, historicalCandleSchema,
   candleGapSchema, candleRangeNoteSchema, optionChainSnapshotSchema,
-  mcpActivityStartResultSchema, mcpActivityCompleteResultSchema
+  mcpActivityStartResultSchema, mcpActivityCompleteResultSchema, sanitizeSensitiveText
 } from "@markethub/contracts";
 import type { McpServices } from "@markethub/mcp-core";
 
@@ -319,13 +319,14 @@ function activityDiagnostic(message: string): void {
   } catch { /* diagnostics are best-effort */ }
 }
 
-/** Strip credentials/tokens from an API error message before surfacing it. */
+/**
+ * Strip credentials/tokens from an API error message before surfacing it.
+ * Delegates to the shared sanitizer so the STDIO path cannot drift into a
+ * weaker, independently-maintained implementation.
+ */
 function sanitizeMessage(raw: unknown, fallback: string): string {
   if (typeof raw !== "string" || raw.length === 0) return fallback;
-  return raw
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted]")
-    .replace(/(authorization|token|secret|password|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[redacted]")
-    .slice(0, 300);
+  return sanitizeSensitiveText(raw, 300);
 }
 
 /** Validate an array of canonical values from an untrusted API response. */
