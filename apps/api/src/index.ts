@@ -31,9 +31,10 @@ let notificationBridge: McpNotificationBridge | null = null;
 // M6-D: deliberate handler bounds. maxSubscriptions is a conservative 64 (a
 // single local owner with a handful of MCP clients, not a public service);
 // tests/mcp/fanout.test.ts sweeps 8/32/64 subscribers and records p95 latency
-// and heap delta as evidence for this value. These bound stream count and
-// request size; the SDK does not impose a per-stream frame/byte cap (documented
-// in the M6-D/E plan). No new settings framework is introduced.
+// and heap delta; measurements and the 50 ms latency budget are preserved in
+// docs/M6_D_FANOUT_EVIDENCE.md. These bound stream count and request size; the
+// SDK does not impose a per-stream frame/byte cap (documented in the M6-D/E
+// plan). No new settings framework is introduced.
 const MCP_MAX_SUBSCRIPTIONS = 64;
 const MCP_KEEP_ALIVE_MS = 15_000;
 const MCP_MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;

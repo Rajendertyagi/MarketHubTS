@@ -72,15 +72,31 @@ describe("M6-E C1–C21 named wire assertions", () => {
     } finally { await handler.close(); }
   });
 
-  test("C3/C10: unknown method is rejected with -32601", async () => {
+  test("C3/C10: unknown method is rejected with exactly HTTP 404 and -32601", async () => {
     const handler = makeHandler();
     try {
       const res = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "no/such/method" }, {
         jsonrpc: "2.0", id: 3, method: "no/such/method", params: { _meta: META }
       });
-      expect([400, 404]).toContain(res.status);
+      expect(res.status).toBe(404);
       const body = await res.json() as { error: { code: number } };
       expect(body.error.code).toBe(-32601);
+    } finally { await handler.close(); }
+  });
+
+  test("C3: unsupported protocol version is rejected with -32022 and version details", async () => {
+    const handler = makeHandler();
+    const unsupported = "2099-01-01";
+    const meta = { ...META, "io.modelcontextprotocol/protocolVersion": unsupported };
+    try {
+      const res = await raw(handler, { "MCP-Protocol-Version": unsupported, "Mcp-Method": "tools/list" }, {
+        jsonrpc: "2.0", id: 7, method: "tools/list", params: { _meta: meta }
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: number; data: { requested: string; supported: string[] } } };
+      expect(body.error.code).toBe(-32022);
+      expect(body.error.data.requested).toBe(unsupported);
+      expect(body.error.data.supported).toContain("2026-07-28");
     } finally { await handler.close(); }
   });
 
@@ -111,7 +127,7 @@ describe("M6-E C1–C21 named wire assertions", () => {
     } finally { await handler.close(); }
   });
 
-  test("C11: a listen stream uses SSE with X-Accel-Buffering:no and no Last-Event-ID", async () => {
+  test("C11: a listen stream uses SSE with X-Accel-Buffering:no (keepalive is SHOULD, not asserted)", async () => {
     const handler = makeHandler();
     const client = new Client({ name: "c11", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     try {
@@ -125,8 +141,43 @@ describe("M6-E C1–C21 named wire assertions", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/event-stream");
       expect(res.headers.get("x-accel-buffering")).toBe("no");
-      expect(res.headers.get("last-event-id")).toBeNull();
+      // Keepalive comments are SHOULD/encouraged by the spec, not a MUST; this
+      // test does not wait for or assert a keepalive frame.
       await res.body?.cancel();
+    } finally { await client.close(); await handler.close(); }
+  });
+
+  test("C11: an incoming Last-Event-ID is ignored — no stream replay/resume", async () => {
+    const handler = makeHandler();
+    const client = new Client({ name: "c11-resume", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
+        fetch: (url, init) => handler.fetch(new Request(url, init))
+      }));
+      // Send a listen request carrying a Last-Event-ID as if resuming an old
+      // SSE stream. The modern protocol has no SSE resumability; the server
+      // must ignore the header and open a fresh stream (ack first, no replay).
+      const res = await handler.fetch(new Request("http://test.local/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "subscriptions/listen",
+          "Last-Event-ID": "0"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 8, method: "subscriptions/listen",
+          params: { _meta: META, notifications: { resourceSubscriptions: [SNAPSHOT_URI] } }
+        })
+      }));
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      const first = await reader.read();
+      const frame = new TextDecoder().decode(first.value);
+      // Fresh stream: the first frame is the acknowledgement, not a replay of
+      // an earlier event id. No `id:` line from a prior stream is re-sent.
+      expect(frame).toContain("notifications/subscriptions/acknowledged");
+      expect(frame).not.toContain('"id":"0"');
+      await reader.cancel();
     } finally { await client.close(); await handler.close(); }
   });
 

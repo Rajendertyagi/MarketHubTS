@@ -35,14 +35,21 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx]!;
 }
 
+// Latency budget selected from the measured p95 at the 64-subscriber bound
+// (~3.6 ms across repeated runs): 50 ms gives >12x headroom over the worst
+// observed p95 and >2x over the worst observed max (20 ms). See
+// docs/M6_D_FANOUT_EVIDENCE.md for the recorded measurements and rationale.
+const FANOUT_LATENCY_BUDGET_MS = 50;
+
 describe("M6-D bounded fan-out (synthetic load)", () => {
   test("sweep subscribers toward the bound: no drops, measured latency and memory", async () => {
     const M = 20;
-    const evidence: Array<{ n: number; p95Ms: number; maxMs: number; heapDeltaMb: number; errors: number }> = [];
+    const evidence: Array<{ n: number; m: number; p95Ms: number; maxMs: number; heapDeltaMb: number; errors: number }> = [];
     for (const N of [8, 32, 64]) {
       const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
       const clients: Client[] = [];
       const counts = new Array<number>(N).fill(0);
+      let errors = 0; // real count: notification-handler exceptions + missed deliveries
       try {
         const heapBefore = process.memoryUsage().heapUsed;
         for (let i = 0; i < N; i++) {
@@ -66,19 +73,23 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
         }
         const sorted = [...latencies].sort((a, b) => a - b);
         const heapDeltaMb = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024);
-        evidence.push({ n: N, p95Ms: percentile(sorted, 95), maxMs: sorted[sorted.length - 1]!, heapDeltaMb, errors: 0 });
-        expect(counts.every((c) => c === M)).toBe(true);
+        // Real error count: any subscriber that missed an expected delivery.
+        errors = counts.filter((c) => c !== M).length;
+        const record = { n: N, m: M, p95Ms: percentile(sorted, 95), maxMs: sorted[sorted.length - 1]!, heapDeltaMb, errors };
+        evidence.push(record);
+        console.log(`[M6-D fanout evidence] ${JSON.stringify(record)}`);
+        expect(errors).toBe(0);
       } finally {
         for (const c of clients) await c.close();
         await handler.close();
       }
     }
-    // Evidence recorded for the implementation report: N, M, p95, max, heap
-    // delta, errors. The latency budget is derived from the measured p95 at the
-    // selected bound (64), with headroom, not from the test timeout.
+    // Evidence is preserved in docs/M6_D_FANOUT_EVIDENCE.md (measured values,
+    // selected bound and latency budget). The assertion uses the documented
+    // budget, not the per-update observation deadline.
     const atBound = evidence.find((e) => e.n === 64)!;
     expect(atBound.errors).toBe(0);
-    expect(atBound.p95Ms).toBeLessThan(2000);
+    expect(atBound.p95Ms).toBeLessThan(FANOUT_LATENCY_BUDGET_MS);
     expect(evidence.length).toBe(3);
   });
 
@@ -127,9 +138,15 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
 
       // The SDK has no per-stream frame/byte bound; we record the observed
       // behavior rather than asserting a bound it does not provide.
+      const slowEvidence = {
+        events: 20, publishMs, fastDelivered: fastCount, heapDeltaMb,
+        unreadStreamStatus: raw.status, contentType: raw.headers.get("content-type")
+      };
+      console.log(`[M6-D slow-consumer evidence] ${JSON.stringify(slowEvidence)}`);
       expect(fastCount).toBe(20); // other subscriber unaffected
       expect(publishMs).toBeLessThan(500); // publisher not blocked by unread stream
-      expect(Number.isFinite(heapDeltaMb)).toBe(true); // evidence recorded
+      expect(slowEvidence.unreadStreamStatus).toBe(200);
+      expect(slowEvidence.contentType).toContain("text/event-stream");
       await raw.body?.cancel();
     } finally {
       await fast.close();
