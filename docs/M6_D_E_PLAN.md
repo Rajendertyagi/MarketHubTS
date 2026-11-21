@@ -2,10 +2,10 @@
 
 > **Status:** Implementation plan only. Awaiting separate authorization. **No M6-D/E source exists yet.** This document does not implement anything.
 > **Last updated:** 2026-11-21 (official MCP/SDK research re-verified this date; §4)
-> **Repository baseline:** `Rajendertyagi/MarketHubTS`, branch `develop`, HEAD `32b034a38e9c0db134de13b9b51a9e12d1ffdee7` (verified equal to `origin/develop`).
+> **M6-C acceptance baseline:** `32b034a38e9c0db134de13b9b51a9e12d1ffdee7` — the final reviewed M6-C commit, **not necessarily current `develop` HEAD**. Re-fetch `develop` and record its actual HEAD at implementation start (§2.1); this SHA is the accepted foundation the phases build on, not a claim about the live branch tip.
 > **Depends on:** M6-A (`7860c7f`: Streamable HTTP at `/mcp` + retained STDIO, shared factory); M6-B1/B2/B3 (`0d58bbb`: tools, resources, prompts, cache hints, snapshot pagination); **M6-C accepted and closed at `32b034a`** (acceptance record in [`M6_C_PLAN.md`](M6_C_PLAN.md) §0). M6-B4 conformance/parity remains separately tracked.
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §3.1 (C1–C21 matrix), §3.2 (extensions), §3.3 (modern vs legacy), §6/§6.1 (subscriptions, cursors), §7 (lifecycle), §9.1 (activity outcomes), §10–§13 (phases, tests, acceptance, gates); [`MCP_INTERFACE.md`](MCP_INTERFACE.md) §8.1; [`TESTING_AND_ACCEPTANCE.md`](TESTING_AND_ACCEPTANCE.md). This is the single execution plan for M6-D and M6-E; it narrows the governing design and does not replace it.
-> **Official references:** MCP 2026-07-28 [subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions.md), [resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources.md), [discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover.md); TypeScript SDK [support guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/support-2026-07-28.md), [protocol versions](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/protocol-versions.md), [v2.4.0 `createMcpHandler` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/createMcpHandler.ts), [latest release](https://api.github.com/repos/modelcontextprotocol/typescript-sdk/releases/latest) (`v2.4.0`, 2026-10-23). Consolidated in [`REFERENCES.md`](REFERENCES.md) §8.
+> **Official references:** MCP 2026-07-28 [subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions.md), [resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources.md), [discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover.md); TypeScript SDK [support guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/support-2026-07-28.md), [protocol versions](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/protocol-versions.md), [v2.4.0 `createMcpHandler` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/createMcpHandler.ts), [v2.4.0 `McpServer` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/mcp.ts), [latest release](https://api.github.com/repos/modelcontextprotocol/typescript-sdk/releases/latest) (`v2.4.0`, 2026-10-23). Consolidated in [`REFERENCES.md`](REFERENCES.md) §8.
 
 ## 1. Objective
 
@@ -67,10 +67,11 @@ M6-D is a notification bridge, not a new market-data pipeline. M6-E is an accept
 | [Spec — Discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover.md) | Servers **MUST** implement `server/discover`. Response carries `supportedVersions`, `capabilities`, optional `instructions`, `ttlMs`/`cacheScope`, and identity at `_meta['io.modelcontextprotocol/serverInfo']` (not in the body). `serverInfo` is self-reported; MarketHubTS **MUST NOT** use it to drive behavior or security decisions. |
 | [SDK — support guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/support-2026-07-28.md) | `createMcpHandler` returns `.notify.{toolsChanged,promptsChanged,resourcesChanged,resourceUpdated(uri)}` over an in-process bus (supply `ServerEventBus` for multi-process — not needed here). `serveStdio` routes the pinned instance's `send*ListChanged()` onto active subscriptions automatically. `ClientOptions.listChanged` auto-opens a listen stream intersected with advertised capabilities; `client.listen(filter)` opens explicitly. Graceful close resolves `McpSubscription.closed === 'graceful'`, abrupt `'remote'`. Modern cancellation closes the request SSE stream. Standard headers `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` required on modern request POSTs (mismatch → `-32020`); cache hints default `ttlMs: 0`/`cacheScope: 'private'`; `clientInfo` is a SHOULD. |
 | [SDK — protocol versions](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/protocol-versions.md) | `legacy` era = 2024-10-07…2025-11-25 (`initialize`); `modern` = 2026-07-28 (per-request `_meta`). `createMcpHandler`/`serveStdio` serve both unless `legacy: 'reject'`. Change notifications are unsolicited on legacy, listen-only on modern. Deprecation is separate from era. |
-| [SDK v2.4.0 `createMcpHandler` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/createMcpHandler.ts) | `McpRequestContext` carries `era` and `requestInfo`. For `subscriptions/listen` the factory **is** constructed to read `server.getCapabilities()`; the acknowledged filter reflects what the instance can actually deliver. `handler.close()` calls `listenRouter.closeAll()` and closes in-flight exchanges. `onerror` is reporting-only. |
+| [SDK v2.4.0 `createMcpHandler` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/createMcpHandler.ts) | `McpRequestContext` carries `era` and `requestInfo`. For `subscriptions/listen` the factory **is** constructed to read `server.getCapabilities()`; the acknowledged filter reflects what the instance can actually deliver. `handler.close()` calls `listenRouter.closeAll()` (graceful completion for listen streams) **then** closes in-flight exchanges (aborting them). `onerror` is reporting-only. |
+| [SDK v2.4.0 `McpServer` source](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/mcp.ts) | **Critical default:** `registerTool`/`registerResource`/`registerPrompt` each call `registerCapabilities({ tools\|resources\|prompts: { listChanged: getCapabilities().<domain>?.listChanged ?? true } })`. Leaving `listChanged` unset therefore advertises `true`. The constructor option shape is `new McpServer(serverInfo, { capabilities: { tools: {...}, resources: {...}, prompts: {...} }, cacheHints: {...} })`; `Server` copies `options.capabilities` into its capability set before registration. The listen router honors a filter bit only when the corresponding capability bit is `true` (`honoredSubset`: `allow = bit => capabilities === undefined || bit === true`). |
 | [SDK — latest release](https://api.github.com/repos/modelcontextprotocol/typescript-sdk/releases/latest) | `v2.4.0` is still the latest stable release (published 2026-10-23); no newer stable SDK or protocol revision — target remains `2026-07-28` / SDK `2.4.0`. |
 
-**Reconciliation:** the SDK reads capabilities from the per-request instance for listen, so capability advertisement is the precise control point for the honored filter (§5.3). The "ack-first with `subscriptionId`" decision is confirmed and now names the exact ack notification and `_meta` key. "No `resources/subscribe` on modern" is confirmed: use the `resourceSubscriptions` listen filter. "One bridge, no second STDIO bridge" is confirmed by `serveStdio`'s automatic `send*ListChanged()` routing. No capability in this plan depends on an unverified API assumption.
+**Reconciliation:** the SDK reads capabilities from the per-request instance for listen, so capability advertisement is the precise control point for the honored filter (§5.3). **Because registration helpers default `listChanged` to `true` when absent, capabilities must be initialized explicitly before `register*` is called** (§5.3). The "ack-first with `subscriptionId`" decision is confirmed and now names the exact ack notification and `_meta` key. "No `resources/subscribe` on modern" is confirmed: use the `resourceSubscriptions` listen filter. "One bridge, no second STDIO bridge" is confirmed by `serveStdio`'s automatic `send*ListChanged()` routing. No capability in this plan depends on an unverified API assumption.
 
 ## 5. M6-D — Modern MCP notification bridge and event delivery
 
@@ -99,12 +100,54 @@ Responsibilities: `MarketDataService` is the canonical change source; `LiveEvent
 
 After notification the client: (1) re-reads `markethub://market/snapshot`; (2) when it needs incremental events, reads `markethub://events/live{?after,limit}` with its saved `resumeCursor`; (3) on `snapshot-required` (expired cursor, previous runtime, future cursor, lost history) fetches a fresh snapshot and starts a new feed position. `events/live` is a parameterized template — do not publish cursor-specific template URLs as a fixed resource. The stable snapshot URI is the topic; the feed is the catch-up mechanism.
 
+**Reconnect recovery (normative):** a newly opened listen stream does **not** replay changes missed while disconnected — the SDK owns no subscription state across reconnections and notifications carry no payload. Therefore the client **MUST** perform an immediate feed catch-up read after **every** successful acknowledgement, using its persisted `resumeCursor`, without waiting for another notification. This closes the gap between the last processed event and the moment the new stream became live.
+
+**Race-safe first-connection snapshot/checkpoint procedure:**
+
+1. Before opening the first listen stream, read `markethub://market/snapshot` and record its `revision` as the local checkpoint; read `markethub://events/live` once to obtain a `resumeCursor` and persist it.
+2. Open `subscriptions/listen` with the `resourceSubscriptions` filter for the snapshot URI.
+3. On `notifications/subscriptions/acknowledged`, immediately read `markethub://events/live?after=<persisted resumeCursor>&limit=N` and process every returned event, advancing the persisted cursor. Do not wait for a `resources/updated` notification.
+4. If the catch-up returns `snapshot-required`, re-read the snapshot, establish a fresh cursor, and repeat step 3 once; if it still fails, surface an explicit recovery error rather than silently reporting an empty page.
+5. Only after the immediate catch-up completes is the stream considered ready. Subsequent notifications trigger the same read-after-notify path.
+
+This ordering makes the checkpoint precede the subscription and the catch-up follow the ack, so an event that lands between the snapshot read and the ack is recovered from the feed rather than lost.
+
 ### 5.3 Capability advertisement (normative)
 
-- Advertise `resources.subscribe: true` **only** for the modern HTTP handler where the API bridge is active. Derive it from `ctx.era === 'modern'` and `ctx.requestInfo` in the factory; the SDK reads `server.getCapabilities()` for the listen ack, so this is the exact control point.
-- Do **not** advertise `resources.listChanged`, `tools.listChanged` or `prompts.listChanged`: those inventories are static in M6.
-- Do **not** advertise `resources.subscribe` on STDIO (no live event relay — §5.6) or on the 2025 stateless HTTP fallback. The SDK still handles `subscriptions/listen`; the ack must omit unsupported filters rather than falsely claim them.
-- Confirm with `server/discover` tests for modern HTTP, legacy HTTP, modern STDIO and legacy STDIO as applicable.
+**Critical SDK behavior:** `registerTool`/`registerResource`/`registerPrompt` default their `listChanged` capability to `true` when it is absent (`getCapabilities().<domain>?.listChanged ?? true`, verified in installed SDK v2.4.0 `mcp-*.mjs:1588,1707,1763`). Leaving flags unset is **not** equivalent to disabling them. Capabilities must be initialized explicitly in the `McpServer` constructor options **before** `register*` runs.
+
+**Exact constructor option shape** (verified against installed SDK v2.4.0 `mcp-*.mjs:1520-1526` and `mcp-BCJHyo7l.d.mts:2822-2833,3226-3267`):
+
+```ts
+const subscribe = ctx.era === "modern" && ctx.requestInfo !== undefined; // modern HTTP only
+const server = new McpServer(
+  { name: "markethubts", version: "0.1.0" },
+  {
+    capabilities: {
+      tools:     { listChanged: false },
+      resources: { listChanged: false, subscribe },
+      prompts:   { listChanged: false }
+    },
+    cacheHints: { /* existing six entries unchanged */ }
+  }
+);
+```
+
+- `tools.listChanged: false`, `resources.listChanged: false`, `prompts.listChanged: false` — explicit, because the inventories are static in M6 and the SDK would otherwise advertise `true`.
+- `resources.subscribe: true` **only** when `ctx.era === "modern" && ctx.requestInfo !== undefined` (modern HTTP with the active bridge). `requestInfo` is set only for HTTP by the installed SDK; `serveStdio` never sets it.
+- `resources.subscribe` stays **false** for legacy HTTP (`ctx.era === "legacy"`) and **all** STDIO contexts (modern and legacy). The SDK still handles `subscriptions/listen` on STDIO; the ack must omit unsupported filters rather than falsely claim them (§5.6).
+- The listen router honors a filter bit only when the matching capability bit is `true`; with the above, a `resourceSubscriptions` request is honored only on modern HTTP, and all three `listChanged` bits are refused everywhere.
+
+**Required `server/discover` and listen-ack assertions for all four transport/era combinations:**
+
+| Combination | `server/discover` capabilities | Listen ack `honoredFilter` |
+|---|---|---|
+| Modern HTTP (`era=modern`, `requestInfo` set) | `tools.listChanged=false`, `resources.listChanged=false`, `prompts.listChanged=false`, `resources.subscribe=true` | `resourceSubscriptions` honored for the exact snapshot URI; all `listChanged` bits absent |
+| Legacy HTTP (`era=legacy`, stateless fallback) | `resources.subscribe` absent/false; no modern listen capability | no `resourceSubscriptions` honored; no `listChanged` bits |
+| Modern STDIO (`serveStdio`, no `requestInfo`) | `resources.subscribe` absent/false | `resourceSubscriptions` **not** honored; no `listChanged` bits |
+| Legacy STDIO (`serveStdio`, 2025 opening) | `resources.subscribe` absent/false | no `resourceSubscriptions` honored; no `listChanged` bits |
+
+Assert both the discover response body and the ack's `honoredFilter` in `tests/mcp/subscriptions.test.ts` and `tests/mcp/http-integration.test.ts`; do not infer one from the other.
 
 ### 5.4 Bridge lifecycle, bounds and errors
 
@@ -118,9 +161,24 @@ Implement a small independently testable helper, preferably `apps/api/src/mcp-no
 
 Configure existing handler options deliberately: `maxSubscriptions`, `keepAliveMs`, `maxRequestBodySize`, `onerror`. Reuse existing config conventions; do not add a settings framework. The SDK owns the actual bounds and protocol errors.
 
-**Notification storms:** one notification per canonical event initially; measure with tests before introducing coalescing. Do not add a timer/debounce subsystem speculatively.
+**Explicit `maxSubscriptions` (do not inherit the SDK default of 1024):** select a conservative value from a measured synthetic-load run before wiring production startup. Starting budget for measurement: **64 concurrent listen streams** — a single local owner with a handful of MCP clients, not a public service. Justification: the deployment is one local application instance on a LAN with no application-level login; 64 is well above any realistic client count while bounding per-stream SSE buffers and fan-out cost. The value is a **starting hypothesis, not a final target**: confirm it with the §7.1 synthetic-load test and record the selected value plus its evidence in the implementation report. If measurements show the budget is unsafe, lower it; do not raise it without evidence. The SDK rejects a new listen beyond the bound in-band before the ack (`-32603` 'Subscription limit reached'), so the bound is observable in tests.
 
-**Shutdown order:** stop accepting new app work / stop the desired-subscription coordinator (DB still open) → `await mcpHandler.close()` so active listen streams receive the SDK's graceful completion → unsubscribe the bridge → stop `LiveEventHub` and its clients → stop the Bun HTTP listener → close/checkpoint SQLite. Essential invariant: **close the handler before detaching the bridge source or closing the HTTP server/DB, and never let the handler outlive SQLite.** A slightly different coordinator position is acceptable if this invariant holds; document and test the chosen sequence.
+**Bounded fan-out / performance test (§7.1):** a measurable synthetic-load test opens N concurrent subscriptions (sweep up to the selected bound) and emits M canonical updates through the bridge. Record: subscriber count N, event count M, publish latency (min/mean/**p95**/max), error count, and resource usage (memory and event-loop/CPU if available). Assert no dropped notifications for subscribed clients, no notifications to unsubscribed clients, and that the p95 stays within a budget **derived from the measurement** — do not invent a latency target before measuring representative workloads. Document the selected budget and the evidence used to set it. This test also verifies that one bridge listener fans out to all streams without per-request subscriptions.
+
+**Notification storms:** one notification per canonical event initially; measure with the load test before introducing coalescing. Do not add a timer/debounce subsystem speculatively.
+
+**Shutdown lifecycle (reconciled with `apps/api/src/index.ts:163-181`):** the current code stops `coordinator` → `hub` → `handler.close()` → `server.stop(true)` → `db.close()`. M6-D inserts the bridge teardown **after** `handler.close()` and **before** `hub.stop()`/server/DB, giving:
+
+1. stop accepting new app work / stop the desired-subscription coordinator (DB still open);
+2. `await mcpHandler.close()` — **keep the handler alive until this call**;
+3. unsubscribe the bridge (no more `handler.notify` calls);
+4. stop `LiveEventHub` and its clients;
+5. stop the Bun HTTP listener;
+6. close/checkpoint SQLite.
+
+**SDK close semantics (verified in installed v2.4.0 `createMcpHandler` source):** `handler.close()` first calls `listenRouter.closeAll()`, which sends the successful `subscriptions/listen` completion result to active listen streams (client observes `McpSubscription.closed === 'graceful'`), **then** closes in-flight exchanges. These are distinct outcomes: **graceful completion is promised for listen streams; in-flight requests are aborted and are NOT promised to finish successfully.** Do not write tests or docs claiming in-flight requests complete successfully on shutdown.
+
+Essential invariant: **close the handler before detaching the bridge source or closing the HTTP server/DB, and never let the handler outlive SQLite.** Test both an active listen stream (assert graceful completion) and an in-flight request (assert it is closed/aborted, not completed successfully).
 
 ### 5.5 Activity and notification outcome separation
 
@@ -161,9 +219,10 @@ Add `tests/mcp/http-integration.test.ts`, extending the `http-smoke.test.ts` pat
 - Verify read-after-notify: read the snapshot and assert its revision/state reflects the event; use `events/live` with a saved `resumeCursor` and assert the incremental event.
 - Verify multiple concurrent subscriptions are isolated (distinct filters/IDs); closing one must not suppress another.
 - Verify reconnect: close a listen stream, make another change, open a new stream, reuse the saved feed cursor. Do not expect MCP SSE `Last-Event-ID` replay; the feed cursor is the recovery mechanism.
+- **Explicit missed-event catch-up test (required):** disconnect the listen stream; mutate canonical state **while disconnected**; reconnect and receive `notifications/subscriptions/acknowledged`; produce **no later mutation**; assert that the immediate post-ack feed read (using the persisted `resumeCursor`) recovers the missed event without any further notification. This test fails if the client waits passively for the next notification, so it proves the §5.2 catch-up requirement. Also assert the race-safe first-connection checkpoint: an event landing between the initial snapshot read and the ack is recovered.
 - Verify expired/invalid/previous-runtime cursor returns `snapshot-required`, never a successful empty page.
 - Verify malformed modern envelopes/headers, unsupported methods, invalid and allowed Host/Origin, and CORS preflight including modern required headers. Retain the smoke test's negative Host check.
-- Verify client abort/cancellation and server-initiated shutdown; an active listen stream closes with the graceful completion result on deliberate `handler.close()`.
+- Verify client abort/cancellation and server-initiated shutdown. On deliberate `handler.close()`, an active listen stream closes with the graceful completion result (`closed === 'graceful'`), while an in-flight request is closed/aborted — assert both and do **not** expect the in-flight request to finish successfully (§5.4, §7.1).
 - Verify bridge/publisher errors are diagnostics only and do not turn successful mutations/reads into failures.
 - Use bounded timeouts and deterministic `finally` cleanup of clients, handler, server and DB. No external providers, market sessions or credentials.
 
@@ -182,11 +241,26 @@ The current composition uses the default dual-era posture (`createMcpHandler` le
 
 ### 6.4 LAN acceptance procedure
 
-Automated loopback tests do not prove a second device can reach the configured LAN interface. Add a repeatable manual procedure, preferably `docs/M6_E_LAN_ACCEPTANCE.md`, and execute it on a second device on the same private LAN. Record: API machine LAN IPv4, bind host, port, `MARKETHUB_LAN` state, client device/interface and MCP config, test date; that the API is bound to the intended interface and reachable at `/mcp`; a modern-pinned client completing discovery, tool/resource listing, snapshot read, a subscription to `markethub://market/snapshot`, a notification after a controlled synthetic change, and a read-after-notify with cursor resume or explicit recovery; a valid configured LAN Host/Origin accepted and an unapproved one rejected (403) without loosening SDK validation; that the endpoint is not publicly exposed; expected vs actual results, timestamps and redacted evidence. If a physical second-device run is impossible, record **not tested** — do not claim LAN acceptance from localhost or a mocked request.
+Automated loopback tests do not prove a second device can reach the configured LAN interface. Add a repeatable manual procedure, preferably `docs/M6_E_LAN_ACCEPTANCE.md`, and execute it on a second device on the same private LAN.
+
+**Synthetic event harness for the second device (required, safe and repeatable):** the LAN run needs a controlled canonical change that the second device can trigger without touching production data or adding a production endpoint. Define a **test-only harness or test build** of the API — e.g. a dedicated test entry that composes `MarketDataService` with an injected in-memory `LiveStateStore` and a local trigger (test-only CLI command, test-only route mounted only in the test build, or a scripted fixture driver) — so the operator can emit a synthetic `item-updated` on demand. Guardrails:
+
+- **No production debug/mutation endpoint.** The trigger exists only in the test harness/build and is never mounted in the production composition (`apps/api/src/index.ts` / `app.ts`).
+- No live provider, real broker credentials, market session, or production/user database; use a temporary DB and synthetic instruments.
+- The trigger emits a canonical `LiveChangeEvent` through the same `MarketDataService` path the bridge subscribes to, so the LAN notification exercises the real bridge/handler, not a stub.
+- Document the exact command/step, its guard, and how to confirm the test build is active before the run.
+
+Record: API machine LAN IPv4, bind host, port, `MARKETHUB_LAN` state, client device/interface and MCP config, test date; that the API is bound to the intended interface and reachable at `/mcp`; a modern-pinned client completing discovery, tool/resource listing, snapshot read, a subscription to `markethub://market/snapshot`, a notification after a harness-triggered synthetic change, and a read-after-notify with cursor resume or explicit recovery; a valid configured LAN Host/Origin accepted and an unapproved one rejected (403) without loosening SDK validation; that the endpoint is not publicly exposed; expected vs actual results, timestamps and redacted evidence. **If no safe second-device test setup is possible — including no safe way to trigger a synthetic change from the second device — report LAN acceptance as `not tested`; do not claim it from localhost or a mocked request.**
 
 ### 6.5 Matrix traceability
 
-Use the governing `docs/M6_PLAN.md` §3.1 C1–C21 matrix. Maintain a test-to-requirement table giving each applicable MUST one explicit named assertion. M6-D owns C17 and its tests; M6-A/B and M6-B4 own their rows; M6-E verifies every applicable row is present in the complete evidence set and adds actual-listener/real-client assertions unit tests cannot prove. No row is accepted because an in-process `handler.fetch` test passed when the master plan requires an actual listener. Document any SHOULD deviation with reason and owner. Do not reimplement the protocol manually to satisfy a row.
+Use the governing `docs/M6_PLAN.md` §3.1 C1–C21 matrix. Maintain a test-to-requirement table giving each applicable MUST one explicit named assertion. Ownership is **separate and must stay that way**:
+
+- **M6-D owns C17** and its subscription tests.
+- **M6-A/B own** their transport/capability rows; **M6-B4 owns** its conformance/parity rows and their closeout.
+- **M6-E assembles evidence** across all owners and adds actual-listener/real-client assertions unit tests cannot prove. **M6-E must not claim M6-B4 acceptance** — B4 rows remain owned by B4 until that phase's own closeout is accepted. Assembling a B4 row's evidence into the matrix is not the same as accepting B4.
+
+No row is accepted because an in-process `handler.fetch` test passed when the master plan requires an actual listener. Document any SHOULD deviation with reason and owner. Do not reimplement the protocol manually to satisfy a row.
 
 ## 7. Test plan
 
@@ -194,8 +268,10 @@ Use the governing `docs/M6_PLAN.md` §3.1 C1–C21 matrix. Maintain a test-to-re
 
 | Test | Scope |
 |---|---|
-| New `tests/mcp/subscriptions.test.ts` | SDK handler + real client in-process: ack-first, honored filter, subscription ID, exact URI filtering, no unrequested notification, two clients/two subscriptions isolated, cancellation, graceful handler close, max subscriptions, no false list-changed capability |
+| New `tests/mcp/subscriptions.test.ts` | SDK handler + real client in-process: ack-first, honored filter, subscription ID, exact URI filtering, no unrequested notification, two clients/two subscriptions isolated, cancellation, graceful handler close, max subscriptions, no false list-changed capability. **Assert `server/discover` capabilities and listen-ack `honoredFilter` for all four transport/era combinations (§5.3 table).** |
 | New `tests/mcp/notification-bridge.test.ts` (or focused API bridge test) | one `MarketDataService.subscribe()` listener; all `LiveChangeEvent` variants map to the stable URI; repeated start/stop safe; notifier failure contained and reported; canonical mutation still succeeds |
+| New bounded fan-out / load test (in `subscriptions.test.ts` or a dedicated file) | N concurrent subscriptions × M canonical updates; record N, M, publish latency (min/mean/**p95**/max), errors, memory/CPU; assert no dropped or misrouted notifications; derive and document the latency budget from measurements; verify the selected `maxSubscriptions` bound and its in-band rejection |
+| Shutdown lifecycle test | active listen stream receives graceful completion (`closed === 'graceful'`) on `handler.close()`; **in-flight request is closed/aborted, not completed successfully**; bridge unsubscribed only after `handler.close()`; no publish after teardown begins |
 | Existing `tests/market/notifications.test.ts`, `tests/mcp/event-feed.test.ts` | retain as source-level guarantees; extend only for missing cases |
 
 These prove logic but do **not** replace M6-E's real HTTP listener test.
@@ -232,19 +308,21 @@ Adjust focused names to actual files. Report local results separately from CI ev
 - [ ] One process-wide bridge subscribes to `MarketDataService`, not `LiveEventHub` or the per-request factory.
 - [ ] A modern HTTP client subscribes to the stable snapshot URI and receives the correct `resources/updated` notification after canonical changes.
 - [ ] Ack-first, exact filter semantics, subscription ID, concurrent subscriptions, cancellation, graceful close and bounded subscription behavior are proven.
-- [ ] The client reads the updated snapshot and uses the existing live feed cursor for incremental replay/recovery.
+- [ ] Capabilities are explicitly initialized before registration (`tools/resources/prompts.listChanged: false`; `resources.subscribe` only modern HTTP); `server/discover` and listen-ack assertions pass for all four transport/era combinations (§5.3).
+- [ ] The client reads the updated snapshot and uses the existing live feed cursor for incremental replay/recovery; an immediate post-ack catch-up recovers events missed while disconnected, with the race-safe first-connection checkpoint (§5.2) and its explicit test (§6.1).
+- [ ] Bounded fan-out is measured (N, M, p95 latency, errors, resource usage); an explicit `maxSubscriptions` value and its evidence-based latency budget are documented (§5.4).
+- [ ] Shutdown test distinguishes graceful listen-stream completion from in-flight exchange closure; no promise that in-flight requests finish successfully (§5.4, §7.1).
 - [ ] Notification delivery failures cannot change data-operation outcomes or corrupt canonical state.
-- [ ] Capability advertisement matches §5.3 across modern HTTP, legacy HTTP, modern STDIO and legacy STDIO.
 - [ ] No custom protocol/SSE implementation, migration, dependency, provider activation or unsupported capability advertisement.
 - [ ] Focused tests, `bun run typecheck`, `bun run build`, `git diff --check` pass; full suite shows no new failures vs the accepted M6-C baseline; independent diff review completed.
 
 ### 8.2 M6-E definition of done
 
-- [ ] C1–C21 evidence matrix complete across M6-A/B/B4/D/E owners.
+- [ ] C1–C21 evidence matrix complete across M6-A/B/B4/D/E owners, with B4 rows still owned by B4 and M6-E not claiming B4 acceptance before B4 closeout (§6.5).
 - [ ] A real pinned client passes the full HTTP integration suite against the running Hono/Bun listener, not just in-process `handler.fetch`.
 - [ ] Modern STDIO process tests pass, including honest listen-filter/capability behavior; legacy paths tested if retained.
 - [ ] Host/Origin, CORS, error/cancellation, reconnect/read-after-notify, multi-client isolation, graceful shutdown and bounded-resource behavior pass.
-- [ ] Second-device LAN procedure executed and evidence recorded; "not tested" blocks claiming LAN acceptance.
+- [ ] Second-device LAN procedure executed with a safe test-only synthetic-event harness (no production debug/mutation endpoint); evidence recorded. If no safe second-device setup exists, LAN acceptance is reported `not tested` and blocks the claim (§6.4).
 - [ ] Full tests, typecheck, build and diff checks pass; independent review finds no scope creep or regression.
 - [ ] M6-C closure and M6-B4 closeout reconciled; M6 remains separate from Stage G and M7.
 
@@ -265,6 +343,9 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 | Risk/decision | Handling |
 |---|---|
 | SDK capability mismatch | Advertise `resources.subscribe` only where a working source/publisher exists; assert `server/discover` separately per transport/era (§5.3) |
+| SDK `listChanged` defaults to `true` | Initialize `tools/resources/prompts.listChanged: false` explicitly in the constructor before `register*`; assert all four transport/era combinations (§5.3) |
+| Missed events while disconnected | Immediate post-ack feed catch-up with persisted cursor and race-safe first-connection checkpoint; explicit disconnect/mutate/reconnect/no-later-mutation test (§5.2, §6.1) |
+| Unbounded fan-out / latency | Measured synthetic-load test with p95; explicit evidence-based `maxSubscriptions` and latency budget (§5.4) |
 | Event source duplication | Bridge from `MarketDataService.subscribe()` exactly once; `LiveEventHub` stays feed/replay consumer |
 | Resource URI mismatch | Publish only the exact stable URI `markethub://market/snapshot`; SDK resource filtering is exact |
 | Notification storms | One notification per canonical event initially; measure before coalescing; no speculative debounce |
@@ -296,9 +377,9 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 ## 11. Implementation order
 
 1. **Baseline/entry review:** confirm current `develop`, M6-C closure, M6-B4 status, dependencies and official versions.
-2. **D contract test first:** write tests against official SDK listen behavior with an in-memory `MarketDataService` and real SDK client; lock the stable URI and filter behavior before wiring production startup.
+2. **D contract test first:** write tests against official SDK listen behavior with an in-memory `MarketDataService` and real SDK client; lock the stable URI, filter behavior, and the four transport/era capability/ack combinations (§5.3) before wiring production startup.
 3. **D bridge helper:** implement the one-listener mapping, catch/report failures, unsubscribe lifecycle.
-4. **D composition/capabilities:** wire the process-wide bridge, advertise `resources.subscribe` only on modern HTTP, configure bounded options, adjust shutdown ordering.
+4. **D composition/capabilities:** initialize `listChanged: false` and conditional `resources.subscribe` explicitly in the constructor before registration; wire the process-wide bridge; measure bounded fan-out to select `maxSubscriptions` and the latency budget; implement the immediate post-ack catch-up; adjust shutdown ordering per §5.4.
 5. **D closeout:** focused suite, review changed files, no activity schema/migration/provider changes; pass §8.1.
 6. **E real HTTP integration:** real-listener suite, two clients, reconnect/cancellation/graceful close with synthetic state.
 7. **E STDIO/legacy:** extend the real STDIO process test; add legacy compatibility only if dual-era posture remains.
