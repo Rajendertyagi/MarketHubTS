@@ -1,7 +1,7 @@
 # Testing and Acceptance
 
 > **Status:** Validation strategy and acceptance criteria; automated coverage spans foundation, catalog, provider auth, live contracts, Upstox stream, the M4 Stage D backend vertical slice, and the Stage E WebUI live-data experience.
-> **Last updated:** 2026-11-17
+> **Last updated:** 2026-11-22 (metadata acceptance split into three consistency paths)
 > **Related:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROVIDER_INTEGRATION.md](PROVIDER_INTEGRATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ## 1. Validation strategy
@@ -123,18 +123,20 @@ Specific numeric targets must be established and evidenced during implementation
 
 ### 7.1 Future acceptance — backend-driven metadata and capability discovery
 
-Owner-approved architecture requirement, **not yet implemented**; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) and AD-025. When the cross-cutting initiative is implemented, acceptance must prove:
+Owner-approved architecture requirement, **not yet implemented**; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) and AD-025. Acceptance distinguishes three consistency paths — do not collapse them into one generic "metadata" test:
 
-- a newly registered MCP tool appears in the WebUI selector without a frontend options-list edit;
-- existing catalog results populate instrument selectors;
-- shared interval/status enums are not duplicated in React;
-- provider UI iterates backend-provided provider descriptors;
+1. **Direct shared-contract-to-WebUI consistency** (no HTTP discovery): the WebUI derives fixed options from `@markethub/contracts` Zod schemas (for example `candleIntervalSchema`, activity status/transport). Prove that a contract value change reaches the UI without a component edit and that no duplicate literal list exists in React. No metadata endpoint is involved.
+2. **Backend-registration-to-metadata-API-to-WebUI consistency** (only if technical validation justifies an endpoint): a newly registered MCP tool appears in the WebUI selector without a frontend options-list edit, and the descriptors remain consistent with the actual MCP registrations. If no endpoint is needed, prove the descriptors are sourced from the owning registration module by another non-duplicating route.
+3. **Domain-search-API-to-WebUI consistency**: existing catalog results from `GET /api/catalog/search` populate instrument selectors, with bounded/paginated query behavior, loading/empty/error states and cancellation.
+
+Additional cross-cutting assertions:
+
+- provider UI reflects the owning backend contract — currently the fixed `UPSTOX`/`FYERS` `ProviderId`/`ProviderStatusMap`; dynamic provider descriptors are later contract/registry work;
 - unknown/unavailable metadata is handled honestly (no invented values);
-- metadata responses contain no secrets, tokens, credentials or sensitive configuration;
-- backend schema validation and permission enforcement remain authoritative;
-- query-based lists are bounded/paginated where required.
+- any metadata response contains no secrets, tokens, credentials or sensitive configuration;
+- backend schema validation and permission enforcement remain authoritative.
 
-Tests must prove the actual source-to-API-to-WebUI relationship, not merely match planned filenames. Do not add tests merely to match a filename; add them when the behavior exists.
+Tests must prove the actual source-to-API-to-WebUI relationship for the relevant path, not merely match planned filenames. Do not add tests merely to match a filename; add them when the behavior exists.
 
 ## 8. Reporting requirements
 

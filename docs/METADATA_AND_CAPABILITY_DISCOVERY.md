@@ -3,7 +3,7 @@
 > **Status:** Authoritative architecture requirement (owner-approved). **Documentation only — no metadata API, registry, WebUI component or application change is implemented by this document.** Implementation requires separate authorization.
 > **Decision:** [AD-025](ARCHITECTURE_DECISIONS.md) (backend/domain-owned metadata is authoritative).
 > **Governing:** [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md).
-> **Last updated:** 2026-11-21.
+> **Last updated:** 2026-11-22 (ownership/delivery boundaries clarified; provider limitation preserved; implemented vs proposed separated).
 
 ## 1. Requirement
 
@@ -15,9 +15,27 @@ This applies to implemented features, current WebUI forms and selectors, and all
 
 This is an architecture rule, not a claim that discovery is implemented today. Section 6 records the verified current gaps; section 8 records future acceptance criteria.
 
+### 1.1 Implemented today vs proposed
+
+**Already implemented (verified):** shared Zod enums/schemas in `@markethub/contracts`; `GET /api/catalog/search` (bounded, paginated); MCP tool/resource/prompt registrations in `packages/mcp-core`; `ProviderRegistry` with fixed `UPSTOX`/`FYERS` typing; WebUI panels that consume the local API and shared contracts.
+
+**Proposed, not implemented:** a read-only runtime metadata endpoint; registration-derived tool descriptors exposed to the WebUI; reusable instrument/tool selectors; direct WebUI consumption of shared enum options; schema-informed basic forms. No metadata API, registry, WebUI component, dependency or migration exists for this requirement yet.
+
 ## 2. Source-of-truth ownership
 
 Ownership stays with the module that already owns the values. Do **not** create one global table or one giant registry for everything.
+
+### 2.0 Ownership and delivery at a glance
+
+| Information type | Source and delivery |
+|---|---|
+| Fixed shared enums and schemas | Import directly from `@markethub/contracts`; derive UI options from the shared Zod schema (`.options`). **No HTTP discovery request.** |
+| Runtime capabilities and registrations | Discover from their owning backend module/registry through a read-only API **when the WebUI genuinely needs backend discovery**. |
+| Large or changing domain data | Use existing dedicated search/paginated APIs, such as `GET /api/catalog/search`. |
+| Persisted user configuration | Read and modify through its owning backend service/API. |
+| Presentation-only values | May remain frontend-owned. |
+
+This table is the delivery rule: a shared contract value is consumed directly, not fetched. A discovery endpoint is justified only for runtime metadata that cannot be derived from a shared contract or an existing domain API.
 
 ### A. Shared contract metadata
 
@@ -37,7 +55,7 @@ Verified examples:
 Capabilities come from the owning backend registry/module, not from a frontend constant and not from a second unrelated backend list.
 
 - **MCP tools, resources and prompts:** the registrations in `packages/mcp-core/src/tools.ts`, `resources.ts` and `prompts.ts` are the source of truth (see §4).
-- **Providers:** `ProviderRegistry` (`packages/market-core/src/provider.ts:22–100`) and the per-adapter `ProviderStatus.capabilities` / `.limits` (`packages/contracts/src/provider.ts:81–96,106–107`) own provider identity and capability metadata.
+- **Providers:** `ProviderRegistry` (`packages/market-core/src/provider.ts:22–100`) and the per-adapter `ProviderStatus.capabilities` / `.limits` (`packages/contracts/src/provider.ts:81–96,106–107`) own provider identity and capability metadata. **Current limitation:** `providerIdSchema` is `z.enum(["UPSTOX", "FYERS"])`, `ProviderStatusMap` has fixed `UPSTOX`/`FYERS` keys, and `ProviderRegistry.getStatuses()` returns that fixed two-key map. Provider registration is **not** dynamically extensible today; do not describe it as such until the contract and registry design supports it.
 - **Indicators and their parameters:** when implemented, their registry/module owns the descriptors. No indicator list exists today.
 - **Feature operations and configuration descriptors:** owned by the service/module that performs the operation.
 
@@ -59,13 +77,13 @@ Purely local UI choices may remain in frontend code where they do not represent 
 
 ## 3. Metadata and discovery API architecture
 
-Recommended shape (to be validated and authorized before implementation):
+Recommended shape (to be validated and authorized before implementation). **Only item 1 is proposed; items 2 and 3 describe existing patterns or future domain work.**
 
-1. **One small read-only metadata/discovery endpoint** on the existing Hono API for low-cardinality metadata and capability descriptors — shared-enum option arrays, registered MCP tool/resource/prompt descriptors, provider descriptors. Use shared Zod contracts for the response. This is a read surface over existing registries, not a new source of truth.
-2. **Dedicated domain endpoints** for searchable and large datasets. Instrument search continues through `/api/catalog/search`; future expiry/strike/config pickers get their own bounded, paginated endpoints from the owning service. Do not put every instrument, expiry or market-data record into one giant metadata response.
-3. **Version/revision and invalidation:** static contract/capability metadata can be cached with a version or revision and refreshed on app load or explicit refresh. Dynamic domain data uses query-based fetching and normal cache invalidation. Do not aggressively poll static metadata.
+1. **Proposed — one small read-only metadata/discovery endpoint** on the existing Hono API, limited strictly to **runtime metadata that genuinely requires backend discovery**: registered MCP tool/resource/prompt descriptors and, if needed, runtime capability descriptors. It must **not** return shared-enum option arrays (`candleIntervalSchema`, activity status/transport, etc.) — those are imported directly from `@markethub/contracts` (§2.0, §2.A). Use shared Zod contracts for the response. This is a read surface over existing registries, not a new source of truth. Whether this endpoint is necessary at all must be validated against the actual registrations before implementation (§4).
+2. **Existing pattern — dedicated domain endpoints** for searchable and large datasets. Instrument search already uses `/api/catalog/search`; future expiry/strike/config pickers get their own bounded, paginated endpoints from the owning service. Do not put every instrument, expiry or market-data record into one giant metadata response.
+3. **Caching:** shared contract values need no HTTP fetch and no polling. Runtime metadata, if an endpoint is justified, may be cached with a version/revision and refreshed on load or explicit refresh. Dynamic domain data uses query-based fetching and normal cache invalidation. Do not aggressively poll static metadata.
 
-No separate server or microservice. No new runtime dependency. The endpoint names and exact response contract are recommendations only; they must be designed against the actual registries during an authorized implementation task.
+No universal metadata database, no generic options framework, no new service, no separate server or microservice, and no new runtime dependency. The endpoint name and exact response contract are recommendations only; they must be designed against the actual registrations during an authorized implementation task.
 
 ## 4. MCP tool discovery — the concrete example
 
@@ -97,7 +115,7 @@ Supported reusable patterns for future implementation:
 
 - **Searchable/autocomplete instrument selector** — backed by `/api/catalog/search`; replaces manual canonical-ID typing.
 - **Metadata-driven dropdown/select** — options derived from a shared Zod enum or a read-only metadata endpoint.
-- **Provider and capability selector** — iterates backend-provided provider descriptors; never a hardcoded `UPSTOX`/`FYERS` array.
+- **Provider and capability selector** — when provider identity becomes dynamically extensible, iterate backend-provided provider descriptors rather than a hardcoded array. **Today** `ProviderId`/`ProviderStatusMap`/`getStatuses()` are fixed around `UPSTOX`/`FYERS` (§2.B), so a provider selector must reflect that fixed contract honestly; do not claim dynamic discovery until the contract and registry support it.
 - **MCP tool selector** — populated from the registration-derived descriptors (§4).
 - **Schema-informed basic form fields** — for simple tools, derive basic inputs from the input JSON Schema.
 - **Domain-specific custom components** — use a custom renderer when a workflow needs domain semantics, validation, conditional fields or layout that a generic form cannot express honestly. A universal JSON Schema form generator is **not** required for every complex workflow.
@@ -136,7 +154,7 @@ A future implementation must prove:
 - a newly registered MCP tool appears in the WebUI selector without a frontend options-list edit;
 - existing catalog results populate instrument selectors;
 - shared interval/status enums are not duplicated in React;
-- provider UI iterates backend-provided provider descriptors;
+- provider UI reflects the owning backend contract — currently the fixed `UPSTOX`/`FYERS` `ProviderId`/`ProviderStatusMap`; dynamic provider descriptors are a later contract/registry change, not part of this requirement's current acceptance;
 - unknown/unavailable metadata is handled honestly;
 - metadata responses contain no secrets;
 - backend schema validation remains authoritative;

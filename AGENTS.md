@@ -1,7 +1,7 @@
 # AGENTS.md — MarketHubTS
 
 > **Scope:** Documentation and repository navigation for MarketHubTS. This file is the entry point for humans and coding agents working in this repository.
-> **Last updated:** 2026-11-21 (M6-C acceptance recorded; M6 implementation-status reconciliation)
+> **Last updated:** 2026-11-22 (metadata first-slice plan added to documentation map)
 
 ## 1. Project identity (confirmed)
 
@@ -39,6 +39,7 @@ See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for details.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System/subsystem architecture, diagrams, invariants, boundaries |
 | [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md) | Established decisions, rationale, constraints, provisional items |
 | [`docs/METADATA_AND_CAPABILITY_DISCOVERY.md`](docs/METADATA_AND_CAPABILITY_DISCOVERY.md) | **Authoritative:** backend/contract-owned options, capabilities and domain metadata; WebUI discovery instead of duplicated frontend lists (AD-025) |
+| [`docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md`](docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) | Bounded, source-verified implementation plan for the first WebUI options slice (tool selector, instrument picker, interval selector) |
 | [`docs/MARKET_DATA_AND_CATALOG.md`](docs/MARKET_DATA_AND_CATALOG.md) | Supported universe, canonical catalog/identity, normalization, provenance |
 | [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md) | Upstox/FYERS adapter design, independence, source selection, verification needs |
 | [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) | MCP capability design, transports, permissions, events, parity with services |
