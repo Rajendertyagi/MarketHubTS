@@ -107,10 +107,11 @@ After notification the client: (1) re-reads `markethub://market/snapshot`; (2) w
 1. Before opening the first listen stream, read `markethub://market/snapshot` and record its `revision` as the local checkpoint; read `markethub://events/live` once to obtain a `resumeCursor` and persist it.
 2. Open `subscriptions/listen` with the `resourceSubscriptions` filter for the snapshot URI.
 3. On `notifications/subscriptions/acknowledged`, immediately read `markethub://events/live?after=<persisted resumeCursor>&limit=N` and process every returned event, advancing the persisted cursor. Do not wait for a `resources/updated` notification.
-4. If the catch-up returns `snapshot-required`, re-read the snapshot, establish a fresh cursor, and repeat step 3 once; if it still fails, surface an explicit recovery error rather than silently reporting an empty page.
-5. Only after the immediate catch-up completes is the stream considered ready. Subsequent notifications trigger the same read-after-notify path.
+4. **Page until caught up:** the live feed is bounded to **100 events per read** and returns `nextCursor` when more are available (`packages/realtime/src/hub.ts:310-348`). Continue paging with the returned `nextCursor` until the feed reports no more pages; do not treat a single page as complete. Persist the cursor after each page so a failure mid-catch-up resumes correctly.
+5. If the catch-up returns `snapshot-required`, re-read the snapshot, establish a fresh cursor, and repeat steps 3–4 once; if it still fails, surface an explicit recovery error rather than silently reporting an empty page.
+6. Only after the immediate catch-up is fully paged to the end is the stream considered ready. Subsequent notifications trigger the same read-after-notify path.
 
-This ordering makes the checkpoint precede the subscription and the catch-up follow the ack, so an event that lands between the snapshot read and the ack is recovered from the feed rather than lost.
+This ordering makes the checkpoint precede the subscription and the catch-up follow the ack, so an event that lands between the snapshot read and the ack is recovered from the feed rather than lost. Paging to the end (not one page) is required because more than 100 events can accumulate while disconnected.
 
 ### 5.3 Capability advertisement (normative)
 
@@ -138,16 +139,18 @@ const server = new McpServer(
 - `resources.subscribe` stays **false** for legacy HTTP (`ctx.era === "legacy"`) and **all** STDIO contexts (modern and legacy). The SDK still handles `subscriptions/listen` on STDIO; the ack must omit unsupported filters rather than falsely claim them (§5.6).
 - The listen router honors a filter bit only when the matching capability bit is `true`; with the above, a `resourceSubscriptions` request is honored only on modern HTTP, and all three `listChanged` bits are refused everywhere.
 
-**Required `server/discover` and listen-ack assertions for all four transport/era combinations:**
+**Protocol-era boundary (normative):** `server/discover` and `subscriptions/listen` are **2026-07-28 (modern) mechanisms**. Do **not** require discovery responses or listen acknowledgements for legacy HTTP or legacy STDIO — those eras use the `initialize` handshake and unsolicited notifications / `resources/subscribe`, and have no `server/discover` or `subscriptions/listen` contract to assert. Assert modern mechanisms only on modern connections; assert legacy mechanisms on legacy connections.
 
-| Combination | `server/discover` capabilities | Listen ack `honoredFilter` |
+**Required assertions by transport/era combination:**
+
+| Combination | Era mechanism to test | Capability / behavior assertions |
 |---|---|---|
-| Modern HTTP (`era=modern`, `requestInfo` set) | `tools.listChanged=false`, `resources.listChanged=false`, `prompts.listChanged=false`, `resources.subscribe=true` | `resourceSubscriptions` honored for the exact snapshot URI; all `listChanged` bits absent |
-| Legacy HTTP (`era=legacy`, stateless fallback) | `resources.subscribe` absent/false; no modern listen capability | no `resourceSubscriptions` honored; no `listChanged` bits |
-| Modern STDIO (`serveStdio`, no `requestInfo`) | `resources.subscribe` absent/false | `resourceSubscriptions` **not** honored; no `listChanged` bits |
-| Legacy STDIO (`serveStdio`, 2025 opening) | `resources.subscribe` absent/false | no `resourceSubscriptions` honored; no `listChanged` bits |
+| Modern HTTP (`era=modern`, `requestInfo` set) | `server/discover` + `subscriptions/listen` | Discover: `tools.listChanged=false`, `resources.listChanged=false`, `prompts.listChanged=false`, `resources.subscribe=true`. Ack `honoredFilter`: `resourceSubscriptions` honored for the exact snapshot URI; all `listChanged` bits absent. |
+| Modern STDIO (`serveStdio`, no `requestInfo`) | `server/discover` + `subscriptions/listen` | Discover: `resources.subscribe` absent/false, all `listChanged=false`. Ack `honoredFilter`: `resourceSubscriptions` **not** honored; no `listChanged` bits. (Control-plane only — §5.6.) |
+| Legacy HTTP (`era=legacy`, stateless fallback) | `initialize` + legacy compatibility | Assert the 2025 `initialize` handshake succeeds, legacy capabilities are returned, and the applicable legacy compatibility behavior holds (§6.3). **No `server/discover` or listen-ack assertion.** |
+| Legacy STDIO (`serveStdio`, 2025 opening) | `initialize` + legacy compatibility | Assert the 2025 `initialize` opening succeeds, legacy capabilities are returned, and legacy compatibility behavior holds (§6.3). **No `server/discover` or listen-ack assertion.** |
 
-Assert both the discover response body and the ack's `honoredFilter` in `tests/mcp/subscriptions.test.ts` and `tests/mcp/http-integration.test.ts`; do not infer one from the other.
+Assert the discover response body and the ack's `honoredFilter` for the two **modern** combinations in `tests/mcp/subscriptions.test.ts` and `tests/mcp/http-integration.test.ts`; do not infer one from the other. Assert `initialize`/legacy behavior for the two **legacy** combinations in `tests/mcp/legacy-compat.test.ts` (§6.3).
 
 ### 5.4 Bridge lifecycle, bounds and errors
 
@@ -161,9 +164,13 @@ Implement a small independently testable helper, preferably `apps/api/src/mcp-no
 
 Configure existing handler options deliberately: `maxSubscriptions`, `keepAliveMs`, `maxRequestBodySize`, `onerror`. Reuse existing config conventions; do not add a settings framework. The SDK owns the actual bounds and protocol errors.
 
-**Explicit `maxSubscriptions` (do not inherit the SDK default of 1024):** select a conservative value from a measured synthetic-load run before wiring production startup. Starting budget for measurement: **64 concurrent listen streams** — a single local owner with a handful of MCP clients, not a public service. Justification: the deployment is one local application instance on a LAN with no application-level login; 64 is well above any realistic client count while bounding per-stream SSE buffers and fan-out cost. The value is a **starting hypothesis, not a final target**: confirm it with the §7.1 synthetic-load test and record the selected value plus its evidence in the implementation report. If measurements show the budget is unsafe, lower it; do not raise it without evidence. The SDK rejects a new listen beyond the bound in-band before the ack (`-32603` 'Subscription limit reached'), so the bound is observable in tests.
+**Explicit `maxSubscriptions` (do not inherit the SDK default of 1024):** select a conservative value from a measured synthetic-load run before wiring production startup. Starting budget for measurement: **64 concurrent listen streams** — a single local owner with a handful of MCP clients, not a public service. Justification: the deployment is one local application instance on a LAN with no application-level login; 64 is well above any realistic client count while bounding the number of open streams and total fan-out cost. The value is a **starting hypothesis, not a final target**: confirm it with the §7.1 synthetic-load test and record the selected value plus its evidence in the implementation report. If measurements show the budget is unsafe, lower it; do not raise it without evidence. The SDK rejects a new listen beyond the bound in-band before the ack (`-32603` 'Subscription limit reached'), so the bound is observable in tests.
+
+**Actual limitation of `maxSubscriptions` (verified in installed SDK v2.4.0 `listenRouter-*.mjs:164-170,182-189,223-246`):** it limits the **number of concurrent listen streams only**. It does **not** impose a per-stream queued-frame or byte limit. Each stream's `writeFrame` calls `controller.enqueue(...)` directly on the SSE `ReadableStream` with no explicit queue bound, byte cap, or backpressure policy; a subscription that stays open but stops reading can accumulate frames in the stream's internal queue. Do **not** claim that 64 (or any `maxSubscriptions` value) bounds per-stream SSE buffers or bytes. Document this limitation and the measured evidence; do not introduce a custom queue, byte cap, or event system speculatively. If a slow consumer proves harmful in the §7.1 slow-consumer test, record it as a risk for a separate, explicitly authorized decision rather than silently adding infrastructure.
 
 **Bounded fan-out / performance test (§7.1):** a measurable synthetic-load test opens N concurrent subscriptions (sweep up to the selected bound) and emits M canonical updates through the bridge. Record: subscriber count N, event count M, publish latency (min/mean/**p95**/max), error count, and resource usage (memory and event-loop/CPU if available). Assert no dropped notifications for subscribed clients, no notifications to unsubscribed clients, and that the p95 stays within a budget **derived from the measurement** — do not invent a latency target before measuring representative workloads. Document the selected budget and the evidence used to set it. This test also verifies that one bridge listener fans out to all streams without per-request subscriptions.
+
+**Slow-consumer test (§7.1, required):** hold one subscription open but stop reading its SSE stream while emitting a sustained series of canonical updates; measure queue growth (buffered frames/bytes if observable), memory, and the effect on other subscribers and on the publisher. Record the behavior as evidence for the limitation above. Do not assert a per-stream bound the SDK does not provide, and do not add a custom queue as a side effect of this test.
 
 **Notification storms:** one notification per canonical event initially; measure with the load test before introducing coalescing. Do not add a timer/debounce subsystem speculatively.
 
@@ -198,7 +205,7 @@ Therefore: M6-E tests modern `subscriptions/listen` **control-plane** behavior o
 1. Add the bridge helper and unit tests for mapping, idempotent unsubscribe, failure isolation and one-listener ownership.
 2. Wire it once in `apps/api/src/index.ts` after handler and source are available; retain the unsubscribe for shutdown.
 3. Configure bounded handler options and `onerror`.
-4. Set `resources.subscribe` only for modern HTTP-created servers; keep list-changed bits unset.
+4. Set `tools.listChanged: false`, `resources.listChanged: false` and `prompts.listChanged: false` explicitly, and set `resources.subscribe: true` only for modern HTTP-created servers (`ctx.era === "modern" && ctx.requestInfo`), per §5.3. Do not leave list-changed bits unset — the SDK defaults them to `true`.
 5. Preserve existing resources and cursor/feed contracts; do not redesign `LiveEventHub`.
 6. Add focused subscription tests (§7.1).
 7. Review startup/shutdown ordering and Stage G constraints before marking D complete.
@@ -219,7 +226,7 @@ Add `tests/mcp/http-integration.test.ts`, extending the `http-smoke.test.ts` pat
 - Verify read-after-notify: read the snapshot and assert its revision/state reflects the event; use `events/live` with a saved `resumeCursor` and assert the incremental event.
 - Verify multiple concurrent subscriptions are isolated (distinct filters/IDs); closing one must not suppress another.
 - Verify reconnect: close a listen stream, make another change, open a new stream, reuse the saved feed cursor. Do not expect MCP SSE `Last-Event-ID` replay; the feed cursor is the recovery mechanism.
-- **Explicit missed-event catch-up test (required):** disconnect the listen stream; mutate canonical state **while disconnected**; reconnect and receive `notifications/subscriptions/acknowledged`; produce **no later mutation**; assert that the immediate post-ack feed read (using the persisted `resumeCursor`) recovers the missed event without any further notification. This test fails if the client waits passively for the next notification, so it proves the §5.2 catch-up requirement. Also assert the race-safe first-connection checkpoint: an event landing between the initial snapshot read and the ack is recovered.
+- **Explicit missed-event catch-up test (required):** disconnect the listen stream; create **more than 100 canonical events while disconnected** (the feed's per-read bound — §5.2); reconnect and receive `notifications/subscriptions/acknowledged`; produce **no later mutation**; assert that the immediate post-ack catch-up **pages through `nextCursor` until the feed is exhausted** and recovers **every** missed event without any further notification. This test fails if the client reads only one page or waits passively for the next notification, so it proves the §5.2 catch-up requirement. Also assert the race-safe first-connection checkpoint: an event landing between the initial snapshot read and the ack is recovered, and `snapshot-required` recovery still works on an expired/previous-runtime cursor.
 - Verify expired/invalid/previous-runtime cursor returns `snapshot-required`, never a successful empty page.
 - Verify malformed modern envelopes/headers, unsupported methods, invalid and allowed Host/Origin, and CORS preflight including modern required headers. Retain the smoke test's negative Host check.
 - Verify client abort/cancellation and server-initiated shutdown. On deliberate `handler.close()`, an active listen stream closes with the graceful completion result (`closed === 'graceful'`), while an in-flight request is closed/aborted — assert both and do **not** expect the in-flight request to finish successfully (§5.4, §7.1).
@@ -268,9 +275,10 @@ No row is accepted because an in-process `handler.fetch` test passed when the ma
 
 | Test | Scope |
 |---|---|
-| New `tests/mcp/subscriptions.test.ts` | SDK handler + real client in-process: ack-first, honored filter, subscription ID, exact URI filtering, no unrequested notification, two clients/two subscriptions isolated, cancellation, graceful handler close, max subscriptions, no false list-changed capability. **Assert `server/discover` capabilities and listen-ack `honoredFilter` for all four transport/era combinations (§5.3 table).** |
+| New `tests/mcp/subscriptions.test.ts` | SDK handler + real client in-process: ack-first, honored filter, subscription ID, exact URI filtering, no unrequested notification, two clients/two subscriptions isolated, cancellation, graceful handler close, max subscriptions, no false list-changed capability. **Assert `server/discover` capabilities and listen-ack `honoredFilter` for the two modern combinations only (§5.3 table); legacy combinations are covered by `legacy-compat.test.ts` via `initialize`.** |
 | New `tests/mcp/notification-bridge.test.ts` (or focused API bridge test) | one `MarketDataService.subscribe()` listener; all `LiveChangeEvent` variants map to the stable URI; repeated start/stop safe; notifier failure contained and reported; canonical mutation still succeeds |
 | New bounded fan-out / load test (in `subscriptions.test.ts` or a dedicated file) | N concurrent subscriptions × M canonical updates; record N, M, publish latency (min/mean/**p95**/max), errors, memory/CPU; assert no dropped or misrouted notifications; derive and document the latency budget from measurements; verify the selected `maxSubscriptions` bound and its in-band rejection |
+| Slow-consumer test (§5.4, required) | hold one subscription open but stop reading its SSE stream while emitting a sustained series of updates; measure queue growth (buffered frames/bytes if observable), memory, and impact on other subscribers and the publisher; document the SDK's lack of a per-stream bound as evidence — do not assert a bound it does not provide or add a custom queue |
 | Shutdown lifecycle test | active listen stream receives graceful completion (`closed === 'graceful'`) on `handler.close()`; **in-flight request is closed/aborted, not completed successfully**; bridge unsubscribed only after `handler.close()`; no publish after teardown begins |
 | Existing `tests/market/notifications.test.ts`, `tests/mcp/event-feed.test.ts` | retain as source-level guarantees; extend only for missing cases |
 
@@ -283,7 +291,7 @@ These prove logic but do **not** replace M6-E's real HTTP listener test.
 | `tests/mcp/http-smoke.test.ts` | Keep as M6-A smoke; do not relabel as full M6-E acceptance |
 | New `tests/mcp/http-integration.test.ts` | Real listener, pinned real client, subscription/update/read-after-notify, concurrent clients, cancellation/reconnect, Host/Origin, shutdown |
 | Extended `tests/mcp/stdio-modern.test.ts` | Spawned process, modern discovery/capability/resource/tool access, listen ack/filter behavior, cancellation, clean teardown |
-| New `tests/mcp/legacy-compat.test.ts` (unless legacy explicitly rejected) | 2025 HTTP + STDIO compatibility, no modern/legacy leakage |
+| New `tests/mcp/legacy-compat.test.ts` (unless legacy explicitly rejected) | 2025 HTTP + STDIO `initialize` handshake, legacy capabilities and compatibility behavior, no modern/legacy leakage; no `server/discover` or listen-ack assertions (§5.3) |
 | `tests/mcp/conformance.test.ts` or explicit evidence map | Named assertion per C1–C21; reuse existing passing locations where mapping is unambiguous; do not duplicate merely to match a filename |
 | `docs/M6_E_LAN_ACCEPTANCE.md` | Executed second-device procedure and evidence, or explicitly recorded not-tested blocker |
 
@@ -308,9 +316,9 @@ Adjust focused names to actual files. Report local results separately from CI ev
 - [ ] One process-wide bridge subscribes to `MarketDataService`, not `LiveEventHub` or the per-request factory.
 - [ ] A modern HTTP client subscribes to the stable snapshot URI and receives the correct `resources/updated` notification after canonical changes.
 - [ ] Ack-first, exact filter semantics, subscription ID, concurrent subscriptions, cancellation, graceful close and bounded subscription behavior are proven.
-- [ ] Capabilities are explicitly initialized before registration (`tools/resources/prompts.listChanged: false`; `resources.subscribe` only modern HTTP); `server/discover` and listen-ack assertions pass for all four transport/era combinations (§5.3).
-- [ ] The client reads the updated snapshot and uses the existing live feed cursor for incremental replay/recovery; an immediate post-ack catch-up recovers events missed while disconnected, with the race-safe first-connection checkpoint (§5.2) and its explicit test (§6.1).
-- [ ] Bounded fan-out is measured (N, M, p95 latency, errors, resource usage); an explicit `maxSubscriptions` value and its evidence-based latency budget are documented (§5.4).
+- [ ] Capabilities are explicitly initialized before registration (`tools/resources/prompts.listChanged: false`; `resources.subscribe` only modern HTTP); `server/discover` and listen-ack assertions pass for the two modern combinations, and `initialize`/legacy assertions for the two legacy combinations (§5.3).
+- [ ] The client reads the updated snapshot and uses the existing live feed cursor for incremental replay/recovery; an immediate post-ack catch-up **pages through `nextCursor` until exhausted** and recovers every event missed while disconnected (including >100 events), with the race-safe first-connection checkpoint and `snapshot-required` recovery (§5.2, §6.1).
+- [ ] Bounded fan-out is measured (N, M, p95 latency, errors, resource usage); an explicit `maxSubscriptions` value and its evidence-based latency budget are documented. The slow-consumer test records the SDK's lack of a per-stream frame/byte bound; no custom queue is added (§5.4, §7.1).
 - [ ] Shutdown test distinguishes graceful listen-stream completion from in-flight exchange closure; no promise that in-flight requests finish successfully (§5.4, §7.1).
 - [ ] Notification delivery failures cannot change data-operation outcomes or corrupt canonical state.
 - [ ] No custom protocol/SSE implementation, migration, dependency, provider activation or unsupported capability advertisement.
@@ -342,10 +350,11 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 
 | Risk/decision | Handling |
 |---|---|
-| SDK capability mismatch | Advertise `resources.subscribe` only where a working source/publisher exists; assert `server/discover` separately per transport/era (§5.3) |
-| SDK `listChanged` defaults to `true` | Initialize `tools/resources/prompts.listChanged: false` explicitly in the constructor before `register*`; assert all four transport/era combinations (§5.3) |
-| Missed events while disconnected | Immediate post-ack feed catch-up with persisted cursor and race-safe first-connection checkpoint; explicit disconnect/mutate/reconnect/no-later-mutation test (§5.2, §6.1) |
+| SDK capability mismatch | Advertise `resources.subscribe` only where a working source/publisher exists; assert `server/discover`/listen-ack on modern connections and `initialize`/legacy behavior on legacy connections (§5.3) |
+| SDK `listChanged` defaults to `true` | Initialize `tools/resources/prompts.listChanged: false` explicitly in the constructor before `register*`; assert modern combinations via `server/discover`/listen-ack and legacy combinations via `initialize` (§5.3) |
+| Missed events while disconnected | Immediate post-ack feed catch-up paging through `nextCursor` until exhausted (>100 events), persisted cursor, race-safe first-connection checkpoint; explicit disconnect/mutate/reconnect/no-later-mutation test (§5.2, §6.1) |
 | Unbounded fan-out / latency | Measured synthetic-load test with p95; explicit evidence-based `maxSubscriptions` and latency budget (§5.4) |
+| Slow consumer / per-stream queue | `maxSubscriptions` bounds stream count only, not per-stream frames/bytes; slow-consumer test measures queue growth and impact; document the limitation, add no custom queue (§5.4, §7.1) |
 | Event source duplication | Bridge from `MarketDataService.subscribe()` exactly once; `LiveEventHub` stays feed/replay consumer |
 | Resource URI mismatch | Publish only the exact stable URI `markethub://market/snapshot`; SDK resource filtering is exact |
 | Notification storms | One notification per canonical event initially; measure before coalescing; no speculative debounce |
@@ -377,7 +386,7 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 ## 11. Implementation order
 
 1. **Baseline/entry review:** confirm current `develop`, M6-C closure, M6-B4 status, dependencies and official versions.
-2. **D contract test first:** write tests against official SDK listen behavior with an in-memory `MarketDataService` and real SDK client; lock the stable URI, filter behavior, and the four transport/era capability/ack combinations (§5.3) before wiring production startup.
+2. **D contract test first:** write tests against official SDK listen behavior with an in-memory `MarketDataService` and real SDK client; lock the stable URI, filter behavior, and the modern capability/ack combinations plus legacy `initialize` behavior (§5.3) before wiring production startup.
 3. **D bridge helper:** implement the one-listener mapping, catch/report failures, unsubscribe lifecycle.
 4. **D composition/capabilities:** initialize `listChanged: false` and conditional `resources.subscribe` explicitly in the constructor before registration; wire the process-wide bridge; measure bounded fan-out to select `maxSubscriptions` and the latency budget; implement the immediate post-ack catch-up; adjust shutdown ordering per §5.4.
 5. **D closeout:** focused suite, review changed files, no activity schema/migration/provider changes; pass §8.1.
