@@ -1,9 +1,26 @@
 # M6-C — Durable MCP Activity History and WebUI Inspection
 
-> **Document status:** Reviewed implementation plan; not an implementation authorization.
-> **Repository baseline:** `Rajendertyagi/MarketHubTS`, branch `develop`, HEAD `490cbaa79c3a06ae2f34d44f951327d5607c3a32` (20 November 2026).
-> **Current implementation state:** M6-A and M6-B1/B2/B3 are present. **M6-C is implemented and published on `develop` at `fbca177`** (durable activity history, recording wrapper, activity endpoints, retention integration and WebUI inspection). This document is the authoritative M6-C plan.
+> **Document status:** Authoritative M6-C plan **and accepted phase-closure record** (§0). Not an implementation authorization.
+> **Repository baseline:** `Rajendertyagi/MarketHubTS`, branch `develop`, HEAD `32b034a38e9c0db134de13b9b51a9e12d1ffdee7` (21 November 2026).
+> **Current implementation state:** M6-A and M6-B1/B2/B3 are present. **M6-C is ACCEPTED and CLOSED at `32b034a38e9c0db134de13b9b51a9e12d1ffdee7`** (durable activity history, recording wrapper, activity endpoints, retention integration and WebUI inspection, plus four reviewed fix-forward commits). This document is the authoritative M6-C plan and acceptance record.
 > **Governing documents:** `docs/M6_PLAN.md` §§9.1, 9.1.1, 9.2, 10 and 13; `docs/MCP_INTERFACE.md`; `docs/PROJECT_MANAGER_PROTOCOL.md`; `docs/ENGINEERING_STANDARDS.md`.
+
+## 0. Phase acceptance record (M6-C closed)
+
+**Decision:** M6-C is accepted for phase closure. **Acceptance date:** 21 November 2026.
+
+| Item | Record |
+|---|---|
+| Final reviewed commit | [`32b034a38e9c0db134de13b9b51a9e12d1ffdee7`](https://github.com/Rajendertyagi/MarketHubTS/commit/32b034a38e9c0db134de13b9b51a9e12d1ffdee7) — `develop` HEAD, equal to `origin/develop` at acceptance |
+| Identified baseline | `5154ec9b955ae638420a1ca8f0702be0cfa18ef8` (the commit under independent review that produced the four findings) |
+| Fix-forward commits (4) | `5cb971e` (comprehensive sanitization, bounded streaming reads, complete result refs, isolated diagnostics); `4f978d5` (camelCase/env-prefix credentials, read-path re-sanitization, full ref validation, UI details/tests); `8774ca0` (`appSecret`, unified STDIO sanitizer, legacy summary value sanitization, panel interaction tests); `32b034a` (numeric exemption scoped to error/status prose, multi-segment env prefixes) |
+| Final independent review | **CLEAN — no outstanding findings.** The final review of `32b034a` closed the last sanitizer finding (short numeric credentials and multi-segment environment prefixes). Each earlier review round was likewise closed before the next commit. |
+| Cumulative scope | 16 files across the four commits, all within M6-C (activity routes, MCP activity wrapper, contracts, database projection, WebUI panels, and their tests). No M6-D/E, B4, Stage G, migration, dependency, or lockfile changes. |
+| Verification (agent-reported) | The implementing agent reported **732 passing tests**, successful `bun run typecheck`, successful `bun run build`, and a clean `git diff --check` at the final commit. Focused suites were also reported green. |
+| Verification limitation | These execution results are **agent-reported**, not independently executed by the reviewer. GitHub showed **no workflow runs and no commit status checks** for any of the four SHAs; they must not be represented as independently verified CI results. The acceptance decision rests on the final independent source/diff review plus these reported local results. |
+| Acceptance authority | The independent GitHub review of `32b034a` is the acceptance gate. This record documents that decision; it does not re-run or re-claim the verification. |
+
+M6-C is closed. M6-D and M6-E remain **planned, not implemented**; see [`M6_D_PLAN.md`](M6_D_PLAN.md) and [`M6_E_PLAN.md`](M6_E_PLAN.md).
 
 ## 1. Objective
 

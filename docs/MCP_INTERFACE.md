@@ -1,7 +1,7 @@
 # MCP Interface
 
-> **Status:** Confirmed requirements + established direction. Current implementation includes M6-A (Streamable HTTP at `/mcp` + retained STDIO, shared factory), M6-B1 (catalog-search and event-feed read seams with runtime-scoped cursors) and M6-B2 (nine tools over both transports). Resources/prompts and snapshot pagination (B3) are implemented and published on `develop` at `0d58bbb`; activity history (M6-C) is implemented and published at `fbca177`; subscriptions/notifications (M6-D) remain pending. Official MCP 2026-07-28 / SDK 2.4.0 research is complete (2026-11-19) and recorded below and in [REFERENCES.md](REFERENCES.md) §8; the governing plan is [M6_PLAN.md](M6_PLAN.md). Items still marked **(verify)** are implementation-time details, not unresolved product scope.
-> **Last updated:** 2026-11-20 (current-state reconciliation; no behavior change)
+> **Status:** Confirmed requirements + established direction. Current implementation includes M6-A (Streamable HTTP at `/mcp` + retained STDIO, shared factory), M6-B1 (catalog-search and event-feed read seams with runtime-scoped cursors) and M6-B2 (nine tools over both transports). Resources/prompts and snapshot pagination (B3) are implemented and published on `develop` at `0d58bbb`; activity history (M6-C) is accepted and closed at `32b034a`; subscriptions/notifications (M6-D) remain pending. Official MCP 2026-07-28 / SDK 2.4.0 research is complete (2026-11-19) and recorded below and in [REFERENCES.md](REFERENCES.md) §8; the governing plan is [M6_PLAN.md](M6_PLAN.md). Items still marked **(verify)** are implementation-time details, not unresolved product scope.
+> **Last updated:** 2026-11-21 (M6-C acceptance recorded; current-state reconciliation; no behavior change)
 > **Related:** [ARCHITECTURE.md](ARCHITECTURE.md), [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [REFERENCES.md](REFERENCES.md), [M6_PLAN.md](M6_PLAN.md)
 
 ## 1. Role and principles
@@ -22,7 +22,7 @@
 | Seams (M6-B1) | Bounded catalog search and event-feed read with runtime-scoped cursors and always-present `resumeCursor`; HTTP endpoints `GET /api/catalog/search` and `GET /api/market/events` |
 | Behavior | HTTP uses injected services directly; STDIO is a thin local-API client; one canonical service foundation, no duplicate market logic; stdout reserved for protocol on STDIO |
 
-**Not implemented yet:** `subscriptions/listen`/SSE notifications and event bridge (M6-D), broad conformance/parity and LAN acceptance (M6-E), watchlists/alerts/scanners tools (M7), auth beyond local deployment model. Resources/prompts/cache hints (M6-B3) and activity history/WebUI inspection (M6-C) are implemented and published on `develop`. **Streamable HTTP is a mandatory M6 deliverable (M6-A/M6-D/M6-E), not optional or deferrable** — see §3 and [M6_PLAN.md](M6_PLAN.md) §1/§10/§12.
+**Not implemented yet:** `subscriptions/listen`/SSE notifications and event bridge (M6-D), broad conformance/parity and LAN acceptance (M6-E), watchlists/alerts/scanners tools (M7), auth beyond local deployment model. Resources/prompts/cache hints (M6-B3) are implemented and published on `develop`; activity history/WebUI inspection (M6-C) is accepted and closed at `32b034a`. **Streamable HTTP is a mandatory M6 deliverable (M6-A/M6-D/M6-E), not optional or deferrable** — see §3 and [M6_PLAN.md](M6_PLAN.md) §1/§10/§12.
 
 ## 3. Transport requirements (confirmed requirements + verified protocol behavior)
 
