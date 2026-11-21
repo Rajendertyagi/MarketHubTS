@@ -11,6 +11,8 @@ import { buildMcpAllowlists, validateMcpRequest } from "../../apps/api/src/mcp-r
 
 const PROTOCOL = "2026-07-28";
 const SNAPSHOT_URI = "markethub://market/snapshot";
+const PRIVATE_LAN_IP = "192.168.50.10";
+const TEST_PORT = 31337;
 const HEALTH = healthStatusSchema.parse({
   status: "ok", service: "markethub-api", timestamp: "2026-01-01T00:00:00.000Z",
   version: "0.1.0", checks: { api: "ok", database: "ok" }
@@ -37,7 +39,8 @@ async function readJson(client: Client, uri: string): Promise<Record<string, unk
  * No second device, no listener, no socket, no Bun.serve, no temp DB, no CLI and
  * no external dependency. It drives the official MCP client through a mocked
  * `fetch` against the real handler, with an in-memory canonical source and the
- * real notification bridge. It also exercises the production Host/Origin helper.
+ * real notification bridge. It also exercises the production Host/Origin helper
+ * with an explicit private-LAN address (no real network access).
  *
  * This is a mocked simulation. It does NOT verify physical LAN reachability,
  * which is outside the revised M6 scope (user-approved scope change). It does
@@ -45,6 +48,8 @@ async function readJson(client: Client, uri: string): Promise<Record<string, unk
  */
 describe("M6-E LAN simulation (in-process, no listener)", () => {
   test("composed discovery, capabilities, subscription, notification, read-after-notify and Host/Origin", async () => {
+    resetConfigCache();
+
     // In-memory canonical source + feed + bridge — no database, no network.
     const service = new MarketDataService({
       now: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -89,12 +94,15 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
       { name: "m6e-lan-simulation", version: "1.0.0" },
       { versionNegotiation: { mode: { pin: PROTOCOL } } }
     );
-    await client.connect(new StreamableHTTPClientTransport(new URL("http://simulation.local/mcp"), {
-      fetch: (url, init) => handler.fetch(new Request(url, init))
-    }));
-
     let subscription: Awaited<ReturnType<Client["listen"]>> | null = null;
+
+    // Everything after resource creation is inside try/finally so a failed
+    // connect or any failed assertion still tears down all resources.
     try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("http://simulation.local/mcp"), {
+        fetch: (url, init) => handler.fetch(new Request(url, init))
+      }));
+
       // 1. Modern protocol discovery and version.
       const discovery = await client.discover();
       expect(client.getNegotiatedProtocolVersion()).toBe(PROTOCOL);
@@ -155,21 +163,35 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
       expect(Array.isArray(next.events)).toBe(true);
       expect((next.events as unknown[]).length).toBe(0); // no replay after the checkpoint
 
-      // 10. Valid and invalid Host/Origin through the existing production helper.
-      resetConfigCache();
-      const config = loadConfig({ env: { MARKETHUB_LAN: "true", MARKETHUB_HOST: "127.0.0.1" } });
+      // 10. Private-LAN allowlist through the production helpers (no real network).
+      // LAN mode + an explicit private IPv4 must be admitted by buildMcpAllowlists;
+      // validateMcpRequest must accept that Host/Origin and reject unapproved ones.
+      const config = loadConfig({
+        env: { MARKETHUB_LAN: "true", MARKETHUB_HOST: PRIVATE_LAN_IP }
+      });
       const allowlists = buildMcpAllowlists(config);
+      expect(allowlists.allowedHostnames).toContain(PRIVATE_LAN_IP);
+      expect(allowlists.allowedOrigins).toContain(PRIVATE_LAN_IP);
+
       const request = (headers: Record<string, string>) =>
         new Request("http://simulation.local/mcp", { headers });
-      expect(validateMcpRequest(request({ Host: "127.0.0.1:31337", Origin: "http://127.0.0.1" }), allowlists)).toBeUndefined();
-      expect(validateMcpRequest(request({ Host: "evil.example:31337" }), allowlists)?.status).toBe(403);
-      expect(validateMcpRequest(request({ Host: "127.0.0.1:31337", Origin: "http://evil.example" }), allowlists)?.status).toBe(403);
+      expect(validateMcpRequest(request({
+        Host: `${PRIVATE_LAN_IP}:${TEST_PORT}`, Origin: `http://${PRIVATE_LAN_IP}`
+      }), allowlists)).toBeUndefined();
+      expect(validateMcpRequest(request({
+        Host: `evil.example:${TEST_PORT}`
+      }), allowlists)?.status).toBe(403);
+      expect(validateMcpRequest(request({
+        Host: `${PRIVATE_LAN_IP}:${TEST_PORT}`, Origin: "http://evil.example"
+      }), allowlists)?.status).toBe(403);
     } finally {
-      if (subscription) await subscription.close();
-      await client.close();
-      await handler.close();
+      // Each teardown step is independent so one failure cannot skip the rest.
+      try { if (subscription) await subscription.close(); } catch { /* best effort */ }
+      try { await client.close(); } catch { /* best effort */ }
+      try { await handler.close(); } catch { /* best effort */ }
       bridge.stop();
       hub.stop();
+      resetConfigCache();
     }
   });
 });
