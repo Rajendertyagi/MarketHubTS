@@ -128,6 +128,11 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       const feedBody = JSON.parse(feed.contents[0]!.text) as { events: unknown[]; resumeCursor: string };
       expect(feedBody.events.length).toBeGreaterThanOrEqual(1);
       expect(typeof feedBody.resumeCursor).toBe("string");
+      // Incremental read using the saved cursor (not a fresh bootstrap).
+      const incremental = await c1.readResource({ uri: `markethub://events/live?after=${feedBody.resumeCursor}&limit=100` });
+      const incrementalBody = JSON.parse(incremental.contents[0]!.text) as { events: unknown[]; resumeCursor: string };
+      expect(Array.isArray(incrementalBody.events)).toBe(true);
+      expect(typeof incrementalBody.resumeCursor).toBe("string");
 
       await sub.close();
     } finally {
@@ -138,6 +143,141 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       if (server) await server.stop(true);
       closeDatabaseHandle(h.db);
       removeTempDir(h.dir);
+    }
+  });
+
+  test("missed-event catch-up: >100 events while disconnected, reconnect, page through nextCursor", async () => {
+    const h = makeHarness(); // replayMaxEvents=1000 retains the whole workload
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let client: Client | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+      client = await connect(url, "catchup");
+
+      const sub1 = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      await sub1.close(); // disconnect
+
+      // Create 150 events while disconnected (feed per-read bound is 100).
+      for (let i = 1; i <= 150; i++) h.service.track(`CATCHUP-${i}`);
+      // Confirm the hub retained the whole workload (otherwise this becomes an expiry test).
+      const probe = h.hub.readAfter(undefined, 100);
+      expect(probe.outcome).toBe("page");
+      if (probe.outcome === "page") expect(probe.events.length).toBe(100);
+
+      // Reconnect: new listen stream, ack, then immediate catch-up with NO later mutation.
+      const sub2 = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      expect(sub2.honoredFilter.resourceSubscriptions).toEqual([SNAPSHOT_URI]);
+
+      const seen: number[] = [];
+      let after = "first";
+      for (;;) {
+        const res = await client.readResource({ uri: `markethub://events/live?after=${after}&limit=100` });
+        const body = JSON.parse(res.contents[0]!.text) as { events: Array<{ data: { revision: number } }>; nextCursor: string | null; resumeCursor: string };
+        for (const ev of body.events) seen.push(ev.data.revision);
+        if (body.nextCursor === null) break;
+        after = body.nextCursor;
+      }
+      expect(seen.length).toBe(150);
+      expect(seen[0]).toBe(1);
+      expect(seen[149]).toBe(150);
+      await sub2.close();
+    } finally {
+      if (client) await client.close();
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
+      if (server) await server.stop(true);
+      closeDatabaseHandle(h.db); removeTempDir(h.dir);
+    }
+  });
+
+  test("reconnect reuses the saved feed cursor and recovers a missed event", async () => {
+    const h = makeHarness();
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let client: Client | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+      client = await connect(url, "reconnect");
+      const sub1 = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      const first = await client.readResource({ uri: "markethub://events/live?after=first&limit=100" });
+      const firstBody = JSON.parse(first.contents[0]!.text) as { resumeCursor: string };
+      await sub1.close();
+
+      h.service.track("MISSED-1"); // mutate while disconnected
+      const sub2 = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      const res = await client.readResource({ uri: `markethub://events/live?after=${firstBody.resumeCursor}&limit=100` });
+      const body = JSON.parse(res.contents[0]!.text) as { events: unknown[] };
+      expect(body.events.length).toBeGreaterThanOrEqual(1);
+      await sub2.close();
+    } finally {
+      if (client) await client.close();
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
+      if (server) await server.stop(true);
+      closeDatabaseHandle(h.db); removeTempDir(h.dir);
+    }
+  });
+
+  test("two concurrent subscriptions with distinct filters are isolated", async () => {
+    const h = makeHarness();
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let client: Client | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+      client = await connect(url, "multi-sub");
+      let snapCount = 0;
+      client.setNotificationHandler("notifications/resources/updated", () => { snapCount++; });
+      const subA = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      const subB = await client.listen({ resourceSubscriptions: ["markethub://other/resource"] });
+      expect(subA.honoredFilter.resourceSubscriptions).toEqual([SNAPSHOT_URI]);
+      expect(subB.honoredFilter.resourceSubscriptions).toEqual(["markethub://other/resource"]);
+      h.service.track("MULTI-1");
+      const deadline = Date.now() + 2000;
+      while (snapCount < 1 && Date.now() < deadline) await Bun.sleep(5);
+      expect(snapCount).toBe(1); // only subA's URI matched
+      await subA.close();
+      await subB.close();
+    } finally {
+      if (client) await client.close();
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
+      if (server) await server.stop(true);
+      closeDatabaseHandle(h.db); removeTempDir(h.dir);
+    }
+  });
+
+  test("malformed modern headers and unsupported methods are rejected", async () => {
+    const h = makeHarness();
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+      // Missing required modern headers on a modern-enveloped request.
+      const bad = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/list",
+          params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } }
+        })
+      });
+      expect(bad.status).toBe(400);
+      // Unsupported method on a valid modern request.
+      const unknown = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "no/such/method"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 2, method: "no/such/method",
+          params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } }
+        })
+      });
+      expect([400, 404]).toContain(unknown.status);
+    } finally {
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
+      if (server) await server.stop(true);
+      closeDatabaseHandle(h.db); removeTempDir(h.dir);
     }
   });
 

@@ -48,55 +48,58 @@ class FeedSyncClient {
 
   /** Full §5.2 sync: bootstrap/continue, validate continuity, apply, persist atomically. */
   async sync(): Promise<void> {
-    const after = this.checkpoint?.resumeCursor ?? "first";
+    let after = this.checkpoint?.resumeCursor ?? "first";
     let body = await this.readFeed(after);
     if ("snapshotRequired" in body) {
       await this.adoptSnapshot();
       this.lastFeedRevision = null;
       this.checkpoint = null;
-      body = await this.readFeed("first");
+      after = "first";
+      body = await this.readFeed(after);
       if ("snapshotRequired" in body) { this.recoveryFailure = true; return; }
     }
 
-    // Serialized pagination loop.
     let page: FeedPage = body as FeedPage;
+    let retried = false;
+
     // No-cursor bootstrap: snapshot boundary check. The first event newer than
     // the adopted snapshot must be R+1; if the oldest retained event is already
     // beyond that, a gap exists and must not be silently advanced past.
     if (after === "first" && page.events.length > 0) {
       const firstNewer = page.events.find((e) => e.data.revision > this.snapshotRevision);
       if (firstNewer && firstNewer.data.revision !== this.snapshotRevision + 1) {
+        if (retried) { this.recoveryFailure = true; return; }
+        retried = true;
         await this.adoptSnapshot();
         this.lastFeedRevision = null;
         this.checkpoint = null;
         const retry = await this.readFeed("first");
-        if ("snapshotRequired" in retry || (retry.events.find((e) => e.data.revision > this.snapshotRevision)?.data.revision !== this.snapshotRevision + 1)) {
-          this.recoveryFailure = true;
-          return;
-        }
-        page = retry;
+        if ("snapshotRequired" in retry) { this.recoveryFailure = true; return; }
+        page = retry as FeedPage;
       }
     }
-    for (;;) {
+
+    // Serialized pagination loop. A labeled restart ensures a gap never falls
+    // through to checkpoint persistence with a null revision.
+    outer: for (;;) {
       for (const ev of page.events) {
         const rev = ev.data.revision;
         if (this.lastFeedRevision !== null && rev !== this.lastFeedRevision + 1) {
-          // Gap: do not persist, re-baseline and retry once.
+          if (retried) { this.recoveryFailure = true; return; }
+          retried = true;
+          // Gap: do NOT persist; re-baseline and restart from after=first.
           await this.adoptSnapshot();
           this.lastFeedRevision = null;
           this.checkpoint = null;
           const retry = await this.readFeed("first");
-          if ("snapshotRequired" in retry || retry.events.some((e, i) => i > 0 && e.data.revision !== retry.events[i - 1]!.data.revision + 1)) {
-            this.recoveryFailure = true;
-            return;
-          }
-          page = retry;
-          break;
+          if ("snapshotRequired" in retry) { this.recoveryFailure = true; return; }
+          page = retry as FeedPage;
+          continue outer; // fully consume the retry page before any persistence
         }
         this.lastFeedRevision = rev;
         if (rev > this.snapshotRevision) this.applied.push(rev);
       }
-      // Persist checkpoint atomically after the whole page is consumed.
+      // Persist checkpoint atomically only after the whole page is consumed.
       if (page.events.length > 0) {
         this.checkpoint = { resumeCursor: page.resumeCursor, lastFeedRevision: this.lastFeedRevision! };
       } else if (this.lastFeedRevision === null) {
@@ -240,8 +243,34 @@ describe("M6-D feed synchronization over the wire interface", () => {
       emit(service, 5); // revisions 1..5, only last 3 retained (3,4,5)
       await sync.sync();
       // First retained event is 3, but snapshot boundary expects 1 -> gap.
-      expect(sync.recoveryFailure).toBe(true);
-      expect(sync.checkpoint).toBeNull();
+      // The client must re-baseline from the current snapshot (revision 5) and
+      // retry; retained events 3..5 are then all <= R, so recovery succeeds
+      // without silently advancing past the gap.
+      expect(sync.snapshotRevision).toBe(5);
+      expect(sync.recoveryFailure).toBe(false);
+      expect(sync.checkpoint).not.toBeNull();
+      expect(sync.checkpoint!.lastFeedRevision).toBe(5);
+    } finally {
+      await client.close(); await handler.close(); hub.stop();
+    }
+  });
+
+  test("mid-page value-cursor gap re-bootstraps without persisting an inconsistent checkpoint", async () => {
+    const { service, hub, handler } = makeHarness({ replayMaxEvents: 1000 });
+    const client = await connect(handler);
+    try {
+      emit(service, 10); // revisions 1..10
+      const sync = new FeedSyncClient(client);
+      await sync.adoptSnapshot(); // R = 10
+      // Simulate a stale feed position: lastFeedRevision=5 but no valid cursor,
+      // so the first consumed event (1) is not lastFeedRevision+1 (6).
+      sync.lastFeedRevision = 5;
+      await sync.sync();
+      expect(sync.recoveryFailure).toBe(false);
+      // After re-bootstrap the checkpoint must be consistent (no null revision).
+      expect(sync.checkpoint).not.toBeNull();
+      expect(typeof sync.checkpoint!.lastFeedRevision).toBe("number");
+      expect(sync.checkpoint!.lastFeedRevision).toBe(10);
     } finally {
       await client.close(); await handler.close(); hub.stop();
     }

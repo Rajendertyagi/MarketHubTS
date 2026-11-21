@@ -153,6 +153,27 @@ describe("M6-D subscriptions (modern HTTP, in-process)", () => {
     }
   });
 
+  test("handler.close() aborts an in-flight request (not completed successfully)", async () => {
+    let release: (() => void) | null = null;
+    const blocking = new Promise<void>((resolve) => { release = resolve; });
+    const services = makeServices();
+    services.getHealth = async () => { await blocking; return { ok: true, value: HEALTH }; };
+    const handler = createMcpHandler((ctx) => createMcpServer(ctx, services));
+    const client = await connect(handler);
+    try {
+      const call = client.callTool({ name: "markethub_health", arguments: {} });
+      await Bun.sleep(10); // let the request reach the blocking service
+      const closePromise = handler.close();
+      let rejected = false;
+      try { await call; } catch { rejected = true; }
+      expect(rejected).toBe(true); // aborted, not a successful result
+      await closePromise;
+      release?.();
+    } finally {
+      await client.close();
+    }
+  });
+
   test("handler.close() completes an active listen stream gracefully", async () => {
     const handler = makeHandler();
     const client = await connect(handler);

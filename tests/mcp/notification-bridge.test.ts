@@ -28,6 +28,16 @@ describe("M6-D notification bridge", () => {
     bridge.stop();
   });
 
+  test("provider-connection-changed also maps to the snapshot URI", () => {
+    const service = makeService();
+    const published: string[] = [];
+    const bridge = createMcpNotificationBridge(service, { resourceUpdated: (uri) => published.push(uri) });
+    bridge.start();
+    service.setProviderConnection("UPSTOX", "CONNECTED");
+    expect(published).toEqual([MARKET_SNAPSHOT_URI]);
+    bridge.stop();
+  });
+
   test("stop is idempotent and detaches the listener", () => {
     const service = makeService();
     const published: string[] = [];
