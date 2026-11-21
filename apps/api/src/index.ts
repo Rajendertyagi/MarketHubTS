@@ -12,6 +12,7 @@ import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
 import { createHttpMcpServices } from "./mcp-services";
+import { createMcpNotificationBridge, type McpNotificationBridge } from "./mcp-notification-bridge";
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
@@ -25,6 +26,16 @@ let db: DatabaseHandle | null = null;
 let hub: LiveEventHub | null = null;
 let coordinator: SubscriptionCoordinator | null = null;
 let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
+let notificationBridge: McpNotificationBridge | null = null;
+
+// M6-D: deliberate handler bounds. maxSubscriptions is a conservative 64 (a
+// single local owner with a handful of MCP clients, not a public service),
+// confirmed by the synthetic fan-out test. These bound stream count and request
+// size; the SDK does not impose a per-stream frame/byte cap (documented in the
+// M6-D/E plan). No new settings framework is introduced.
+const MCP_MAX_SUBSCRIPTIONS = 64;
+const MCP_KEEP_ALIVE_MS = 15_000;
+const MCP_MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
 
 
 async function main() {
@@ -128,8 +139,27 @@ async function main() {
       (error) => logger.warn("mcp_activity_write_failed", {
         message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
       })
-    ))
+    )),
+    {
+      maxSubscriptions: MCP_MAX_SUBSCRIPTIONS,
+      keepAliveMs: MCP_KEEP_ALIVE_MS,
+      maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES,
+      onerror: (error) => logger.warn("mcp_handler_error", {
+        message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
+      })
+    }
   );
+
+  // M6-D: one process-lifetime bridge from the canonical live-change source to
+  // the handler's notifier. Never created per request or per subscription.
+  notificationBridge = createMcpNotificationBridge(
+    service,
+    mcpHandler.notify,
+    (error) => logger.warn("mcp_notification_publish_failed", {
+      message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
+    })
+  );
+  notificationBridge.start();
 
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
@@ -145,9 +175,10 @@ async function main() {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "server", message });
     try { coordinator?.stop(); } catch {}
-    try { hub?.stop(); } catch {}
-    // Close the MCP handler before the DB so no handler outlives its database.
+    // Close the MCP handler before detaching the bridge or closing the DB.
     try { if (mcpHandler) await mcpHandler.close(); } catch {}
+    try { notificationBridge?.stop(); } catch {}
+    try { hub?.stop(); } catch {}
     try { db?.close(); } catch {}
     process.exitCode = 1;
     return;
@@ -163,16 +194,22 @@ async function main() {
       try { coordinator?.stop(); } catch (error) {
         logger.warn("coordinator_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
+      // M6-D shutdown order: keep the handler alive until close() so active
+      // listen streams receive graceful completion, then detach the bridge so
+      // no publish races teardown, then stop the hub/server/DB.
+      // 2) close the MCP handler (graceful listen completion, then abort in-flight).
+      try { if (mcpHandler) await mcpHandler.close(); } catch (error) {
+        logger.warn("mcp_handler_close_error", { message: error instanceof Error ? error.message : String(error) });
+      }
+      // 3) unsubscribe the bridge after the handler is closed.
+      try { notificationBridge?.stop(); } catch (error) {
+        logger.warn("mcp_notification_bridge_stop_error", { message: error instanceof Error ? error.message : String(error) });
+      }
       // 4) stop hub timers and clients before the HTTP server and DB close.
       try { hub?.stop(); } catch (error) {
         logger.warn("hub_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }
-      // 5) close the MCP handler and its in-flight exchanges before the HTTP
-      // server and DB go away - no MCP handler may outlive its database.
-      try { if (mcpHandler) await mcpHandler.close(); } catch (error) {
-        logger.warn("mcp_handler_close_error", { message: error instanceof Error ? error.message : String(error) });
-      }
-      // 6) close HTTP server; 7) close/checkpoint DB.
+      // 5) close HTTP server; 6) close/checkpoint DB.
       try { if (server) await server.stop(true); } catch (error) {
         logger.warn("server_stop_error", { message: error instanceof Error ? error.message : String(error) });
       }

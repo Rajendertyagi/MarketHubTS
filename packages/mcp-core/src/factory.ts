@@ -14,9 +14,20 @@ export function createMcpServer(ctx: McpRequestContext, services: McpServices): 
   // M6-C: requestInfo is set only for HTTP requests by the installed SDK;
   // serveStdio never sets it. No activity rows are created during construction.
   const transport = ctx.requestInfo ? "HTTP" : "STDIO";
+  // M6-D: initialize capabilities explicitly before register* runs. The SDK's
+  // register helpers default listChanged to `true` when absent, so leaving these
+  // unset would advertise false list-change support. resources.subscribe is
+  // enabled only for modern HTTP (where the process-wide bridge is active);
+  // legacy HTTP and all STDIO contexts must not claim live resource updates.
+  const subscribe = ctx.era === "modern" && ctx.requestInfo !== undefined;
   const server = new McpServer(
     { name: "markethubts", version: "0.1.0" },
     {
+      capabilities: {
+        tools: { listChanged: false },
+        resources: { listChanged: false, subscribe },
+        prompts: { listChanged: false }
+      },
       cacheHints: {
         "server/discover":          { ttlMs: 0, cacheScope: "private" },
         "tools/list":               { ttlMs: 0, cacheScope: "private" },
