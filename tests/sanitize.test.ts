@@ -92,6 +92,25 @@ describe("M6-C Finding 1 — comprehensive credential sanitization", () => {
     expect(sanitizeSensitiveText("HTTP status code: 401")).toBe("HTTP status code: 401");
   });
 
+  test("redacts short numeric values for credential fields (numeric exemption is prose-only)", () => {
+    for (const raw of ["appSecret=12345", "client_secret=12345", "token=12345", "code=12345"]) {
+      expect(sanitizeSensitiveText(raw), raw).not.toContain("12345");
+      expect(sanitizeSensitiveText(raw), raw).toContain("[redacted]");
+    }
+    // The prose exemption still holds for the same short numeric value.
+    expect(sanitizeSensitiveText("error code: 500")).toBe("error code: 500");
+  });
+
+  test("redacts multi-segment environment-variable credential names", () => {
+    for (const raw of [
+      "MARKETHUB_FYERS_APP_SECRET=my-secret-value",
+      "FYERS_APP_SECRET=my-secret-value"
+    ]) {
+      expect(sanitizeSensitiveText(raw), raw).not.toContain("my-secret-value");
+      expect(sanitizeSensitiveText(raw), raw).toContain("[redacted]");
+    }
+  });
+
   test("redacts URL query parameters", () => {
     const out = sanitizeSensitiveText("https://api.example.com/x?access_token=tok123&code=abc&state=ok");
     expect(out).not.toContain("tok123");
