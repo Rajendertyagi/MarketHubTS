@@ -129,6 +129,8 @@ Owner-approved architecture requirement, **not yet implemented**; see [METADATA_
 2. **Backend-registration-to-metadata-API-to-WebUI consistency** (only if technical validation justifies an endpoint): a newly registered MCP operation (tool/resource/prompt) appears in the WebUI selector without a frontend options-list edit, and descriptors remain consistent with actual registrations. If no endpoint is needed, prove descriptors are sourced from the owning registration module by another non-duplicating route.
 3. **Domain-search-API-to-WebUI consistency**: existing catalog results from `GET /api/catalog/search` populate instrument selectors, with bounded/paginated query behavior, loading/empty/error states and cancellation.
 
+Implementation order for these tests follows the canonical sequence in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1: shared-contract consistency + interval selector first, instrument picker second, operation selector third. Roadmap phase numbers are not implementation order. No metadata endpoint is assumed for shared enum values.
+
 Additional required assertions (map to roadmap Phases 1–7):
 
 - **one shared provider identity definition** used by all relevant contracts; no redundant `z.enum(["UPSTOX","FYERS"])` declarations without a documented cycle exception;

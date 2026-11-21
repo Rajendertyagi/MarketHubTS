@@ -19,7 +19,7 @@ This is an architecture rule, not a claim that discovery is implemented today. S
 
 **Already implemented (verified):** shared Zod enums/schemas in `@markethub/contracts`; `GET /api/catalog/search` (bounded, paginated); MCP tool/resource/prompt registrations in `packages/mcp-core`; `ProviderRegistry` with fixed `UPSTOX`/`FYERS` typing; WebUI panels that consume the local API and shared contracts.
 
-**Proposed, not implemented:** a read-only runtime metadata endpoint; registration-derived tool descriptors exposed to the WebUI; reusable instrument/tool selectors; direct WebUI consumption of shared enum options; schema-informed basic forms. No metadata API, registry, WebUI component, dependency or migration exists for this requirement yet.
+**Proposed, not implemented:** a read-only runtime metadata endpoint (only if justified); registration-derived operation descriptors exposed to the WebUI; reusable instrument/operation selectors; direct WebUI consumption of shared enum options; schema-informed basic forms where a supported derivation exists. No metadata API, registry, WebUI component, dependency or migration exists for this requirement yet.
 
 ## 2. Source-of-truth ownership
 
@@ -85,29 +85,26 @@ Recommended shape (to be validated and authorized before implementation). **Only
 
 No universal metadata database, no generic options framework, no new service, no separate server or microservice, and no new runtime dependency. The endpoint name and exact response contract are recommendations only; they must be designed against the actual registrations during an authorized implementation task.
 
-## 4. MCP tool discovery — the concrete example
+## 4. MCP operation discovery — the concrete example
 
-`packages/mcp-core/src/tools.ts:49` `registerTools()` registers nine tools by direct `server.registerTool(name, { description, inputSchema, annotations }, callback)` calls. The registrations are the source of truth; there is currently **no** exported descriptor array and no WebUI-facing metadata contract. Descriptors are observable only through MCP protocol `tools/list` (used by tests).
+`packages/mcp-core/src/factory.ts:13–44` registers nine tools (`tools.ts:49+`), seven resource registrations / six logical resources (`resources.ts:75+`) and three prompts (`prompts.ts:18+`). All **19 operations** produce activity through the shared `withActivity()` mechanism using the same `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227`). The registrations are the source of truth; there is currently **no** exported descriptor array and no WebUI-facing metadata contract. Descriptors are observable only through MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`), used by tests.
 
-Future architecture must make these fields discoverable to the WebUI from that same registration source:
+Descriptors must be split into a **minimum set required for operation discovery** and **optional future metadata**:
 
-- tool identifier and display name;
-- description and category;
-- input JSON Schema (from the existing `inputSchema`);
-- read-only / side-effect annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`, `idempotentHint` — see `tools.ts:29–30`);
-- availability / supported status where grounded (two tools are explicitly unavailable in M6 — `futures_chain`, `market_information` at `tools.ts:194–207`);
-- safe display metadata needed by the UI.
+- **Minimum for the initial Activity Operation selector:** stable operation name, operation type (`tool|resource|prompt`) derived from the owning registration, and a display title/description. This is the only metadata the first selector needs.
+- **Optional, only when separately justified:** read-only / side-effect annotations where applicable (`readOnlyHint`, `destructiveHint`, `openWorldHint`, `idempotentHint` — see `tools.ts:29–30`); availability / supported status where grounded (two tools are explicitly unavailable in M6 — `futures_chain`, `market_information` at `tools.ts:194–207`); and safe display metadata. **Category is not an SDK field** (`ToolSchema` has no `category`); it may be optional MarketHub-owned presentation metadata but must not be added merely for abstraction or decoration.
+- **Separate future concern — input metadata / JSON Schema:** browser-facing input JSON Schema is **not promised**. It may be exposed only if it can be safely derived from the same definitions used by registration without SDK internals; no supported derivation path has been identified. This does **not** require a universal JSON Schema form generator.
 
-**Critical requirement:** tool metadata must not be separately hardcoded in the frontend or maintained in a second unrelated backend list. The WebUI-facing descriptors must be derived from the actual MCP registrations so they cannot drift.
+**Critical requirement:** operation metadata must not be separately hardcoded in the frontend or maintained in a second unrelated backend list. WebUI-facing descriptors must be derived from the actual MCP registrations so they cannot drift.
 
-The Activity panel's tool-name filter (`apps/web/src/components/ActivityPanel.tsx:132`, currently a free-text input) should become a searchable/populated selector sourced from those descriptors. New registered tools must appear automatically.
+The Activity panel's free-text filter (`apps/web/src/components/ActivityPanel.tsx:132`) should become a searchable **Operation name** selector sourced from those descriptors, with operation type distinguished from the descriptor. **Keep the existing `toolName` storage and filter contract** for the first implementation; there is no persisted `operationType` field or API filter. Operation-type filtering needs additional API/data design and is explicitly deferred — no migration solely for type filtering without a demonstrated requirement. New registered operations must appear automatically.
 
-Future WebUI tool discovery and schema-informed basic forms should reuse the same descriptors. A simple tool should not require a new hand-written React form. This does **not** mandate a universal JSON Schema form generator for complex workflows (see §5).
+Future WebUI operation discovery and schema-informed basic forms should reuse the same descriptors where a supported derivation exists. A simple operation should not require a new hand-written React form. This does **not** mandate a universal JSON Schema form generator for complex workflows (see §5).
 
 Distinguish three things:
-- `server/discover` — protocol-level discovery (version, capabilities); it does **not** supply all tool descriptors.
-- MCP `tools/list` — protocol-level tool descriptors for MCP clients.
-- A WebUI-facing read-only metadata endpoint — the proposed safe, contract-validated surface for the browser.
+- `server/discover` — protocol-level discovery (version, capabilities); it does **not** supply operation descriptors.
+- MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`) — protocol-level descriptors for MCP clients, not a WebUI contract.
+- A WebUI-facing read-only metadata surface — **proposed only**; whether it must be an HTTP endpoint or can reuse a shared module in an existing safe response remains an open technical decision (§3, first-slice plan §2.1).
 
 ## 5. Dynamic WebUI components
 
@@ -116,8 +113,8 @@ Supported reusable patterns for future implementation:
 - **Searchable/autocomplete instrument selector** — backed by `/api/catalog/search`; replaces manual canonical-ID typing.
 - **Metadata-driven dropdown/select** — options derived from a shared Zod enum or a read-only metadata endpoint.
 - **Provider and capability selector** — when provider identity becomes dynamically extensible, iterate backend-provided provider descriptors rather than a hardcoded array. **Today** `ProviderId`/`ProviderStatusMap`/`getStatuses()` are fixed around `UPSTOX`/`FYERS` (§2.B), so a provider selector must reflect that fixed contract honestly; do not claim dynamic discovery until the contract and registry support it.
-- **MCP tool selector** — populated from the registration-derived descriptors (§4).
-- **Schema-informed basic form fields** — for simple tools, derive basic inputs from the input JSON Schema.
+- **MCP operation selector** — populated from the registration-derived descriptors for tools, resources and prompts (§4); operation type comes from the descriptor, not a second list.
+- **Schema-informed basic form fields** — for simple operations, derive basic inputs from the input JSON Schema **only where a supported derivation path exists without SDK internals**; this is not yet established (§4).
 - **Domain-specific custom components** — use a custom renderer when a workflow needs domain semantics, validation, conditional fields or layout that a generic form cannot express honestly. A universal JSON Schema form generator is **not** required for every complex workflow.
 
 Every such component must define: loading, empty, unavailable, error, stale and refresh states. "Unavailable" and "unknown" are honest outcomes — never fabricate a value to populate a control.
@@ -164,7 +161,7 @@ Tests must prove the actual source-to-API-to-WebUI relationship, not merely matc
 
 ## 9. Roadmap
 
-The cross-cutting initiative **Backend-Driven Metadata and Capability Discovery** is recorded in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md). Sequence: documentation/protocol → read-only audit → minimal discovery API and component plan → first slice (MCP tool discovery + canonical instrument pickers) → progressive adoption → acceptance proving new backend-registered options appear without a second frontend list.
+The cross-cutting initiative **Backend-Driven Metadata and Capability Discovery** is recorded in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (Phases 0–7). Documentation/protocol and the read-only source-of-truth inventory are **done**. The implementation sequence is: (1) shared-contract centralization + historical interval selector — **first implementation milestone**; (2) reusable instrument picker using the existing catalog API; (3) MCP operation selector after the descriptor-delivery approach is resolved. No discovery API is assumed in this sequence — endpoint necessity remains an open question. See [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) for the bounded increments.
 
 This initiative does not change M6-C acceptance, M6-D/E/B4 ownership, or reopen physical LAN testing.
 
