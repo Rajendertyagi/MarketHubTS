@@ -12,6 +12,7 @@
     "dev:api": "bun --watch apps/api/src/index.ts",
     "dev:web": "bun --cwd apps/web dev",
     "dev:mcp": "bun --cwd apps/mcp-server dev",
+    "dev:lan-test": "bun -e \"process.env.MARKETHUB_LAN_TEST='1'; await import('./apps/api/src/lan-test-entry.ts')\"",
     "build": "bun run build:packages && bun run build:apps",
     "build:packages": "bun run --filter './packages/*' build",
     "build:apps": "bun run --filter './apps/*' build",

@@ -28,8 +28,17 @@ class FeedSyncClient {
   checkpoint: Checkpoint | null = null;
   applied: number[] = [];
   recoveryFailure = false;
+  /** Test-only hook: runs between re-baselining and a retry bootstrap read. */
+  onBeforeRetry?: () => void | Promise<void>;
 
   constructor(private readonly client: Client) {}
+
+  /** Snapshot-boundary validation for an after=first response (§5.2 step 4.3). */
+  private bootstrapBoundaryOk(page: FeedPage): boolean {
+    if (page.events.length === 0) return true;
+    const firstNewer = page.events.find((e) => e.data.revision > this.snapshotRevision);
+    return !firstNewer || firstNewer.data.revision === this.snapshotRevision + 1;
+  }
 
   private async read(uri: string): Promise<unknown> {
     const res = await this.client.readResource({ uri });
@@ -62,21 +71,21 @@ class FeedSyncClient {
     let page: FeedPage = body as FeedPage;
     let retried = false;
 
-    // No-cursor bootstrap: snapshot boundary check. The first event newer than
-    // the adopted snapshot must be R+1; if the oldest retained event is already
-    // beyond that, a gap exists and must not be silently advanced past.
-    if (after === "first" && page.events.length > 0) {
-      const firstNewer = page.events.find((e) => e.data.revision > this.snapshotRevision);
-      if (firstNewer && firstNewer.data.revision !== this.snapshotRevision + 1) {
-        if (retried) { this.recoveryFailure = true; return; }
-        retried = true;
-        await this.adoptSnapshot();
-        this.lastFeedRevision = null;
-        this.checkpoint = null;
-        const retry = await this.readFeed("first");
-        if ("snapshotRequired" in retry) { this.recoveryFailure = true; return; }
-        page = retry as FeedPage;
+    // Every after=first response — initial OR retry — must pass the snapshot
+    // boundary check. A retry that also has a gap is an explicit recovery
+    // failure, never a silently accepted first event.
+    if (after === "first" && !this.bootstrapBoundaryOk(page)) {
+      if (retried) { this.recoveryFailure = true; return; }
+      retried = true;
+      await this.adoptSnapshot();
+      this.lastFeedRevision = null;
+      this.checkpoint = null;
+      await this.onBeforeRetry?.();
+      const retry = await this.readFeed("first");
+      if ("snapshotRequired" in retry || !this.bootstrapBoundaryOk(retry as FeedPage)) {
+        this.recoveryFailure = true; return;
       }
+      page = retry as FeedPage;
     }
 
     // Serialized pagination loop. A labeled restart ensures a gap never falls
@@ -91,8 +100,11 @@ class FeedSyncClient {
           await this.adoptSnapshot();
           this.lastFeedRevision = null;
           this.checkpoint = null;
+          await this.onBeforeRetry?.();
           const retry = await this.readFeed("first");
-          if ("snapshotRequired" in retry) { this.recoveryFailure = true; return; }
+          if ("snapshotRequired" in retry || !this.bootstrapBoundaryOk(retry as FeedPage)) {
+            this.recoveryFailure = true; return;
+          }
           page = retry as FeedPage;
           continue outer; // fully consume the retry page before any persistence
         }
@@ -250,6 +262,24 @@ describe("M6-D feed synchronization over the wire interface", () => {
       expect(sync.recoveryFailure).toBe(false);
       expect(sync.checkpoint).not.toBeNull();
       expect(sync.checkpoint!.lastFeedRevision).toBe(5);
+    } finally {
+      await client.close(); await handler.close(); hub.stop();
+    }
+  });
+
+  test("second bootstrap gap after recovery retry is an explicit recovery failure", async () => {
+    const { service, hub, handler } = makeHarness({ replayMaxEvents: 2 });
+    const client = await connect(handler);
+    try {
+      const sync = new FeedSyncClient(client);
+      await sync.adoptSnapshot(); // R = 0
+      emit(service, 5); // revisions 1..5, retained 4,5 -> first bootstrap gap (4 != 1)
+      // Between re-baselining (R becomes 5) and the retry read, more events
+      // arrive and evict revision 6, so the retry starts at 7 (R+1 = 6).
+      sync.onBeforeRetry = () => { emit(service, 3, 6); }; // revisions 6,7,8 -> retained 7,8
+      await sync.sync();
+      expect(sync.recoveryFailure).toBe(true);
+      expect(sync.checkpoint).toBeNull(); // no cursor persisted past the second gap
     } finally {
       await client.close(); await handler.close(); hub.stop();
     }

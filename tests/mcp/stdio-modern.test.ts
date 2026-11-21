@@ -98,7 +98,10 @@ describe("mcp stdio modern (M6-A)", () => {
       // filter must NOT claim resourceSubscriptions (no event relay on STDIO).
       const sub = await client.listen({ resourceSubscriptions: ["markethub://market/snapshot"] });
       expect(sub.honoredFilter.resourceSubscriptions).toBeUndefined();
+      // C12: client cancellation on STDIO resolves the subscription as 'local'.
+      const closed = sub.closed;
       await sub.close();
+      expect(await closed).toBe("local");
 
       await client.close();
       client = null;

@@ -10,11 +10,19 @@ Automated loopback tests (`tests/mcp/http-integration.test.ts`) prove the handle
 
 ## 2. Test-only synthetic event harness (no production endpoint)
 
-The LAN run needs a controlled canonical change the second device can trigger. **No production debug/mutation endpoint is added.** Use a **test-only harness build**:
+The LAN run needs a controlled canonical change the second device can trigger. **No production debug/mutation endpoint is added.** The harness is **implemented** at `apps/api/src/lan-test-entry.ts` (test-only; never imported by `apps/api/src/index.ts` or `app.ts`).
 
-- A dedicated test entry (e.g. `apps/api/src/test-lan-entry.ts`, built only for this procedure) that composes `MarketDataService` with an injected in-memory `LiveStateStore`, a `LiveEventHub`, the M6-D notification bridge and the real `createMcpHandler`/`createApp` — the same production composition, but with a temporary DB and synthetic instruments.
-- A **test-only trigger** exposed only in that harness build: a local CLI command or a route mounted only by the test entry (never by `apps/api/src/index.ts` or `app.ts`) that calls `service.track("LAN-TEST-<n>")` on demand. The trigger emits a canonical `LiveChangeEvent` through the same `MarketDataService` path the bridge subscribes to, so the LAN notification exercises the real bridge/handler, not a stub.
-- Guardrails: no live provider, no broker credentials, no market session, no production/user DB; temporary DB and synthetic instruments only. Document the exact command, its guard, and how to confirm the test build is active before the run.
+**Concrete command** (cross-platform, from the repo root):
+
+```bash
+MARKETHUB_HOST=<lan-ip> MARKETHUB_PORT=<port> bun run dev:lan-test
+```
+
+The `dev:lan-test` script sets `MARKETHUB_LAN_TEST=1` via `bun -e` (cross-platform). The entry **refuses to start** without that variable (`REFUSED: LAN test harness requires MARKETHUB_LAN_TEST=1`) before opening any port or DB — this is the confirmed test-build guard. On success it logs `lan_test_harness_ready` with `guard: "MARKETHUB_LAN_TEST=1"` and the bound host/port.
+
+**Trigger:** type `emit` into the harness stdin to call `service.track("LAN-TEST-<n>")` — a canonical `item-updated` through the same `MarketDataService` path the bridge subscribes to, so the LAN notification exercises the real bridge/handler, not a stub. `status` prints the current revision; `quit` shuts down cleanly (handler → bridge → hub → server → DB). There is deliberately **no HTTP mutation endpoint**, not even in this test build.
+
+**Guardrails:** no live provider, no broker credentials, no market session, no production/user DB — a temporary DB and synthetic instruments only. Confirm the test build is active by checking the `lan_test_harness_ready` log line and the `MARKETHUB_LAN_TEST=1` guard before the run.
 
 ## 3. Procedure
 
