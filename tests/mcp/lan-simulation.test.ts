@@ -99,10 +99,12 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
     // Startup, connect and assertions are all inside try/finally so a failure
     // at any point still tears down whatever was started.
     try {
-      hub.start();
+      // Set flags BEFORE start(): LiveEventHub.start() flips its internal flag
+      // before subscribing, so a throw mid-start must still be stopped.
       hubStarted = true;
-      bridge.start();
+      hub.start();
       bridgeStarted = true;
+      bridge.start();
 
       await client.connect(new StreamableHTTPClientTransport(new URL("http://simulation.local/mcp"), {
         fetch: (url, init) => handler.fetch(new Request(url, init))
