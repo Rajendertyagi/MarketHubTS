@@ -75,6 +75,63 @@ async function connect(url: string, name: string) {
   return client;
 }
 
+/** Open a raw modern subscriptions/listen SSE stream on the real listener. */
+async function openListenStream(url: string, lastEventId?: string) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "subscriptions/listen"
+  };
+  if (lastEventId !== undefined) headers["Last-Event-ID"] = lastEventId;
+  const res = await fetch(url, {
+    method: "POST", headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "subscriptions/listen",
+      params: {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientInfo": { name: "raw-listen", version: "1.0.0" },
+          "io.modelcontextprotocol/clientCapabilities": {}
+        },
+        notifications: { resourceSubscriptions: ["markethub://market/snapshot"] }
+      }
+    })
+  });
+  return res;
+}
+
+/** Stateful SSE frame reader — holds the stream open across multiple frames. */
+function sseFrames(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+  return {
+    async next(timeoutMs = 1500): Promise<Record<string, unknown> | null> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const idx = buffer.indexOf("\n\n");
+        if (idx >= 0) {
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+          return dataLine ? JSON.parse(dataLine.slice(6)) as Record<string, unknown> : null;
+        }
+        if (!pending) pending = reader.read();
+        const result = await Promise.race([
+          pending,
+          new Promise<"timeout">((r) => setTimeout(() => r("timeout"), Math.max(1, deadline - Date.now())))
+        ]);
+        if (result === "timeout") continue; // pending read stays for the next loop
+        pending = null;
+        if (result.done) break;
+        buffer += decoder.decode(result.value, { stream: true });
+      }
+      return null; // no frame within the deadline (not an error)
+    },
+    async close(): Promise<void> { try { await reader.cancel(); } catch { /* best effort */ } }
+  };
+}
+
 describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
   test("discovery, tools, resources, prompts, subscriptions and read-after-notify over a real listener", async () => {
     const h = makeHarness();
@@ -273,7 +330,48 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
           params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } }
         })
       });
-      expect([400, 404]).toContain(unknown.status);
+      // C10: the real listener must return exactly 404 with -32601 for an
+      // unknown method — 400 is not an acceptable alternative.
+      expect(unknown.status).toBe(404);
+      const unknownBody = await unknown.json() as { error: { code: number } };
+      expect(unknownBody.error.code).toBe(-32601);
+    } finally {
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
+      if (server) await server.stop(true);
+      closeDatabaseHandle(h.db); removeTempDir(h.dir);
+    }
+  });
+
+  test("C11: a stale Last-Event-ID does not replay an earlier notification on the real listener", async () => {
+    const h = makeHarness();
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+
+      // Stream A: open, observe ack, trigger a canonical change, observe it.
+      const a = sseFrames(await openListenStream(url));
+      const ackA = await a.next();
+      expect(ackA?.method).toBe("notifications/subscriptions/acknowledged");
+      h.service.track("C11-FIRST");
+      const noteA = await a.next();
+      expect(noteA?.method).toBe("notifications/resources/updated");
+
+      // Stream B: fresh stream carrying a stale Last-Event-ID. The prior
+      // notification must NOT be replayed after the ack.
+      const b = sseFrames(await openListenStream(url, "0"));
+      const ackB = await b.next();
+      expect(ackB?.method).toBe("notifications/subscriptions/acknowledged");
+      const replay = await b.next(400); // short window: no replay expected
+      expect(replay).toBeNull();
+
+      // A subsequent NEW notification is still delivered normally on stream B.
+      h.service.track("C11-SECOND");
+      const fresh = await b.next();
+      expect(fresh?.method).toBe("notifications/resources/updated");
+
+      await a.close();
+      await b.close();
     } finally {
       await h.handler.close(); h.bridge.stop(); h.hub.stop();
       if (server) await server.stop(true);

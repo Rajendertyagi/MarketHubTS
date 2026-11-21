@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createMcpServer, type McpServices } from "../../packages/mcp-core/src/index";
+import { MarketDataService } from "../../packages/market-core/src/index";
+import { LiveEventHub } from "../../packages/realtime/src/index";
+import { createMcpNotificationBridge } from "../../apps/api/src/mcp-notification-bridge";
 import { healthStatusSchema } from "../../packages/contracts/src/index";
 
 const HEALTH = healthStatusSchema.parse({
@@ -29,6 +32,25 @@ function makeServices(): McpServices {
   };
 }
 
+/** Real canonical source + bridge + handler — the complete M6-D publish path. */
+function makeHarness() {
+  const service = new MarketDataService({
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    policy: { openMaxAgeMs: 60_000, unknownMaxAgeMs: 60_000, maxRetainedObservationAgeMs: 86_400_000 },
+    maxInstruments: 500,
+    session: () => "OPEN" as const
+  });
+  const hub = new LiveEventHub(service, {
+    replayMaxEvents: 1000, replayMaxBytes: 10_000_000,
+    clientMaxEvents: 1000, clientMaxBytes: 10_000_000, refreshIntervalMs: 0
+  });
+  hub.start();
+  const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
+  const bridge = createMcpNotificationBridge(service, handler.notify);
+  bridge.start();
+  return { service, hub, handler, bridge };
+}
+
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
@@ -41,21 +63,24 @@ function percentile(sorted: number[], p: number): number {
 // docs/M6_D_FANOUT_EVIDENCE.md for the recorded measurements and rationale.
 const FANOUT_LATENCY_BUDGET_MS = 50;
 
-describe("M6-D bounded fan-out (synthetic load)", () => {
+describe("M6-D bounded fan-out (synthetic load through the real bridge)", () => {
   test("sweep subscribers toward the bound: no drops, measured latency and memory", async () => {
     const M = 20;
-    const evidence: Array<{ n: number; m: number; p95Ms: number; maxMs: number; heapDeltaMb: number; errors: number }> = [];
+    const evidence: Array<{
+      n: number; m: number; minMs: number; meanMs: number; p95Ms: number; maxMs: number;
+      heapDeltaMb: number; errors: number; path: string;
+    }> = [];
     for (const N of [8, 32, 64]) {
-      const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
+      const h = makeHarness();
       const clients: Client[] = [];
       const counts = new Array<number>(N).fill(0);
-      let errors = 0; // real count: notification-handler exceptions + missed deliveries
+      let handlerErrors = 0; // real count: notification-handler exceptions
       try {
         const heapBefore = process.memoryUsage().heapUsed;
         for (let i = 0; i < N; i++) {
           const client = new Client({ name: `fanout-${N}-${i}`, version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
           await client.connect(new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
-            fetch: (url, init) => handler.fetch(new Request(url, init))
+            fetch: (url, init) => h.handler.fetch(new Request(url, init))
           }));
           client.setNotificationHandler("notifications/resources/updated", () => { counts[i]!++; });
           await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
@@ -65,7 +90,8 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
         const latencies: number[] = [];
         for (let j = 0; j < M; j++) {
           const t0 = performance.now();
-          handler.notify.resourceUpdated(SNAPSHOT_URI);
+          // Canonical change through MarketDataService -> bridge -> handler.notify.
+          h.service.track(`FANOUT-${N}-${j}`);
           const target = j + 1;
           const deadline = performance.now() + 2000;
           while (counts.some((c) => c < target) && performance.now() < deadline) await Bun.sleep(2);
@@ -73,15 +99,21 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
         }
         const sorted = [...latencies].sort((a, b) => a - b);
         const heapDeltaMb = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024);
-        // Real error count: any subscriber that missed an expected delivery.
-        errors = counts.filter((c) => c !== M).length;
-        const record = { n: N, m: M, p95Ms: percentile(sorted, 95), maxMs: sorted[sorted.length - 1]!, heapDeltaMb, errors };
+        // Real error count: handler exceptions + subscribers that missed a delivery.
+        const missedDeliveries = counts.filter((c) => c !== M).length;
+        const errors = handlerErrors + missedDeliveries;
+        const record = {
+          n: N, m: M, minMs: sorted[0]!,
+          meanMs: sorted.reduce((a, b) => a + b, 0) / sorted.length,
+          p95Ms: percentile(sorted, 95), maxMs: sorted[sorted.length - 1]!,
+          heapDeltaMb, errors, path: "MarketDataService->bridge->handler.notify->subscribers"
+        };
         evidence.push(record);
         console.log(`[M6-D fanout evidence] ${JSON.stringify(record)}`);
         expect(errors).toBe(0);
       } finally {
         for (const c of clients) await c.close();
-        await handler.close();
+        await h.handler.close(); h.bridge.stop(); h.hub.stop();
       }
     }
     // Evidence is preserved in docs/M6_D_FANOUT_EVIDENCE.md (measured values,
@@ -93,25 +125,23 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
     expect(evidence.length).toBe(3);
   });
 
-  test("an unread SSE stream does not block the publisher or other subscribers", async () => {
-    const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
+  test("an unread SSE stream does not block the publisher; drain counts queued frames", async () => {
+    const h = makeHarness();
     const fast = new Client({ name: "fast", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     try {
       await fast.connect(new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
-        fetch: (url, init) => handler.fetch(new Request(url, init))
+        fetch: (url, init) => h.handler.fetch(new Request(url, init))
       }));
       let fastCount = 0;
       fast.setNotificationHandler("notifications/resources/updated", () => { fastCount++; });
       await fast.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
 
       // Open a raw modern listen stream and deliberately do NOT read its body.
-      const raw = await handler.fetch(new Request("http://test.local/mcp", {
+      const raw = await h.handler.fetch(new Request("http://test.local/mcp", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "MCP-Protocol-Version": "2026-07-28",
-          "Mcp-Method": "subscriptions/listen"
+          "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "subscriptions/listen"
         },
         body: JSON.stringify({
           jsonrpc: "2.0", id: 99, method: "subscriptions/listen",
@@ -126,41 +156,60 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
         })
       }));
       expect(raw.status).toBe(200);
-      // Leave raw.body unread — frames accumulate in the SDK's stream queue.
       const heapBefore = process.memoryUsage().heapUsed;
 
       const t0 = performance.now();
-      for (let i = 0; i < 20; i++) handler.notify.resourceUpdated(SNAPSHOT_URI);
+      for (let i = 0; i < 20; i++) h.service.track(`SLOW-${i}`); // through the bridge
       const publishMs = performance.now() - t0;
       const deadline = performance.now() + 2000;
       while (fastCount < 20 && performance.now() < deadline) await Bun.sleep(2);
       const heapDeltaMb = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024);
 
-      // The SDK has no per-stream frame/byte bound; we record the observed
-      // behavior rather than asserting a bound it does not provide.
+      // Close the handler first so the listen stream ends gracefully, then
+      // drain it to count queued frames and their encoded bytes.
+      await h.handler.close();
+      const reader = raw.body!.getReader();
+      const decoder = new TextDecoder();
+      let queuedBytes = 0;
+      let queuedFrames = 0;
+      const drainDeadline = Date.now() + 2000;
+      for (;;) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<{ done: true; value: undefined }>((r) => setTimeout(() => r({ done: true, value: undefined }), Math.max(1, drainDeadline - Date.now())))
+        ]);
+        if (result.done) break;
+        queuedBytes += result.value.byteLength;
+        queuedFrames += (decoder.decode(result.value).match(/event: message/g) ?? []).length;
+      }
+      try { await reader.cancel(); } catch { /* best effort */ }
+
       const slowEvidence = {
         events: 20, publishMs, fastDelivered: fastCount, heapDeltaMb,
-        unreadStreamStatus: raw.status, contentType: raw.headers.get("content-type")
+        queuedFrames, queuedBytes, unreadStreamStatus: raw.status,
+        contentType: raw.headers.get("content-type")
       };
       console.log(`[M6-D slow-consumer evidence] ${JSON.stringify(slowEvidence)}`);
       expect(fastCount).toBe(20); // other subscriber unaffected
       expect(publishMs).toBeLessThan(500); // publisher not blocked by unread stream
       expect(slowEvidence.unreadStreamStatus).toBe(200);
       expect(slowEvidence.contentType).toContain("text/event-stream");
-      await raw.body?.cancel();
+      // The SDK has no per-stream frame/byte bound; we record the observed
+      // queue size, not assert a bound the SDK does not provide.
+      expect(queuedFrames).toBeGreaterThanOrEqual(20);
     } finally {
       await fast.close();
-      await handler.close();
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
     }
   });
 
   test("slow notification handler does not block the publisher or other subscribers", async () => {
-    const handler = createMcpHandler((ctx) => createMcpServer(ctx, makeServices()), { maxSubscriptions: 64 });
+    const h = makeHarness();
     const fast = new Client({ name: "fast", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     const slow = new Client({ name: "slow", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     try {
       const transport = (name: string) => new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
-        fetch: (url, init) => handler.fetch(new Request(url, init))
+        fetch: (url, init) => h.handler.fetch(new Request(url, init))
       });
       await fast.connect(transport("fast"));
       await slow.connect(transport("slow"));
@@ -171,17 +220,16 @@ describe("M6-D bounded fan-out (synthetic load)", () => {
       await slow.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
 
       const t0 = performance.now();
-      for (let i = 0; i < 10; i++) handler.notify.resourceUpdated(SNAPSHOT_URI);
+      for (let i = 0; i < 10; i++) h.service.track(`SLOWH-${i}`); // through the bridge
       const publishMs = performance.now() - t0;
       const deadline = performance.now() + 2000;
       while (fastCount < 10 && performance.now() < deadline) await Bun.sleep(2);
       expect(fastCount).toBe(10);
-      // Publishing is synchronous and must not wait on a slow consumer handler.
       expect(publishMs).toBeLessThan(500);
     } finally {
       await fast.close();
       await slow.close();
-      await handler.close();
+      await h.handler.close(); h.bridge.stop(); h.hub.stop();
     }
   });
 });

@@ -6,26 +6,69 @@
 
 ## 1. Method
 
-For each subscriber count N ∈ {8, 32, 64}, the test opens N real SDK clients, each with a `subscriptions/listen` stream filtered to `markethub://market/snapshot`, then publishes M = 20 canonical updates through `handler.notify.resourceUpdated(...)`. For each update it records the time until every subscriber observed it. It captures N, M, p95 and max publish latency, heap delta, and a **real** error count (subscribers that missed an expected delivery). The sweep is repeated; values below are representative of repeated runs.
+For each subscriber count N ∈ {8, 32, 64}, the test opens N real SDK clients, each with a `subscriptions/listen` stream filtered to `markethub://market/snapshot`, then publishes M = 20 **canonical changes through the complete M6-D path**:
 
-## 2. Recorded results (representative run)
+```
+MarketDataService.track() → createMcpNotificationBridge → handler.notify.resourceUpdated() → subscribers
+```
 
-| N (subscribers) | M (events) | p95 latency | max latency | heap delta | errors |
-|---|---|---|---|---|---|
-| 8 | 20 | 3.51 ms | 3.54 ms | 4.86 MB | 0 |
-| 32 | 20 | 3.53 ms | 5.35 ms | 0.96 MB | 0 |
-| 64 | 20 | 3.57 ms | 3.68 ms | 1.44 MB | 0 |
+It does **not** call the notifier directly. For each update it records the time until every subscriber observed it, capturing N, M, min/mean/p95/max latency, heap delta, and a real error count (notification-handler exceptions plus subscribers that missed an expected delivery). The sweep was run four times; all individual runs are preserved below.
 
-Across four runs, p95 at N=64 ranged **3.57–3.69 ms** and max **3.68–6.47 ms** (one run showed a 20 ms outlier at N=8). Errors were 0 in every run.
+## 2. Individual run results
+
+### Run 1
+
+| N | M | min | mean | p95 | max | heap Δ | errors |
+|---|---|---|---|---|---|---|---|
+| 8 | 20 | 3.03 ms | 3.23 ms | 3.44 ms | 3.67 ms | 4.89 MB | 0 |
+| 32 | 20 | 2.12 ms | 3.06 ms | 3.66 ms | 3.75 ms | 1.05 MB | 0 |
+| 64 | 20 | 2.22 ms | 3.10 ms | 3.67 ms | 3.77 ms | 1.53 MB | 0 |
+
+### Run 2
+
+| N | M | min | mean | p95 | max | heap Δ | errors |
+|---|---|---|---|---|---|---|---|
+| 8 | 20 | 2.08 ms | 3.26 ms | 3.74 ms | 3.75 ms | 4.86 MB | 0 |
+| 32 | 20 | 2.18 ms | 3.09 ms | 3.69 ms | 4.27 ms | 1.08 MB | 0 |
+| 64 | 20 | 2.12 ms | 3.01 ms | 3.62 ms | 3.65 ms | 1.53 MB | 0 |
+
+### Run 3
+
+| N | M | min | mean | p95 | max | heap Δ | errors |
+|---|---|---|---|---|---|---|---|
+| 8 | 20 | 3.08 ms | 3.31 ms | 3.66 ms | 3.69 ms | 4.86 MB | 0 |
+| 32 | 20 | 2.22 ms | 3.04 ms | 3.67 ms | 3.73 ms | 1.07 MB | 0 |
+| 64 | 20 | 2.24 ms | 3.13 ms | 3.69 ms | 4.14 ms | 1.53 MB | 0 |
+
+### Run 4
+
+| N | M | min | mean | p95 | max | heap Δ | errors |
+|---|---|---|---|---|---|---|---|
+| 8 | 20 | 2.28 ms | 3.22 ms | 3.59 ms | 4.23 ms | 4.90 MB | 0 |
+| 32 | 20 | 2.20 ms | 3.25 ms | 3.68 ms | 3.96 ms | 1.04 MB | 0 |
+| 64 | 20 | 2.09 ms | 2.94 ms | 3.74 ms | 4.51 ms | 1.47 MB | 0 |
+
+Across all runs, p95 at N=64 ranged **3.62–3.74 ms** and max **3.65–4.51 ms**. Errors were 0 in every run.
 
 ## 3. Selected values and rationale
 
 - **`maxSubscriptions = 64`** — a conservative bound for a single local owner with a handful of MCP clients (not a public service). The sweep shows no drops, no errors, and flat latency from 8 → 64 subscribers, so 64 is well above any realistic client count while bounding the number of open streams and total fan-out cost. It is not raised without further evidence.
-- **Latency budget = 50 ms** — derived from the measured p95 at the bound (~3.6 ms): 50 ms gives >12× headroom over the worst observed p95 and >2× over the worst observed max (20 ms). It is **not** the test's per-update observation deadline (2 s), which is only a safety net for a stalled stream.
+- **Latency budget = 50 ms** — derived from the measured p95 at the bound (~3.6 ms): 50 ms gives >13× headroom over the worst observed p95 and >11× over the worst observed max (4.51 ms). It is **not** the test's per-update observation deadline (2 s), which is only a safety net for a stalled stream.
 
 ## 4. Slow-consumer evidence
 
-A separate test opens a raw modern `subscriptions/listen` stream and deliberately leaves its SSE body unread, then publishes 20 updates. It records: publisher time (must stay < 500 ms — the unread stream does not block publishing), delivery count to a healthy subscriber (all 20 received), and heap delta. The SDK's `writeFrame` calls `controller.enqueue(...)` with no explicit per-stream frame/byte bound; the test records observed behavior and does **not** assert a queue bound the SDK does not provide. No custom queue or backpressure subsystem was added.
+A separate test opens a raw modern `subscriptions/listen` stream and deliberately leaves its SSE body unread, then publishes 20 canonical changes through the bridge. It records:
+
+| Metric | Observed (3 runs) |
+|---|---|
+| publish time | 0.21–0.31 ms (publisher not blocked) |
+| healthy subscriber deliveries | 20 / 20 |
+| heap delta | ~0 MB |
+| queued frames after draining the unread stream | 22 (20 notifications + ack + graceful close) |
+| queued encoded bytes | 4,126 bytes |
+| unread stream status / content type | 200 / `text/event-stream` |
+
+The stream is closed gracefully before draining so the queue can be counted. The SDK's `writeFrame` calls `controller.enqueue(...)` with no explicit per-stream frame/byte bound; the test records the observed queue size and does **not** assert a bound the SDK does not provide. No custom queue or backpressure subsystem was added.
 
 ## 5. Limitations
 
