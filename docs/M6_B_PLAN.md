@@ -18,7 +18,7 @@ Expose the full M6 capability inventory — tools, resources and prompts — thr
 **Out of scope (do not start):**
 - M6-C: `mcp_activity` table, activity endpoints, WebUI inspection, `startActivity`/`completeActivity`.
 - M6-D: `subscriptions/listen`, event bridge, `handler.notify` wiring, read-after-notify notification flow. (M6-B implements only the **read** side of event feeds — the resource, the bounded read seam and its endpoint.)
-- M6-E: broad integration, concurrent-client/reconnect acceptance, second-device LAN verification.
+- M6-E: broad integration, concurrent-client/reconnect acceptance, standalone in-process LAN simulation (physical LAN reachability out of revised scope).
 - Provider activation, Stage G, Tasks/Skills/MCP Apps, `x-mcp-header`/`Mcp-Param-*` headers, futures/market-information tools.
 
 **Decisions fixed here (no further architecture review needed):**

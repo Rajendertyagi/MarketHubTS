@@ -12,7 +12,7 @@
 Complete the final two M6 phases without creating a second event system or duplicating protocol behavior:
 
 - **M6-D:** connect canonical MarketHub live-state changes to MCP `subscriptions/listen` notifications over the existing Streamable HTTP `/mcp` endpoint. Clients receive only notifications they explicitly requested, then read the relevant canonical resource/feed for data. Subscription lifecycle, acknowledgement, filtering, correlation, cancellation, concurrency limits and graceful close remain SDK-owned.
-- **M6-E:** verify the composed behavior with the real official MCP client against the running Hono/Bun listener, verify modern STDIO behavior with a spawned process, prove transport/security/lifecycle behavior, and complete a repeatable second-device LAN acceptance procedure. Close the remaining applicable C1–C21 matrix without confusing in-process tests with real transport evidence.
+- **M6-E:** verify the composed behavior with the real official MCP client against the running Hono/Bun listener, verify modern STDIO behavior with a spawned process, prove transport/security/lifecycle behavior, and run one standalone in-process LAN simulation test. Physical LAN reachability is outside the revised M6 scope (user-approved change; §6.4). Close the remaining applicable C1–C21 matrix without confusing in-process tests with real transport evidence.
 
 M6-D is a notification bridge, not a new market-data pipeline. M6-E is an acceptance phase, not a reason to redesign the working M6-A/B/C implementation.
 
@@ -280,18 +280,13 @@ Extend `tests/mcp/stdio-modern.test.ts` rather than building another harness:
 
 The current composition uses the default dual-era posture (`createMcpHandler` legacy stateless fallback; `serveStdio` legacy serving by default). Unless a separate decision changes it, add `tests/mcp/legacy-compat.test.ts` to prove: a 2025-era HTTP client uses the stateless path; a 2025-era STDIO client uses the legacy opening path; modern pinned clients use `server/discover`/`_meta` and the 2026 listen mechanism; and legacy compatibility causes no unsolicited notifications or deprecated `resources/subscribe` on the modern path. If dual-era support is intentionally removed, document it, set `legacy: 'reject'` deliberately and test the rejection — do not let posture change accidentally.
 
-### 6.4 LAN acceptance procedure
+### 6.4 LAN simulation (user-approved scope change)
 
-Automated loopback tests do not prove a second device can reach the configured LAN interface. Add a repeatable manual procedure, preferably `docs/M6_E_LAN_ACCEPTANCE.md`, and execute it on a second device on the same private LAN.
+The original M6-E definition required a repeatable second-device LAN procedure with a test-only harness. **The user has explicitly removed that requirement.** Physical LAN reachability is **not verified** and is **outside the revised M6 scope**. This is a scope change, not a successful LAN test; see [`M6_E_LAN_ACCEPTANCE.md`](M6_E_LAN_ACCEPTANCE.md) for the stable decision record.
 
-**Synthetic event harness for the second device (required, safe and repeatable):** the LAN run needs a controlled canonical change that the second device can trigger without touching production data or adding a production endpoint. Define a **test-only harness or test build** of the API — e.g. a dedicated test entry that composes `MarketDataService` with an injected in-memory `LiveStateStore` and a local trigger (test-only CLI command, test-only route mounted only in the test build, or a scripted fixture driver) — so the operator can emit a synthetic `item-updated` on demand. Guardrails:
+The replacement is **one standalone in-process simulation test**, `tests/mcp/lan-simulation.test.ts`. It uses the official MCP SDK with a mocked in-process `fetch`, in-memory services and the real notification bridge — no second device, no listener, no socket, no temporary database, no CLI and no external dependency. It covers: modern discovery/version, `resources.subscribe`, tool/resource/template access, snapshot reads, `subscriptions/listen` ack ordering and filter, a simulated canonical update through the bridge, notification delivery, revision advancement, live-feed cursor reads, and valid/invalid Host/Origin through the production validation helper.
 
-- **No production debug/mutation endpoint.** The trigger exists only in the test harness/build and is never mounted in the production composition (`apps/api/src/index.ts` / `app.ts`).
-- No live provider, real broker credentials, market session, or production/user database; use a temporary DB and synthetic instruments.
-- The trigger emits a canonical `LiveChangeEvent` through the same `MarketDataService` path the bridge subscribes to, so the LAN notification exercises the real bridge/handler, not a stub.
-- Document the exact command/step, its guard, and how to confirm the test build is active before the run.
-
-Record: API machine LAN IPv4, bind host, port, `MARKETHUB_LAN` state, client device/interface and MCP config, test date; that the API is bound to the intended interface and reachable at `/mcp`; a modern-pinned client completing discovery, tool/resource listing, snapshot read, a subscription to `markethub://market/snapshot`, a notification after a harness-triggered synthetic change, and a read-after-notify with cursor resume or explicit recovery; a valid configured LAN Host/Origin accepted and an unapproved one rejected (403) without loosening SDK validation; that the endpoint is not publicly exposed; expected vs actual results, timestamps and redacted evidence. **If no safe second-device test setup is possible — including no safe way to trigger a synthetic change from the second device — report LAN acceptance as `not tested`; do not claim it from localhost or a mocked request.**
+The former test-only harness (`apps/api/src/lan-test-entry.ts`), LAN client (`scripts/m6e-lan-client.ts`) and their package scripts have been deleted. The simulation must **not** be described as proof of real LAN connectivity, and it does **not** replace the real-listener gate in `http-integration.test.ts` (§7.2).
 
 ### 6.5 Matrix traceability
 
@@ -327,7 +322,7 @@ These prove logic but do **not** replace M6-E's real HTTP listener test.
 | Extended `tests/mcp/stdio-modern.test.ts` | Spawned process, modern discovery/capability/resource/tool access, listen ack/filter behavior, cancellation, clean teardown |
 | New `tests/mcp/legacy-compat.test.ts` (unless legacy explicitly rejected) | 2025 HTTP + STDIO `initialize` handshake, legacy capabilities and compatibility behavior, no modern/legacy leakage; no `server/discover` or listen-ack assertions (§5.3) |
 | `tests/mcp/conformance.test.ts` or explicit evidence map | Named assertion per C1–C21; reuse existing passing locations where mapping is unambiguous; do not duplicate merely to match a filename |
-| `docs/M6_E_LAN_ACCEPTANCE.md` | Executed second-device procedure and evidence, or explicitly recorded not-tested blocker |
+| `tests/mcp/lan-simulation.test.ts` | Standalone in-process simulation of the composed LAN-facing behavior (user-approved replacement for the removed second-device procedure) |
 
 ### 7.3 Commands and quality gates
 
@@ -364,7 +359,7 @@ Adjust focused names to actual files. Report local results separately from CI ev
 - [ ] A real pinned client passes the full HTTP integration suite against the running Hono/Bun listener, not just in-process `handler.fetch`.
 - [ ] Modern STDIO process tests pass, including honest listen-filter/capability behavior; legacy paths tested if retained.
 - [ ] Host/Origin, CORS, error/cancellation, reconnect/read-after-notify, multi-client isolation, graceful shutdown and bounded-resource behavior pass.
-- [ ] Second-device LAN procedure executed with a safe test-only synthetic-event harness (no production debug/mutation endpoint); evidence recorded. If no safe second-device setup exists, LAN acceptance is reported `not tested` and blocks the claim (§6.4).
+- [ ] Standalone in-process LAN simulation test passes (`tests/mcp/lan-simulation.test.ts`); physical LAN reachability is explicitly out of revised scope (user-approved change, §6.4).
 - [ ] Full tests, typecheck, build and diff checks pass; independent review finds no scope creep or regression.
 - [ ] M6-C closure and M6-B4 closeout reconciled; M6 remains separate from Stage G and M7.
 
@@ -398,7 +393,7 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 | Shutdown ordering | Gracefully close handler, detach bridge, then stop hub/server and close DB; preserve §5.4 invariant |
 | Notification errors | Diagnostic-only; never poison data outcome or create per-tick activity rows |
 | STDIO live notification parity | Not in M6-D HTTP scope; re-scope explicitly before adding an API SSE relay |
-| LAN test unavailable | Mark not tested; do not equate localhost with LAN acceptance |
+| Physical LAN reachability | Out of revised M6 scope by user decision; the in-process simulation is not proof of LAN connectivity (§6.4) |
 | Protocol/SDK advances | Re-verify official latest stable versions at start; update the conformance map before coding |
 | B4/M6-C concurrent work | M6-C is already accepted; keep B4 separately tracked; do not overwrite either |
 
@@ -417,7 +412,7 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 | `tests/mcp/stdio-modern.test.ts` | Extend current child-process acceptance | STDIO remains HTTP API client, no DB |
 | `tests/mcp/legacy-compat.test.ts` (new if dual-era) | Legacy HTTP/STDIO compatibility | Do not change posture by accident |
 | `tests/mcp/conformance.test.ts` or evidence map | Trace C1–C21 assertions | M6-B4 remains separately tracked |
-| `docs/M6_E_LAN_ACCEPTANCE.md` (new) | Second-device procedure and run evidence | Do not claim LAN tested without execution |
+| `tests/mcp/lan-simulation.test.ts` (new) | Standalone in-process LAN simulation | Do not describe as proof of real LAN connectivity |
 
 ## 11. Implementation order
 
@@ -428,7 +423,7 @@ Implementation or passing tests alone do **not** mark a phase complete — the i
 5. **D closeout:** focused suite, review changed files, no activity schema/migration/provider changes; pass §8.1.
 6. **E real HTTP integration:** real-listener suite, two clients, reconnect/cancellation/graceful close with synthetic state.
 7. **E STDIO/legacy:** extend the real STDIO process test; add legacy compatibility only if dual-era posture remains.
-8. **E matrix and LAN:** map every mandatory C1–C21 item to evidence; perform the second-device procedure and save results.
+8. **E matrix and LAN simulation:** map every mandatory C1–C21 item to evidence; run the standalone in-process simulation test (physical LAN reachability is out of revised scope).
 9. **Final independent review:** focused + full tests, typecheck/build/diff-check; verify no M6-C changes were overwritten and no Stage G/M7 scope pulled in; pass §8.2 and §8.3.
 10. **Documentation closeout:** update master plan/status pages only after implementation is merged and verified; this plan itself does not update them.
 

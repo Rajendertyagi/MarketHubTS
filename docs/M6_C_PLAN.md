@@ -51,7 +51,7 @@ It does not record `tools/list`, `resources/list`, `resources/templates/list`, `
 
 - M6-B4 conformance/parity work.
 - M6-D `subscriptions/listen`, event bridge, notification delivery, or notification telemetry.
-- M6-E broad integration, real external-client, and LAN acceptance.
+- M6-E broad integration, real external-client, and in-process LAN simulation (physical LAN reachability out of revised scope).
 - Stage G/provider activation, live provider driver changes, trading/orders, and market-data behavior changes.
 - New runtime dependencies, another database/migration beyond the one `mcp_activity` migration, auth/RBAC framework, new application/server, or generic audit/telemetry framework.
 - Changes to the nine M6-B2 tool contracts, seven M6-B3 registered resources, three prompts, or MCP transport/security/lifecycle behavior.
@@ -306,7 +306,7 @@ Therefore:
 - Populate `/api/status` in `apps/api/src/app.ts` from `deps.mcpHandler !== undefined` (the handler is mounted when the dependency is present). No new endpoint and no new polling loop or MCP client merely to simulate readiness.
 - Display **“HTTP handler mounted”** when true and **“HTTP handler not mounted”** when false. Do **not** label this field “healthy”, “available”, “connected”, or “configured” — it reports mounting only, not runtime health.
 - Pass this value from the existing status query into ActivityPanel.
-- Align the wording in `docs/M6_PLAN.md` §9.2 and `docs/WEBUI_AND_CONFIGURATION.md` with this observable contract: M6-C reports whether the handler is mounted; “available” remains gated by the separately scoped B4 conformance and E real-HTTP/LAN acceptance.
+- Align the wording in `docs/M6_PLAN.md` §9.2 and `docs/WEBUI_AND_CONFIGURATION.md` with this observable contract: M6-C reports whether the handler is mounted; "available" remains gated by the separately scoped B4 conformance and E real-HTTP acceptance.
 
 **STDIO:** show only “Activity observed” when STDIO records exist, otherwise “No activity observed / status unknown”. Since STDIO is a separate process, the API cannot infer that it is currently configured, connected, or running from the absence/presence of historical rows.
 

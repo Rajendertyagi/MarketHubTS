@@ -19,7 +19,7 @@ Register the **resource** and **prompt** halves of the M6 capability inventory t
 - **M6-B4:** conformance/parity test suite (`conformance.test.ts`, `parity.test.ts`), deterministic-discovery assertions as a milestone, final C13–C21 evidence. B3 produces capabilities and focused tests; B4 proves conformance/parity.
 - **M6-C:** `mcp_activity` table/migration, activity endpoints, WebUI inspection, `startActivity`/`completeActivity`. No activity hooks in `McpServices`.
 - **M6-D:** `subscriptions/listen`, event bridge, `handler.notify` wiring, read-after-notify. B3 registers the event-feed **resource** (read side) only.
-- **M6-E:** broad integration, real-listener acceptance, concurrent-client/reconnect, second-device LAN verification.
+- **M6-E:** broad integration, real-listener acceptance, concurrent-client/reconnect, standalone in-process LAN simulation (physical LAN reachability out of revised scope).
 - Provider activation / Stage G, new dependencies, **database migrations**, auth/RBAC, `x-mcp-header`/`Mcp-Param-*`, futures/market-information tools, and any M6-A transport/CORS/Host-Origin/shutdown change.
 - **No new tools and no changes to the nine B2 tool contracts.** B3 adds resources and prompts only.
 
