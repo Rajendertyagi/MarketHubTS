@@ -46,7 +46,7 @@ M6-D is a notification bridge, not a new market-data pipeline. M6-E is an accept
 | `ServerNotifier` = `toolsChanged()/promptsChanged()/resourcesChanged()/resourceUpdated(uri)` | installed SDK `createMcpHandler-*.d.mts:180-189` |
 | `SubscriptionFilter` fields: `toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, `resourceSubscriptions` | installed core `schemas-*.mjs:523-528` |
 | Client `listen(filter, options?)` → `McpSubscription` with `honoredFilter`, `close()`, `closed: 'local'|'graceful'|'remote'` | installed client `client-*.d.mts:490-515,997` |
-| Handler options: `bus?`, `maxSubscriptions?` (default 1024), `keepAliveMs?` (default 15000), `maxRequestBodySize?` (default 4 MiB), `onerror?`, `legacy?`, `responseMode?` | installed SDK `createMcpHandler-*.d.mts:294-324`; v2.4.0 source §4 |
+| Handler options: `bus?`, `maxSubscriptions?` (default 1024), `keepAliveMs?` (default 15000), `maxRequestBodySize?` (default 4 MiB), `onerror?`, `legacy?`, `responseMode?` | installed SDK `createMcpHandler-*.d.mts:277-324`; v2.4.0 source §4 |
 | `MarketDataService.subscribe(listener)` is the canonical change source; `LiveStateStore` emits detached, revisioned `LiveChangeEvent` values and isolates listener exceptions | `packages/market-core/src/live/service.ts:36-37`; `packages/market-core/src/live/store.ts:75,107,117` |
 | `LiveChangeEvent` variants: `item-updated`, `item-removed`, `provider-connection-changed` | `packages/contracts/src/live.ts:178-201` |
 | `LiveEventHub` subscribes to the same source; bounded replay + `readAfter` with runtime-scoped `resumeCursor` / `snapshot-required` | `packages/realtime/src/hub.ts:201-209,310` |
