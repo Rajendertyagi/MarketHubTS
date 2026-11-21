@@ -56,6 +56,30 @@ export const mcpActivitySummarySchema = z.object({
 }).strict().refine((value) => JSON.stringify(value).length <= 1000, { message: "summary too large" });
 export type McpActivitySummary = z.infer<typeof mcpActivitySummarySchema>;
 
+/**
+ * Project a persisted (possibly legacy) summary JSON through the strict
+ * allow-list: unknown keys and invalid values are dropped, and the result is
+ * re-serialized. Returns "{}" when nothing survives or the input is malformed.
+ * Used on the read path so records written before the strict schema cannot
+ * expose arbitrary fields through LAN-readable views.
+ */
+export function projectSafeSummaryJson(raw: string | null): string {
+  if (!raw) return "{}";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "{}";
+    const source = parsed as Record<string, unknown>;
+    const filtered: Record<string, unknown> = {};
+    for (const key of MCP_ACTIVITY_SUMMARY_KEYS) {
+      if (key in source) filtered[key] = source[key];
+    }
+    const validated = mcpActivitySummarySchema.safeParse(filtered);
+    return validated.success ? JSON.stringify(validated.data) : "{}";
+  } catch {
+    return "{}";
+  }
+}
+
 /** ISO timestamp used for optional client-supplied diagnostics only. */
 const diagnosticTimestamp = z.string().datetime();
 

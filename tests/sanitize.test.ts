@@ -45,6 +45,25 @@ describe("M6-C Finding 1 — comprehensive credential sanitization", () => {
     expect(out).toContain("snap-1");
   });
 
+  test("redacts camelCase and UPPER_SNAKE env-var prefixed credential keys", () => {
+    for (const raw of [
+      "clientSecret=my-secret-value",
+      "apiSecret=my-secret-value",
+      "accessToken=my-secret-value",
+      "UPSTOX_ACCESS_TOKEN=my-secret-value",
+      "MY_API_KEY=my-secret-value"
+    ]) {
+      expect(sanitizeSensitiveText(raw), raw).not.toContain("my-secret-value");
+      expect(sanitizeSensitiveText(raw), raw).toContain("[redacted]");
+    }
+  });
+
+  test("redacts CSRF state query params and long numeric authorization codes", () => {
+    expect(sanitizeSensitiveText("?state=csrf-12345")).not.toContain("csrf-12345");
+    expect(sanitizeSensitiveText("code=123456789")).not.toContain("123456789");
+    expect(sanitizeSensitiveText("code=123456789")).toContain("[redacted]");
+  });
+
   test("redacts authorization_code in all forms (regression)", () => {
     for (const raw of [
       '"authorization_code": "abc123secret"',
@@ -76,7 +95,8 @@ describe("M6-C Finding 1 — comprehensive credential sanitization", () => {
     const out = sanitizeSensitiveText("https://api.example.com/x?access_token=tok123&code=abc&state=ok");
     expect(out).not.toContain("tok123");
     expect(out).not.toContain("abc&");
-    expect(out).toContain("state=ok");
+    // CSRF state is a credential-like query param and is redacted too.
+    expect(out).toContain("state=[redacted]");
   });
 
   test("redacts key: value forms", () => {

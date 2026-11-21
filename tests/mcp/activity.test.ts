@@ -431,6 +431,23 @@ describe("M6-C activity recording", () => {
     } finally { await client.close(); await handler.close(); }
   });
 
+  test("overlong canonicalId hint yields no ref (full contract validation)", async () => {
+    let ref: unknown = "unset";
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { candles: [{ tsMs: 1 }] } }),
+      resultRefHint: () => ({ kind: "historical", canonicalId: "A".repeat(301), interval: "1D", fromMs: 100, toMs: 200 })
+    });
+    expect(ref).toBeUndefined();
+  });
+
   test("empty candle arrays with a valid hint still yield a navigation ref", async () => {
     let ref: unknown = "unset";
     const { services } = makeServices({

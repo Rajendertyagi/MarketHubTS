@@ -1,7 +1,8 @@
 import { CLIENT_INFO_META_KEY, type ServerContext } from "@modelcontextprotocol/server";
 import {
-  candleIntervalSchema, mcpActivitySummarySchema, MCP_ACTIVITY_SUMMARY_KEYS,
-  sanitizeSensitiveText, type McpActivityResultRef, type McpActivitySummary
+  candleIntervalSchema, mcpActivityResultRefSchema, mcpActivitySummarySchema,
+  MCP_ACTIVITY_SUMMARY_KEYS, sanitizeSensitiveText,
+  type McpActivityResultRef, type McpActivitySummary
 } from "@markethub/contracts";
 import type { McpServices } from "./services";
 
@@ -109,7 +110,13 @@ function isErrorResult(value: unknown): boolean {
 /** Resolve a typed reference from a successful result; never from a failed one. */
 function resultRefOf(value: unknown, hint?: McpActivityResultRef): McpActivityResultRef | undefined {
   if (isErrorResult(value)) return undefined;
-  return snapshotRefOf(value) ?? historicalRefOf(value, hint);
+  const ref = snapshotRefOf(value) ?? historicalRefOf(value, hint);
+  if (!ref) return undefined;
+  // Validate the complete candidate against the persisted contract (e.g. the
+  // 300-char canonicalId bound) so an invalid ref is never persisted or
+  // rejected at completion time leaving the row incomplete.
+  const parsed = mcpActivityResultRefSchema.safeParse(ref);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /** Extract an error object from either structuredContent or text content. */

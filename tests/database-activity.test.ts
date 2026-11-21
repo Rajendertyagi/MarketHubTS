@@ -153,6 +153,35 @@ describe("M6-C activity repository", () => {
     } finally { h.cleanup(); }
   });
 
+  test("read projection re-sanitizes legacy credential-like fields and summaries", () => {
+    const h = harness();
+    try {
+      // Seed a record the way a pre-fix writer would: free-text fields carry
+      // credential-like values and the summary has an arbitrary key.
+      h.activities.start(startReq({
+        toolName: "Bearer abc123",
+        clientName: "token=secret99",
+        clientVersion: "api_secret=versionsecret",
+        summaryJson: JSON.stringify({ token: "secret123", query: "NIFTY" })
+      }), () => Date.parse("2026-01-01T00:00:00.000Z"));
+      h.activities.complete({
+        operationId: OP, status: "failed",
+        errorCategory: "provider", errorMessage: "Bearer errtoken rejected"
+      });
+
+      const view = h.activities.getByOperationId(OP);
+      expect(view).not.toBeNull();
+      expect(view!.toolName).not.toContain("abc123");
+      expect(view!.clientName).not.toContain("secret99");
+      expect(view!.clientVersion).not.toContain("versionsecret");
+      expect(view!.errorMessage).not.toContain("errtoken");
+      // Arbitrary summary key is dropped; the legitimate one survives.
+      expect(view!.summaryJson).not.toContain("secret123");
+      expect(view!.summaryJson).toContain("NIFTY");
+      expect(JSON.parse(view!.summaryJson!)).toEqual({ query: "NIFTY" });
+    } finally { h.cleanup(); }
+  });
+
   test("cleanupActivities deletes in bounded batches", () => {
     const h = harness();
     try {

@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, lt, lte, or, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
-import { mcpActivityResultRefSchema } from "@markethub/contracts";
+import { mcpActivityResultRefSchema, projectSafeSummaryJson, sanitizeSensitiveText } from "@markethub/contracts";
 import type {
   McpActivityCompleteRequest, McpActivityCompleteResult, McpActivityFilters,
   McpActivityList, McpActivityStartRequest, McpActivityStartResult,
@@ -220,19 +220,21 @@ export class McpActivityRepository {
     return {
       id: r.id,
       operationId: r.operationId,
-      toolName: r.toolName,
+      // Re-sanitize on read: records written before the strict schema may
+      // contain credential-like values in any of these free-text fields.
+      toolName: sanitizeSensitiveText(r.toolName, 200),
       transport: r.transport as McpActivityView["transport"],
       startedAt: r.startedAt,
       finishedAt: r.finishedAt,
       durationMs: r.durationMs,
       clientStartedAt: r.clientStartedAt,
       clientFinishedAt: r.clientFinishedAt,
-      clientName: r.clientName,
-      clientVersion: r.clientVersion,
+      clientName: r.clientName === null ? null : sanitizeSensitiveText(r.clientName, 120),
+      clientVersion: r.clientVersion === null ? null : sanitizeSensitiveText(r.clientVersion, 120),
       status: r.status as McpActivityStatus,
-      errorCategory: r.errorCategory,
-      errorMessage: r.errorMessage,
-      summaryJson: r.summaryJson,
+      errorCategory: r.errorCategory === null ? null : sanitizeSensitiveText(r.errorCategory, 64),
+      errorMessage: r.errorMessage === null ? null : sanitizeSensitiveText(r.errorMessage, 300),
+      summaryJson: r.summaryJson === null ? null : projectSafeSummaryJson(r.summaryJson),
       dataResultRef: ref
     };
   }

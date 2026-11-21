@@ -35,6 +35,165 @@ function formatDuration(ms: number | null): string {
   return `${ms} ms`;
 }
 
+/** State and callbacks consumed by the pure presentational view. */
+export interface ActivityPanelViewState {
+  httpHandlerMounted: boolean | null;
+  stdioObserved: boolean;
+  records: McpActivityView[];
+  nextCursor: string | null;
+  pageIndex: number;
+  loading: boolean;
+  error: string | null;
+  detail: McpActivityView | null;
+  toolName: string;
+  transport: string;
+  status: string;
+  from: string;
+  to: string;
+  operationId: string;
+}
+
+export interface ActivityPanelViewActions {
+  onRefresh: () => void;
+  onApplyFilters: () => void;
+  onToolName: (value: string) => void;
+  onTransport: (value: string) => void;
+  onStatus: (value: string) => void;
+  onFrom: (value: string) => void;
+  onTo: (value: string) => void;
+  onOperationId: (value: string) => void;
+  onLookup: () => void;
+  onViewDetails: (operationId: string) => void;
+  onPrevPage: () => void;
+  onNextPage: () => void;
+  onOpenSnapshot: (snapshotId: string) => void;
+  onOpenHistorical: (ref: { canonicalId: string; interval: string; fromMs: number; toMs: number }) => void;
+}
+
+/** Pure filter/pagination query builder, extracted for interaction tests. */
+export interface ActivityFilterState {
+  toolName: string; transport: string; status: string; from: string; to: string;
+}
+
+export function buildActivityQuery(filters: ActivityFilterState, cursor?: string) {
+  return {
+    ...(filters.toolName.trim() ? { toolName: filters.toolName.trim() } : {}),
+    ...(filters.transport ? { transport: filters.transport as "HTTP" | "STDIO" } : {}),
+    ...(filters.status ? { status: filters.status as McpActivityView["status"] } : {}),
+    ...(filters.from ? { from: new Date(filters.from).toISOString() } : {}),
+    ...(filters.to ? { to: new Date(filters.to).toISOString() } : {}),
+    limit: 25,
+    ...(cursor ? { cursor } : {})
+  };
+}
+
+const inputClass = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
+const buttonClass = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
+
+/**
+ * Pure presentational view. Kept separate from the data-loading container so
+ * rendering can be verified with react-dom/server without a DOM test library.
+ */
+export function ActivityPanelView({ state, actions }: { state: ActivityPanelViewState; actions: ActivityPanelViewActions }) {
+  const resultLink = (record: McpActivityView) => {
+    const ref = record.dataResultRef;
+    if (!ref) return null;
+    if (ref.kind === "snapshot") {
+      return <button type="button" className="text-sky-400 hover:underline" onClick={() => actions.onOpenSnapshot(ref.snapshotId)}>
+        Open snapshot {ref.snapshotId.slice(0, 8)}…
+      </button>;
+    }
+    return <button type="button" className="text-sky-400 hover:underline" onClick={() => actions.onOpenHistorical({
+      canonicalId: ref.canonicalId, interval: ref.interval, fromMs: ref.fromMs, toMs: ref.toMs
+    })}>Open historical {ref.canonicalId} / {ref.interval}</button>;
+  };
+
+  return (
+    <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-base font-semibold">MCP / Activity</h3>
+        <button type="button" className={buttonClass} onClick={actions.onRefresh}>Refresh</button>
+      </div>
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+          <p className="text-xs text-slate-400">HTTP MCP</p>
+          <p className="mt-1 text-sm text-slate-100">
+            {state.httpHandlerMounted === null ? "Status unknown" : state.httpHandlerMounted ? "HTTP handler mounted" : "HTTP handler not mounted"}
+          </p>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+          <p className="text-xs text-slate-400">STDIO MCP</p>
+          <p className="mt-1 text-sm text-slate-100">{state.stdioObserved ? "Activity observed" : "No activity observed / status unknown"}</p>
+        </div>
+      </div>
+
+      <div className="mb-4 grid gap-2 sm:grid-cols-5">
+        <input aria-label="Filter tool" className={inputClass} placeholder="Tool name" value={state.toolName} onChange={(e) => actions.onToolName(e.target.value)} />
+        <select aria-label="Filter transport" className={inputClass} value={state.transport} onChange={(e) => actions.onTransport(e.target.value)}>
+          <option value="">Any transport</option><option value="HTTP">HTTP</option><option value="STDIO">STDIO</option>
+        </select>
+        <select aria-label="Filter status" className={inputClass} value={state.status} onChange={(e) => actions.onStatus(e.target.value)}>
+          <option value="">Any status</option>
+          <option value="started">started</option><option value="succeeded">succeeded</option>
+          <option value="failed">failed</option><option value="interrupted">interrupted</option>
+        </select>
+        <input aria-label="From time" type="datetime-local" className={inputClass} value={state.from} onChange={(e) => actions.onFrom(e.target.value)} />
+        <input aria-label="To time" type="datetime-local" className={inputClass} value={state.to} onChange={(e) => actions.onTo(e.target.value)} />
+        <button type="button" className={buttonClass} onClick={actions.onApplyFilters}>Apply filters</button>
+      </div>
+
+      <div className="mb-4 flex gap-2">
+        <input aria-label="Operation ID" className={inputClass} placeholder="Exact operation ID" value={state.operationId} onChange={(e) => actions.onOperationId(e.target.value)} />
+        <button type="button" className={buttonClass} onClick={actions.onLookup}>Find operation</button>
+      </div>
+
+      {state.loading && <p className="text-sm text-slate-400" role="status">Loading activity…</p>}
+      {state.error && <p className="mb-3 text-sm text-rose-300" role="alert">{state.error}</p>}
+      {!state.loading && !state.error && state.records.length === 0 && <p className="text-sm text-slate-400">No activity recorded yet.</p>}
+
+      {state.detail && (
+        <div className="mb-4 rounded-lg border border-sky-800/60 bg-sky-950/20 p-3 text-xs text-slate-200">
+          <p>Operation: {state.detail.operationId}</p>
+          <p>Status: {state.detail.status} · Transport: {state.detail.transport} · Duration: {formatDuration(state.detail.durationMs)}</p>
+          <p>Started: {state.detail.startedAt} · Finished: {state.detail.finishedAt ?? "—"}</p>
+          <p>Client: {state.detail.clientName ?? "—"} {state.detail.clientVersion ?? ""}</p>
+          {state.detail.errorMessage && <p className="text-rose-300">{state.detail.errorCategory}: {state.detail.errorMessage}</p>}
+          {state.detail.summaryJson && <pre className="mt-2 whitespace-pre-wrap text-slate-400">{state.detail.summaryJson}</pre>}
+          {resultLink(state.detail)}
+        </div>
+      )}
+
+      <ul className="grid gap-2">
+        {state.records.map((record) => (
+          <li key={record.id} className={`rounded-lg border p-3 ${record.status === "started" || record.status === "interrupted" ? "border-amber-800/60 bg-amber-950/20" : "border-slate-800 bg-slate-950/40"}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-slate-100">{record.toolName}</span>
+              <StatusBadge label={record.status} tone={statusTone(record.status)} />
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              {record.transport} · {record.startedAt} · Finished: {record.finishedAt ?? "—"} · {formatDuration(record.durationMs)}
+              {record.clientName ? ` · ${record.clientName}` : ""}
+              {record.clientVersion ? ` ${record.clientVersion}` : ""}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 break-all">Operation: {record.operationId}</p>
+            <button type="button" className="mt-1 text-sky-400 hover:underline text-xs" onClick={() => actions.onViewDetails(record.operationId)}>View details</button>
+            {record.errorMessage && <p className="mt-1 text-xs text-rose-300">{record.errorCategory}: {record.errorMessage}</p>}
+            {resultLink(record)}
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-4 flex items-center gap-2">
+        <button type="button" className={buttonClass} disabled={state.pageIndex === 0} onClick={actions.onPrevPage}>Previous</button>
+        <span className="text-xs text-slate-400">Page {state.pageIndex + 1}</span>
+        <button type="button" className={buttonClass} disabled={!state.nextCursor} onClick={actions.onNextPage}>Next</button>
+      </div>
+    </section>
+  );
+}
+
+/** Data-loading container: owns state and wires the pure view to the API client. */
 export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistorical }: ActivityPanelProps) {
   const [records, setRecords] = useState<McpActivityView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -56,15 +215,7 @@ export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistor
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchActivity({
-        ...(toolName.trim() ? { toolName: toolName.trim() } : {}),
-        ...(transport ? { transport: transport as "HTTP" | "STDIO" } : {}),
-        ...(status ? { status: status as McpActivityView["status"] } : {}),
-        ...(from ? { from: new Date(from).toISOString() } : {}),
-        ...(to ? { to: new Date(to).toISOString() } : {}),
-        limit: 25,
-        ...(cursor ? { cursor } : {})
-      });
+      const page = await fetchActivity(buildActivityQuery({ toolName, transport, status, from, to }, cursor));
       setRecords(page.records);
       setNextCursor(page.nextCursor);
     } catch (cause) {
@@ -101,115 +252,43 @@ export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistor
     }
   };
 
-  const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
-  const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
-
-  const resultLink = (record: McpActivityView) => {
-    const ref = record.dataResultRef;
-    if (!ref) return null;
-    if (ref.kind === "snapshot") {
-      return <button type="button" className="text-sky-400 hover:underline" onClick={() => onOpenSnapshot?.(ref.snapshotId)}>
-        Open snapshot {ref.snapshotId.slice(0, 8)}…
-      </button>;
-    }
-    return <button type="button" className="text-sky-400 hover:underline" onClick={() => onOpenHistorical?.({
-      canonicalId: ref.canonicalId, interval: ref.interval, fromMs: ref.fromMs, toMs: ref.toMs
-    })}>Open historical {ref.canonicalId} / {ref.interval}</button>;
+  const applyFilters = () => {
+    setPageCursors([undefined]);
+    setPageIndex(0);
+    void load();
+    loadStdioPresence();
   };
 
-  return (
-    <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-base font-semibold">MCP / Activity</h3>
-        <button type="button" className={button} onClick={() => { void load(); loadStdioPresence(); }}>Refresh</button>
-      </div>
+  const state: ActivityPanelViewState = {
+    httpHandlerMounted, stdioObserved, records, nextCursor, pageIndex,
+    loading, error, detail, toolName, transport, status, from, to, operationId
+  };
+  const actions: ActivityPanelViewActions = {
+    onRefresh: () => { void load(); loadStdioPresence(); },
+    onApplyFilters: applyFilters,
+    onToolName: setToolName,
+    onTransport: setTransport,
+    onStatus: setStatus,
+    onFrom: setFrom,
+    onTo: setTo,
+    onOperationId: setOperationId,
+    onLookup: () => void lookup(),
+    onViewDetails: (id) => { setOperationId(id); void lookup(id); },
+    onPrevPage: () => {
+      const target = pageIndex - 1;
+      setPageIndex(target);
+      void load(pageCursors[target]);
+    },
+    onNextPage: () => {
+      if (!nextCursor) return;
+      const target = pageIndex + 1;
+      setPageCursors((prev) => [...prev.slice(0, target), nextCursor]);
+      setPageIndex(target);
+      void load(nextCursor);
+    },
+    onOpenSnapshot: (snapshotId) => onOpenSnapshot?.(snapshotId),
+    onOpenHistorical: (ref) => onOpenHistorical?.(ref)
+  };
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-          <p className="text-xs text-slate-400">HTTP MCP</p>
-          <p className="mt-1 text-sm text-slate-100">
-            {httpHandlerMounted === null ? "Status unknown" : httpHandlerMounted ? "HTTP handler mounted" : "HTTP handler not mounted"}
-          </p>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-          <p className="text-xs text-slate-400">STDIO MCP</p>
-          <p className="mt-1 text-sm text-slate-100">{stdioObserved ? "Activity observed" : "No activity observed / status unknown"}</p>
-        </div>
-      </div>
-
-      <div className="mb-4 grid gap-2 sm:grid-cols-5">
-        <input aria-label="Filter tool" className={input} placeholder="Tool name" value={toolName} onChange={(e) => setToolName(e.target.value)} />
-        <select aria-label="Filter transport" className={input} value={transport} onChange={(e) => setTransport(e.target.value)}>
-          <option value="">Any transport</option><option value="HTTP">HTTP</option><option value="STDIO">STDIO</option>
-        </select>
-        <select aria-label="Filter status" className={input} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">Any status</option>
-          <option value="started">started</option><option value="succeeded">succeeded</option>
-          <option value="failed">failed</option><option value="interrupted">interrupted</option>
-        </select>
-        <input aria-label="From time" type="datetime-local" className={input} value={from} onChange={(e) => setFrom(e.target.value)} />
-        <input aria-label="To time" type="datetime-local" className={input} value={to} onChange={(e) => setTo(e.target.value)} />
-        <button type="button" className={button} onClick={() => {
-          setPageCursors([undefined]); setPageIndex(0); void load(); loadStdioPresence();
-        }}>Apply filters</button>
-      </div>
-
-      <div className="mb-4 flex gap-2">
-        <input aria-label="Operation ID" className={input} placeholder="Exact operation ID" value={operationId} onChange={(e) => setOperationId(e.target.value)} />
-        <button type="button" className={button} onClick={() => void lookup()}>Find operation</button>
-      </div>
-
-      {loading && <p className="text-sm text-slate-400" role="status">Loading activity…</p>}
-      {error && <p className="mb-3 text-sm text-rose-300" role="alert">{error}</p>}
-      {!loading && !error && records.length === 0 && <p className="text-sm text-slate-400">No activity recorded yet.</p>}
-
-      {detail && (
-        <div className="mb-4 rounded-lg border border-sky-800/60 bg-sky-950/20 p-3 text-xs text-slate-200">
-          <p>Operation: {detail.operationId}</p>
-          <p>Status: {detail.status} · Transport: {detail.transport} · Duration: {formatDuration(detail.durationMs)}</p>
-          {detail.errorMessage && <p className="text-rose-300">{detail.errorCategory}: {detail.errorMessage}</p>}
-          {detail.summaryJson && <pre className="mt-2 whitespace-pre-wrap text-slate-400">{detail.summaryJson}</pre>}
-          {resultLink(detail)}
-        </div>
-      )}
-
-      <ul className="grid gap-2">
-        {records.map((record) => (
-          <li key={record.id} className={`rounded-lg border p-3 ${record.status === "started" || record.status === "interrupted" ? "border-amber-800/60 bg-amber-950/20" : "border-slate-800 bg-slate-950/40"}`}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-slate-100">{record.toolName}</span>
-              <StatusBadge label={record.status} tone={statusTone(record.status)} />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              {record.transport} · {record.startedAt} · {formatDuration(record.durationMs)}
-              {record.clientName ? ` · ${record.clientName}` : ""}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 break-all">Operation: {record.operationId}</p>
-            <button type="button" className="mt-1 text-sky-400 hover:underline text-xs" onClick={() => {
-              setOperationId(record.operationId);
-              void lookup(record.operationId);
-            }}>View details</button>
-            {record.errorMessage && <p className="mt-1 text-xs text-rose-300">{record.errorCategory}: {record.errorMessage}</p>}
-            {resultLink(record)}
-          </li>
-        ))}
-      </ul>
-
-      <div className="mt-4 flex items-center gap-2">
-        <button type="button" className={button} disabled={pageIndex === 0} onClick={() => {
-          const target = pageIndex - 1;
-          setPageIndex(target);
-          void load(pageCursors[target]);
-        }}>Previous</button>
-        <span className="text-xs text-slate-400">Page {pageIndex + 1}</span>
-        <button type="button" className={button} disabled={!nextCursor} onClick={() => {
-          if (!nextCursor) return;
-          const target = pageIndex + 1;
-          setPageCursors((prev) => [...prev.slice(0, target), nextCursor]);
-          setPageIndex(target);
-          void load(nextCursor);
-        }}>Next</button>
-      </div>
-    </section>
-  );
+  return <ActivityPanelView state={state} actions={actions} />;
 }
