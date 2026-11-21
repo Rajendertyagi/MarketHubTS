@@ -218,6 +218,238 @@ describe("M6-C activity recording", () => {
     } finally { await client.close(); await handler.close(); }
   });
 
+  test("client name and version are sanitized before persistence", async () => {
+    const ctx = {
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: { [CLIENT_INFO_META_KEY]: { name: "Bearer abc123 client", version: "token=secret99" } }
+      }
+    } as unknown as ServerContext;
+    let startReq: { clientName?: string; clientVersion?: string } | undefined;
+    const { services } = makeServices({
+      startActivity: async (req) => {
+        startReq = req;
+        return { ok: true, value: { id: "a1", operationId: req.operationId, startedAt: "2026-01-01T00:00:00.000Z" } };
+      }
+    });
+    await withActivity({ services, transport: "STDIO", toolName: "x", context: ctx, summary: {}, operation: async () => "ok" });
+    expect(startReq?.clientName).not.toContain("abc123");
+    expect(startReq?.clientName).toContain("[redacted]");
+    expect(startReq?.clientVersion).not.toContain("secret99");
+    expect(startReq?.clientVersion).toContain("[redacted]");
+  });
+
+  test("throwing onActivityError on start failure never blocks the operation", async () => {
+    let executions = 0;
+    const { services } = makeServices({
+      startActivity: async () => { throw new Error("db down"); },
+      onActivityError: () => { throw new Error("diagnostic exploded"); }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    const result = await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => { executions++; return "operation-result"; }
+    });
+    expect(executions).toBe(1);
+    expect(result).toBe("operation-result");
+  });
+
+  test("throwing onActivityError on complete failure preserves result and exception", async () => {
+    const { services } = makeServices({
+      completeActivity: async () => { throw new Error("db down"); },
+      onActivityError: () => { throw new Error("diagnostic exploded"); }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+
+    // Successful operation: result preserved.
+    const ok = await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => "operation-result"
+    });
+    expect(ok).toBe("operation-result");
+
+    // Throwing operation: original exception preserved (not replaced by diagnostic).
+    await expect(withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => { throw new Error("original-exception"); }
+    })).rejects.toThrow("original-exception");
+  });
+
+  test("throwing onActivityError does not change outcome classification", async () => {
+    const statuses: string[] = [];
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        statuses.push(req.status);
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      },
+      onActivityError: () => { throw new Error("diagnostic exploded"); }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({ services, transport: "STDIO", toolName: "x", context: ctx, summary: {}, operation: async () => "ok" });
+    await expect(withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => { throw new Error("boom"); }
+    })).rejects.toThrow("boom");
+    expect(statuses).toEqual(["succeeded", "failed"]);
+  });
+
+  test("direct snapshot result ref is extracted", async () => {
+    let ref: unknown;
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { id: "snap-direct", items: [] } })
+    });
+    expect(ref).toEqual({ kind: "snapshot", snapshotId: "snap-direct" });
+  });
+
+  test("nested snapshot result ref from on_demand_retrieval is extracted", async () => {
+    let ref: unknown;
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({
+        structuredContent: { kind: "option_chain", status: "ok", result: { snapshot: { id: "snap-nested" }, error: null } }
+      })
+    });
+    expect(ref).toEqual({ kind: "snapshot", snapshotId: "snap-nested" });
+  });
+
+  test("historical result ref uses validated hint and canonical interval", async () => {
+    let ref: unknown;
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { candles: [{ tsMs: 1 }] } }),
+      resultRefHint: () => ({ kind: "historical", canonicalId: "NIFTY", interval: "1D", fromMs: 100, toMs: 200 })
+    });
+    expect(ref).toEqual({ kind: "historical", canonicalId: "NIFTY", interval: "1D", fromMs: 100, toMs: 200 });
+  });
+
+  test("invalid interval hint yields no historical ref", async () => {
+    let ref: unknown = "unset";
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { candles: [] } }),
+      resultRefHint: () => ({ kind: "historical", canonicalId: "NIFTY", interval: "BOGUS", fromMs: 100, toMs: 200 }) as never
+    });
+    expect(ref).toBeUndefined();
+  });
+
+  test("failed or unavailable results never produce a ref", async () => {
+    let ref: unknown = "unset";
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ isError: true, structuredContent: { id: "snap-should-not-appear" } })
+    });
+    expect(ref).toBeUndefined();
+
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { snapshot: null, error: "no provider available" } })
+    });
+    expect(ref).toBeUndefined();
+  });
+
+  test("rejecting async onActivityError never becomes an unhandled rejection", async () => {
+    let executions = 0;
+    const { services } = makeServices({
+      startActivity: async () => { throw new Error("db down"); },
+      completeActivity: async () => { throw new Error("db down"); },
+      onActivityError: (async () => { throw new Error("async diagnostic exploded"); }) as never
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    const result = await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => { executions++; return "operation-result"; }
+    });
+    expect(executions).toBe(1);
+    expect(result).toBe("operation-result");
+    // Allow the microtask queue to drain; a rejected diagnostic promise would
+    // otherwise surface as an unhandled rejection and fail the process.
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  test("throwing resultRefHint never discards a successful result", async () => {
+    const { services } = makeServices();
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    const result = await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => "operation-result",
+      resultRefHint: () => { throw new Error("hint exploded"); }
+    });
+    expect(result).toBe("operation-result");
+  });
+
+  test("empty sanitized error message falls back so the row can complete", async () => {
+    let captured: { status?: string; errorMessage?: string } | undefined;
+    const { services } = makeServices({
+      getProviderStatus: async () => ({ ok: false, error: { category: "provider", message: "" } }),
+      completeActivity: async (req) => {
+        captured = { status: req.status, errorMessage: req.errorMessage };
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const { client, handler } = await connect(services);
+    try {
+      await client.callTool({ name: "provider_status", arguments: {} });
+      expect(captured?.status).toBe("failed");
+      expect(captured?.errorMessage).toBe("tool returned isError");
+    } finally { await client.close(); await handler.close(); }
+  });
+
+  test("empty candle arrays with a valid hint still yield a navigation ref", async () => {
+    let ref: unknown = "unset";
+    const { services } = makeServices({
+      completeActivity: async (req) => {
+        ref = req.dataResultRef;
+        return { ok: true, value: { id: "a1", status: req.status, finishedAt: "2026-01-01T00:00:00.000Z", durationMs: 0 } };
+      }
+    });
+    const ctx = { mcpReq: { signal: new AbortController().signal } } as unknown as ServerContext;
+    await withActivity({
+      services, transport: "STDIO", toolName: "x", context: ctx, summary: {},
+      operation: async () => ({ structuredContent: { candles: [] } }),
+      resultRefHint: () => ({ kind: "historical", canonicalId: "NIFTY", interval: "1D", fromMs: 100, toMs: 200 })
+    });
+    // Documented: the ref is a form-prefill hint, so an empty result still
+    // navigates the operator to the requested range.
+    expect(ref).toEqual({ kind: "historical", canonicalId: "NIFTY", interval: "1D", fromMs: 100, toMs: 200 });
+  });
+
   test("all nine tools, seven resources and three prompts are recorded", async () => {
     const { services, calls } = makeServices();
     const { client, handler } = await connect(services);

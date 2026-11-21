@@ -1,4 +1,5 @@
 import type { McpServer, ServerContext } from "@modelcontextprotocol/server";
+import type { McpActivityResultRef } from "@markethub/contracts";
 import type { McpResult, McpServices } from "./services";
 import { withActivity, safeSummary, type ActivityTransport } from "./activity";
 import {
@@ -32,11 +33,11 @@ const mayPersist = { readOnlyHint: false, destructiveHint: false, openWorldHint:
 function record<T>(
   services: McpServices, transport: ActivityTransport, toolName: string,
   ctx: ServerContext, args: Record<string, unknown>, keys: readonly string[],
-  operation: () => Promise<T>
+  operation: () => Promise<T>, resultRefHint?: () => McpActivityResultRef | undefined
 ): Promise<T> {
   return withActivity({
     services, transport, toolName, context: ctx,
-    summary: safeSummary(args, keys), operation
+    summary: safeSummary(args, keys), operation, resultRefHint
   });
 }
 
@@ -111,6 +112,10 @@ export function registerTools(server: McpServer, services: McpServices, transpor
         ? await services.getCoverage(request)
         : await services.fetchHistorical(request);
     return result.ok ? success(result.value) : failure(result.error);
+  }, () => {
+    const r = parseRange(args.from, args.to);
+    if ("error" in r) return undefined;
+    return { kind: "historical", canonicalId: args.canonicalId, interval: args.interval, fromMs: r.fromMs, toMs: r.toMs };
   }));
 
   // 6. option_chain_snapshot
@@ -178,6 +183,11 @@ export function registerTools(server: McpServer, services: McpServices, transpor
       });
     }
     return success({ kind: "option_chain", status: "ok", tool: "option_chain_snapshot", result: result.value });
+  }, () => {
+    if (args.kind !== "historical" || args.interval === undefined || args.from === undefined || args.to === undefined) return undefined;
+    const r = parseRange(args.from, args.to);
+    if ("error" in r) return undefined;
+    return { kind: "historical", canonicalId: args.canonicalId, interval: args.interval, fromMs: r.fromMs, toMs: r.toMs };
   }));
 
   // 8. futures_chain — unavailable in M6

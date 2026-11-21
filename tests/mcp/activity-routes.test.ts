@@ -29,6 +29,26 @@ async function json(res: Response): Promise<Record<string, unknown>> {
   return await res.json() as Record<string, unknown>;
 }
 
+/** Build a chunked streaming body with no Content-Length, tracking cancellation. */
+function streamingBody(chunks: string[], onCancel?: () => void): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i >= chunks.length) { controller.close(); return; }
+      controller.enqueue(enc.encode(chunks[i++]!));
+    },
+    cancel() { onCancel?.(); }
+  });
+}
+
+function streamRequest(path: string, body: ReadableStream<Uint8Array>): Request {
+  // A ReadableStream body means the runtime does not set Content-Length.
+  return new Request(`http://localhost${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body
+  });
+}
+
 function startBody(overrides: Record<string, unknown> = {}) {
   return {
     operationId: OP, toolName: "markethub_health", transport: "HTTP",
@@ -131,9 +151,13 @@ describe("M6-C activity API routes", () => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(startBody({ summaryJson: JSON.stringify({ token: "secret123" }) }))
       }, h.localEnv);
-      expect(unsafe.status).toBe(200); // schema validates shape; sanitizer redacts values at write
-      const view = h.activities.getByOperationId(OP);
-      expect(view?.summaryJson).not.toContain("secret123");
+      // Strict allow-list rejects arbitrary summary keys (Finding 1).
+      expect(unsafe.status).toBe(400);
+      const allowed = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody({ summaryJson: JSON.stringify({ query: "NIFTY" }) }))
+      }, h.localEnv);
+      expect(allowed.status).toBe(200);
     } finally { h.cleanup(); }
   });
 
@@ -163,6 +187,120 @@ describe("M6-C activity API routes", () => {
         body: JSON.stringify(startBody({ toolName: huge }))
       }, h.localEnv);
       expect(res.status).toBe(400);
+    } finally { h.cleanup(); }
+  });
+
+  test("oversized body without Content-Length is rejected while streaming (start)", async () => {
+    const h = harness();
+    try {
+      // 10 chunks x 1000 bytes = 10,000 bytes, streamed with no Content-Length.
+      const chunks = Array.from({ length: 10 }, () => "x".repeat(1000));
+      let cancelled = false;
+      const req = streamRequest("/api/mcp/activity/start", streamingBody(chunks, () => { cancelled = true; }));
+      expect(req.headers.get("content-length")).toBeNull();
+      const res = await h.app.request(req, undefined, h.localEnv);
+      expect(res.status).toBe(400);
+      // The stream was cancelled early rather than fully buffered/consumed.
+      expect(cancelled).toBe(true);
+    } finally { h.cleanup(); }
+  });
+
+  test("oversized body without Content-Length is rejected while streaming (complete)", async () => {
+    const h = harness();
+    try {
+      const chunks = Array.from({ length: 10 }, () => "y".repeat(1000));
+      let cancelled = false;
+      const req = streamRequest("/api/mcp/activity/complete", streamingBody(chunks, () => { cancelled = true; }));
+      expect(req.headers.get("content-length")).toBeNull();
+      const res = await h.app.request(req, undefined, h.localEnv);
+      expect(res.status).toBe(400);
+      expect(cancelled).toBe(true);
+    } finally { h.cleanup(); }
+  });
+
+  test("multibyte body exceeding 4096 UTF-8 bytes is rejected even when JS length is under the limit", async () => {
+    const h = harness();
+    try {
+      // "é" is 1 JS char but 2 UTF-8 bytes. 3000 chars => JS length ~3060 (< 4096)
+      // but ~6000 UTF-8 bytes (> 4096). The old string-length check would accept it.
+      const toolName = "é".repeat(3000);
+      const body = JSON.stringify(startBody({ toolName }));
+      expect(body.length).toBeLessThan(4096);
+      expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(4096);
+      const res = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body
+      }, h.localEnv);
+      expect(res.status).toBe(400);
+    } finally { h.cleanup(); }
+  });
+
+  test("split chunks that total under the limit are accepted", async () => {
+    const h = harness();
+    try {
+      const payload = JSON.stringify(startBody());
+      const mid = Math.floor(payload.length / 2);
+      const req = streamRequest("/api/mcp/activity/start", streamingBody([payload.slice(0, mid), payload.slice(mid)]));
+      const res = await h.app.request(req, undefined, h.localEnv);
+      expect(res.status).toBe(200);
+      expect(h.activities.getByOperationId(OP)).not.toBeNull();
+    } finally { h.cleanup(); }
+  });
+
+  test("declared oversized Content-Length is rejected early", async () => {
+    const h = harness();
+    try {
+      const req = new Request("http://localhost/api/mcp/activity/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": "99999" },
+        body: streamingBody([JSON.stringify(startBody())])
+      });
+      expect(req.headers.get("content-length")).toBe("99999");
+      const res = await h.app.request(req, undefined, h.localEnv);
+      expect(res.status).toBe(400);
+    } finally { h.cleanup(); }
+  });
+
+  test("a body of exactly 4096 bytes is accepted", async () => {
+    const h = harness();
+    try {
+      // Pad with trailing JSON whitespace (ignored by JSON.parse) so the body
+      // is exactly 4096 bytes while still parsing to a schema-valid request.
+      const base = JSON.stringify(startBody());
+      const body = base + " ".repeat(4096 - base.length);
+      expect(new TextEncoder().encode(body).byteLength).toBe(4096);
+      const res = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body
+      }, h.localEnv);
+      expect(res.status).toBe(200);
+    } finally { h.cleanup(); }
+  });
+
+  test("toolName is sanitized on the STDIO write path", async () => {
+    const h = harness();
+    try {
+      await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startBody({ toolName: "Bearer abc123" }))
+      }, h.localEnv);
+      const view = h.activities.getByOperationId(OP);
+      expect(view?.toolName).not.toContain("abc123");
+      expect(view?.toolName).toContain("[redacted]");
+    } finally { h.cleanup(); }
+  });
+
+  test("empty and malformed bodies are rejected generically", async () => {
+    const h = harness();
+    try {
+      const empty = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: ""
+      }, h.localEnv);
+      expect(empty.status).toBe(400);
+      const malformed = await h.app.request("/api/mcp/activity/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json"
+      }, h.localEnv);
+      expect(malformed.status).toBe(400);
+      const body = await json(malformed);
+      expect(body.message).toBe("Invalid activity start request"); // generic, no echo
     } finally { h.cleanup(); }
   });
 

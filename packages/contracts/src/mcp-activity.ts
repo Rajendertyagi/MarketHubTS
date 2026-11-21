@@ -26,11 +26,34 @@ export const mcpActivityResultRefSchema = z.discriminatedUnion("kind", [
 ]);
 export type McpActivityResultRef = z.infer<typeof mcpActivityResultRefSchema>;
 
-/** Bounded safe summary: only primitive allow-listed values, no raw arguments. */
-export const mcpActivitySummarySchema = z.record(
-  z.string().max(64),
-  z.union([z.string().max(200), z.number().finite(), z.boolean()])
-).refine((value) => JSON.stringify(value).length <= 1000, { message: "summary too large" });
+/**
+ * Strict safe-summary field allow-list, derived from the real tool/resource/
+ * prompt registration call sites in packages/mcp-core. Unknown keys are
+ * rejected so arbitrary arguments can never be persisted as a summary.
+ */
+export const MCP_ACTIVITY_SUMMARY_KEYS = [
+  "query", "limit", "canonicalId", "interval", "mode", "from", "to",
+  "configId", "snapshotId", "underlyingCanonicalId", "expiryDate", "kind",
+  "hasCursor"
+] as const;
+
+const summaryValue = z.union([z.string().max(200), z.number().finite(), z.boolean()]);
+
+export const mcpActivitySummarySchema = z.object({
+  query: summaryValue.optional(),
+  limit: summaryValue.optional(),
+  canonicalId: summaryValue.optional(),
+  interval: summaryValue.optional(),
+  mode: summaryValue.optional(),
+  from: summaryValue.optional(),
+  to: summaryValue.optional(),
+  configId: summaryValue.optional(),
+  snapshotId: summaryValue.optional(),
+  underlyingCanonicalId: summaryValue.optional(),
+  expiryDate: summaryValue.optional(),
+  kind: summaryValue.optional(),
+  hasCursor: summaryValue.optional()
+}).strict().refine((value) => JSON.stringify(value).length <= 1000, { message: "summary too large" });
 export type McpActivitySummary = z.infer<typeof mcpActivitySummarySchema>;
 
 /** ISO timestamp used for optional client-supplied diagnostics only. */

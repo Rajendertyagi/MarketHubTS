@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { parseIstDateRange } from "@markethub/contracts";
+import { candleIntervalSchema, istDateString, parseIstDateRange } from "@markethub/contracts";
 import type {
   CandleGap, CandleInterval, CandleRangeNote, HistoricalCandle, HistoricalSyncConfig, RetentionSettings
 } from "@markethub/contracts";
@@ -24,7 +24,31 @@ function toError(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
-export function HistoricalPanel({ focus }: { focus?: { canonicalId: string; interval: string; fromMs: number; toMs: number } | null }) {
+export interface HistoricalFocus {
+  canonicalId: string; interval: string; fromMs: number; toMs: number;
+}
+
+/**
+ * Convert an activity historical result ref into the panel's form values.
+ * Date inputs are India-local calendar dates, so istDateString (not UTC
+ * slicing) is required; the interval is validated against the canonical
+ * contract. Returns null for an invalid interval so the panel keeps its
+ * current form state rather than navigating with a bogus value.
+ */
+export function historicalFocusToForm(focus: HistoricalFocus): {
+  canonicalId: string; interval: CandleInterval; from: string; to: string
+} | null {
+  const parsed = candleIntervalSchema.safeParse(focus.interval);
+  if (!parsed.success) return null;
+  return {
+    canonicalId: focus.canonicalId,
+    interval: parsed.data,
+    from: istDateString(focus.fromMs),
+    to: istDateString(focus.toMs)
+  };
+}
+
+export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   const [canonicalId, setCanonicalId] = useState("");
   const [interval, setInterval] = useState<CandleInterval>("1D");
   const [from, setFrom] = useState("");
@@ -54,12 +78,16 @@ export function HistoricalPanel({ focus }: { focus?: { canonicalId: string; inte
   useEffect(() => { loadConfigs(); loadRetention(); }, []);
 
   // M6-C: prefill the historical query from an activity result reference.
+  // Date inputs are India-local calendar dates, so convert with istDateString
+  // (not UTC slicing) and validate the interval against the canonical contract.
   useEffect(() => {
     if (!focus) return;
-    setCanonicalId(focus.canonicalId);
-    setInterval(focus.interval as CandleInterval);
-    setFrom(new Date(focus.fromMs).toISOString().slice(0, 10));
-    setTo(new Date(focus.toMs).toISOString().slice(0, 10));
+    const form = historicalFocusToForm(focus);
+    if (!form) return;
+    setCanonicalId(form.canonicalId);
+    setInterval(form.interval);
+    setFrom(form.from);
+    setTo(form.to);
   }, [focus]);
 
   const readCached = async () => {

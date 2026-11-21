@@ -7,6 +7,7 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../../apps/web/src/lib/historical";
+import { historicalFocusToForm } from "../../apps/web/src/components/HistoricalPanel";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -123,6 +124,37 @@ describe("India-local date-only range", () => {
     expect(istDateString(parseIstDateOnly("0005-01-15"))).toBe("0005-01-15");
     expect(istDateString(parseIstDateOnly("0099-12-31"))).toBe("0099-12-31");
     expect(istDateString(parseIstDateOnly("2026-01-05"))).toBe("2026-01-05");
+  });
+});
+
+describe("M6-C Finding 3 — activity historical ref navigation uses IST dates", () => {
+  test("focus conversion uses India-local calendar dates, not UTC slicing", () => {
+    // 2026-01-05 00:00 IST = 2026-01-04T18:30:00.000Z. UTC slicing would
+    // produce "2026-01-04"; istDateString must produce "2026-01-05".
+    const fromMs = Date.parse("2026-01-04T18:30:00.000Z");
+    const toMs = Date.parse("2026-01-05T18:29:59.999Z");
+    const form = historicalFocusToForm({ canonicalId: "NIFTY", interval: "1D", fromMs, toMs });
+    expect(form).not.toBeNull();
+    expect(form!.from).toBe("2026-01-05");
+    expect(form!.to).toBe("2026-01-05");
+    expect(form!.canonicalId).toBe("NIFTY");
+    expect(form!.interval).toBe("1D");
+  });
+
+  test("focus conversion validates the interval against the canonical contract", () => {
+    const fromMs = Date.parse("2026-01-04T18:30:00.000Z");
+    expect(historicalFocusToForm({ canonicalId: "NIFTY", interval: "BOGUS", fromMs, toMs: fromMs })).toBeNull();
+    expect(historicalFocusToForm({ canonicalId: "NIFTY", interval: "60m", fromMs, toMs: fromMs })?.interval).toBe("60m");
+  });
+
+  test("IST boundary near midnight maps to the correct local date", () => {
+    // 23:30 IST on 2026-03-10 = 18:00Z on 2026-03-10; UTC slicing also gives
+    // 03-10 here, but a late-evening UTC timestamp (e.g. 20:00Z) is already
+    // 01:30 IST the next day and must roll forward.
+    const lateMs = Date.parse("2026-03-10T20:00:00.000Z"); // 2026-03-11 01:30 IST
+    const form = historicalFocusToForm({ canonicalId: "A", interval: "1D", fromMs: lateMs, toMs: lateMs });
+    expect(form!.from).toBe("2026-03-11");
+    expect(new Date(lateMs).toISOString().slice(0, 10)).toBe("2026-03-10"); // proves UTC slicing differs
   });
 });
 

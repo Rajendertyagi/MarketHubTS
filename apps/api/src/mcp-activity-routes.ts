@@ -33,12 +33,47 @@ function sanitizeSummaryJson(raw: string): string {
   }
 }
 
-/** Read a bounded JSON body; reject oversized or malformed payloads before parsing. */
-async function readBoundedJson(c: { req: { raw: Request } }): Promise<unknown> {
-  const declared = c.req.raw.headers.get("content-length");
-  if (declared !== null && Number(declared) > MAX_BODY_BYTES) throw new Error("request body too large");
-  const text = await c.req.raw.text();
-  if (text.length > MAX_BODY_BYTES) throw new Error("request body too large");
+/**
+ * Read a JSON body with a genuine 4096-byte limit. Counts actual UTF-8 bytes
+ * from the stream (not JS string length), rejects early on a trustworthy
+ * Content-Length, and cancels the stream as soon as the limit is exceeded so an
+ * oversized body is never fully buffered. Handles absent Content-Length, split
+ * chunks, empty bodies and multibyte characters.
+ */
+async function readBoundedJson(request: Request): Promise<unknown> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > MAX_BODY_BYTES) throw new Error("request body too large");
+  }
+  const body = request.body;
+  if (!body) throw new Error("empty request body");
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        try { await reader.cancel(); } catch { /* best effort */ }
+        throw new Error("request body too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* best effort */ }
+  }
+  if (total === 0) throw new Error("empty request body");
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(merged);
   return JSON.parse(text) as unknown;
 }
 
@@ -52,7 +87,7 @@ export function registerMcpActivityRoutes(app: Hono, deps: McpActivityRouteDepen
     }
     let parsed;
     try {
-      parsed = mcpActivityStartRequestSchema.safeParse(await readBoundedJson(c));
+      parsed = mcpActivityStartRequestSchema.safeParse(await readBoundedJson(c.req.raw));
     } catch {
       return badRequest(c, "Invalid activity start request");
     }
@@ -60,6 +95,7 @@ export function registerMcpActivityRoutes(app: Hono, deps: McpActivityRouteDepen
     const result = deps.activities.start({
       ...parsed.data,
       transport: "STDIO",
+      toolName: sanitizeSensitiveText(parsed.data.toolName, 200),
       ...(parsed.data.summaryJson !== undefined
         ? { summaryJson: sanitizeSummaryJson(parsed.data.summaryJson) }
         : {})
@@ -76,7 +112,7 @@ export function registerMcpActivityRoutes(app: Hono, deps: McpActivityRouteDepen
     }
     let parsed;
     try {
-      parsed = mcpActivityCompleteRequestSchema.safeParse(await readBoundedJson(c));
+      parsed = mcpActivityCompleteRequestSchema.safeParse(await readBoundedJson(c.req.raw));
     } catch {
       return badRequest(c, "Invalid activity complete request");
     }
