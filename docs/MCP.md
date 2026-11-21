@@ -1,7 +1,7 @@
 # MCP
 
 > **Status:** Aligned summary. Authoritative details: [MCP_INTERFACE.md](MCP_INTERFACE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md).
-> **Last updated:** 2026-11-20
+> **Last updated:** 2026-11-22 (metadata centralization architecture)
 
 ## Current implementation (verified)
 - Apps: `apps/api` (HTTP `/mcp`) and `apps/mcp-server` (STDIO); shared registration in `packages/mcp-core`
@@ -13,6 +13,7 @@
 - Implemented (B3): resources/prompts, cache hints, snapshot pagination — published at `0d58bbb`
 - Accepted: activity history (M6-C, closed at `32b034a`)
 - Present but not formally accepted: M6-D/E source and tests (subscriptions/notifications, real-HTTP/STDIO/legacy integration, conformance evidence, in-process LAN simulation). Formal acceptance requires the independent review gate in [`M6_D_E_PLAN.md`](M6_D_E_PLAN.md) §8.1–§8.3. M6-B4 remains separately owned.
+- Operation discovery (planned, not implemented): 9 tools + 7 resource registrations + 3 prompts are recorded through one `toolName` field; a unified descriptor model is planned for WebUI discovery without a second list — see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) §10.
 
 ## Target (confirmed; research verified 2026-11-19)
 - MCP is a **primary interface** backed by shared application services/canonical data (no separate market calculations).

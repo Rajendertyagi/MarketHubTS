@@ -1,7 +1,7 @@
 # First Slice — Backend-Driven WebUI Options (Implementation Plan)
 
 > **Status:** Bounded implementation plan. **Documentation only — no application, test, contract, manifest or API change is made by this document.** Implementation requires separate authorization.
-> **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment).
+> **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment). This plan is the **bounded first milestone** of the cross-cutting initiative in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (Phases 1–3); later phases cover provider identity centralization, SSE events, derivative expiry discovery, capability extensibility and configuration correctness.
 > **Last updated:** 2026-11-22.
 
 ## 0. Scope and non-goals

@@ -1,7 +1,7 @@
 # Product Requirements
 
 > **Status:** Confirmed product requirements and boundaries (authoritative). Items marked **(verify)** require official-source verification before implementation.
-> **Last updated:** 2026-11-16
+> **Last updated:** 2026-11-22 (metadata centralization architecture)
 > **Related:** [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md)
 
 ## 1. Product identity
@@ -163,6 +163,7 @@ Details: [MCP_INTERFACE.md](MCP_INTERFACE.md).
 - WebUI is human-facing interface and **operational control centre**. Keep simple to configure; avoid hidden fixed policies/unnecessary complexity.
 - **Configurable areas:** broker credentials/connections, provider enable/disable, startup/background, LAN access/app address, streaming selections, historical sync selections/schedules, option-chain snapshot config (underlying/expiry/strikes/capture/streaming), retention, provider preferences, alert delivery, scanner operation, dashboard layout, chart preferences, table columns/sorting, watchlist layout, logging/diagnostics, backup/restore. Sensible defaults, configurable behavior.
 - Provider restrictions exposed clearly; never silently change user selections because an API limit was exceeded.
+- **Backend-owned values have one authoritative source.** WebUI and MCP must reuse shared contracts or discover runtime values from the owning backend registry/API rather than maintain duplicate lists. Fixed enums are consumed directly from `@markethub/contracts`; large or changing domain data uses bounded, paginated domain APIs; runtime registrations use read-only metadata only where a consumer need is demonstrated. Presentation-only UI values remain local. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025).
 - **Customization:** dashboard widgets/layout, rearrangeable panels, show/hide modules, custom table columns, sorting/filtering, saved layouts, watchlist views, charts/drawing tools, multiple timeframes.
 - **Charts (required):** candlestick, OHLC and volume, historical candles, multiple timeframes, technical indicators, drawing tools, stocks/indices/futures/options. Chart package (Vela candidate) must be evaluated for actual compatibility before declared final.
 

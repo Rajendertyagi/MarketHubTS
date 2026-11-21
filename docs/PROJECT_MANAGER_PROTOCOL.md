@@ -1,7 +1,7 @@
 # Project Manager Protocol
 
 > **Status:** Durable operating manual for all future MarketHubTS development (authoritative).
-> **Last updated:** 2026-11-16
+> **Last updated:** 2026-11-22 (Option and Metadata Impact Assessment expanded to project-wide source-of-truth checks)
 > **Related:** [AGENTS.md](../AGENTS.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) (canonical), [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md)
 
 This protocol governs how work is planned, executed, reviewed, and reported. It applies to documentation, research, implementation, testing, and operations tasks.
@@ -116,15 +116,23 @@ Do not repeatedly ask OpenCode to make product decisions or research the entire 
 Every new feature must answer all of the following before implementation is authorized:
 
 1. What new selectable options, capabilities, entities or configuration fields does it introduce?
-2. Who owns their source of truth?
+2. Who owns their source of truth? Name the exact module/contract/registry.
 3. Are they shared contract enums, backend capabilities, domain data or user-managed values?
-4. How will the WebUI discover them?
-5. Does an existing API or schema already provide the information?
-6. Is a new discovery/read API actually necessary?
-7. How will the UI update when new values/capabilities are registered?
+4. How will each consumer (WebUI, MCP, REST/SSE, adapters) obtain them?
+5. Does an existing API, schema, registry or repository already provide the information?
+6. Is a new discovery/read API actually necessary, or is a direct shared-package import sufficient?
+7. How will the UI update when new values/capabilities are registered, without a separate frontend-list edit?
 8. What cache invalidation or refresh behavior is needed?
-9. Are any metadata fields sensitive or unsafe to expose?
-10. What tests prove that the frontend and backend remain consistent?
+9. Are any metadata fields sensitive or unsafe to expose (credentials, tokens, secrets, internal provider identifiers, sensitive configuration)?
+10. What tests prove that the frontend and backend remain consistent and that no duplicate definition was introduced?
+11. **Shared contract impact:** does this change an existing shared enum/schema, and are all consumers updated?
+12. **Provider and runtime registration impact:** does it add or change a provider identity, capability or availability value? Does it preserve the current fixed `UPSTOX`/`FYERS` contract or require a documented registry/contract extension?
+13. **MCP tool/resource/prompt impact:** does it add or change a registered operation, and is the descriptor derived from the same registration source?
+14. **REST/SSE/WebUI consumer impact:** which consumers read the value, and do any hardcode it today?
+15. **Domain-data discovery impact:** if the value is large/changing, which bounded/paginated domain API serves it?
+16. **Configuration persistence impact:** is it user-managed configuration owned by a backend service/repository, and can MCP on-demand operations avoid silently changing it?
+17. **Forward compatibility:** when another provider, tool, capability or domain option is added, does it become available without editing a frontend list or a second backend list?
+18. **Dependency direction:** does the proposed centralization introduce a circular import? Prefer a dependency-light leaf module plus `import type` in consumers.
 
 **Mandatory future rule:** no implementation assignment may introduce a new backend-owned dropdown, selector, tool list, provider list or domain-data choice as a separately maintained frontend constant when a backend registry, shared contract or domain API should own it. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) and AD-025 in [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md).
 

@@ -3,15 +3,15 @@
 > **Status:** Authoritative architecture requirement (owner-approved). **Documentation only — no metadata API, registry, WebUI component or application change is implemented by this document.** Implementation requires separate authorization.
 > **Decision:** [AD-025](ARCHITECTURE_DECISIONS.md) (backend/domain-owned metadata is authoritative).
 > **Governing:** [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md).
-> **Last updated:** 2026-11-22 (ownership/delivery boundaries clarified; provider limitation preserved; implemented vs proposed separated).
+> **Last updated:** 2026-11-22 (project-wide centralization inventory added: provider identity, SSE events, duplicated contract values, MCP operations, catalog/derivative discovery, capabilities, configuration, snapshot provider selection, WebUI status).
 
 ## 1. Requirement
 
-The backend and shared domain contracts are the **source of truth** for selectable options, capabilities, metadata and domain entities consumed by the WebUI. The frontend must **not** independently maintain duplicate lists of backend-owned options.
+Every backend-owned **identity, contract, capability, selectable option and domain-data value** must have **one authoritative source of truth**. All consumers — WebUI, MCP, REST/SSE, adapters and services — must reuse or discover that source rather than maintain independent copies. The frontend must **not** independently maintain duplicate lists of backend-owned options.
 
-When a new MCP tool, provider, capability, indicator or supported option is introduced, the appropriate WebUI selector must discover it from the owning backend source without a second manually maintained frontend list.
+When a new MCP operation, provider, capability, indicator, enum value or supported option is introduced, the appropriate consumer must obtain it from the owning source without a second manually maintained list or a separate frontend edit.
 
-This applies to implemented features, current WebUI forms and selectors, and all future modules — MCP, REST/SSE, providers, market data, indicators, alerts, scanners and configuration.
+This applies to implemented features, current WebUI forms and selectors, and all future modules — MCP, REST/SSE, providers, market data, indicators, alerts, scanners and configuration. "Centralize ownership" does **not** mean centralize everything: presentation labels, styles, layout and interaction-only state remain frontend-owned (§2.E).
 
 This is an architecture rule, not a claim that discovery is implemented today. Section 6 records the verified current gaps; section 8 records future acceptance criteria.
 
@@ -167,3 +167,59 @@ Tests must prove the actual source-to-API-to-WebUI relationship, not merely matc
 The cross-cutting initiative **Backend-Driven Metadata and Capability Discovery** is recorded in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md). Sequence: documentation/protocol → read-only audit → minimal discovery API and component plan → first slice (MCP tool discovery + canonical instrument pickers) → progressive adoption → acceptance proving new backend-registered options appear without a second frontend list.
 
 This initiative does not change M6-C acceptance, M6-D/E/B4 ownership, or reopen physical LAN testing.
+
+## 10. Centralization inventory (source-verified)
+
+For each candidate: current definition → owner → duplicators/consumers → existing solution → new API/refactor needed → dependency risk → future-addition path. "Centralize" means one owning definition, not one universal registry.
+
+### A. Provider identity — high priority
+- **Current:** `providerIdSchema = z.enum(["UPSTOX","FYERS"])` at `packages/contracts/src/provider.ts:5`; `ProviderId` derived at `:6`. `ProviderStatusMap` has fixed keys (`provider.ts:113–116`, Zod mirror `:150–153`); `ProviderRegistry.getStatuses()` hardcodes both (`packages/market-core/src/provider.ts:38–71`).
+- **Duplicators:** `market.ts:32` (`providerSchema`, a second exported name), `live.ts:12` (private `liveProviderIdSchema`), `live-components.ts:191`, `historical.ts:53,78,136,175`, `snapshots.ts:83,110,124`. WebUI `status.ts:33–49` uses literal unions and casts without Zod validation; `App.tsx:133–134` renders `providers.UPSTOX`/`providers.FYERS` explicitly.
+- **Existing solution:** `providerIdSchema` is canonical but only `provider.ts:136` uses it as a runtime validator; no other contracts file imports it.
+- **Dependency risk:** `provider.ts:2` imports `providerConnectionStateSchema` from `live.ts` (value); `live.ts:2` imports `ProviderId` type-only and inlines its own enum specifically to keep the runtime graph acyclic (`live.ts:9–12`). Moving identity into `live.ts` would create a cycle; moving into `provider.ts` is safe only if consumers keep `import type`.
+- **Decision:** introduce a dependency-light **leaf identity module** in `@markethub/contracts` with the value schema and no value imports from `live.ts`/`market.ts`/`provider.ts`; re-export from `index.ts` preserving `providerIdSchema`/`ProviderId`/`providerSchema` names. Consumers import the value schema where validation is needed and `import type` elsewhere. Keep `live.ts:12` local only if the leaf module cannot be introduced without a cycle — document the exception.
+- **Provider status response:** plan a shared `ProviderStatusMap` response that the WebUI can **iterate** (array or validated record) instead of accessing fixed keys; validate with `providerStatusMapSchema` in `lib/status.ts` (currently a raw cast). Do **not** claim dynamic provider extensibility while `ProviderId`/`ProviderStatusMap`/`getStatuses()` remain fixed to UPSTOX/FYERS. Provider-specific auth workflows stay custom — no universal credential-form renderer.
+
+### B. Shared SSE event definitions — high priority
+- **Current:** five `z.literal` payload types in `packages/contracts/src/live.ts:178–209` (`item-updated`, `item-removed`, `provider-connection-changed`, `snapshot-required`, `refresh`); **no payload schema for `snapshot`** (transport-only, validated by `liveSnapshotSchema` at `:170–175`).
+- **Duplicators:** `packages/realtime/src/types.ts:3` (unenforced comment list), `hub.ts:103,121,124,152,153,245,278` (scattered literals), `apps/web/src/lib/live-stream.ts:23–30` (`SSE_EVENT_NAMES`), `tests/web/live-stream.test.ts:134–137` (full duplicated list), plus individual test literals.
+- **Existing solution:** `hub.ts:227` derives data event names from `event.type`, so schema literals and SSE names agree by construction; `apps/web/src/lib/live.ts:64–97` already classifies by payload schema (`.safeParse`), not by event name — no fragile runtime introspection today.
+- **Decision:** export one `as const` tuple (e.g. `LIVE_EVENT_NAMES`) from `@markethub/contracts`, including `snapshot` explicitly as transport-only. Use it to type `OutboundEvent.event` (currently plain `string`), replace `SSE_EVENT_NAMES` and the duplicated test list, and provide named constants for hub/API control literals. No Zod `.options`/`.shape` reflection. Preserve current SSE wire behavior and event semantics.
+
+### C. Other duplicated contract values
+- **CE/PE:** `optionTypeSchema`/`OptionType` canonical at `market.ts:29–30`; duplicates at `snapshots.ts:20,51` and `packages/market-core/src/identity.ts:67`. Import the shared type/schema. DB SQL CHECK (`packages/database/src/schema.ts:97`) and adapter-native mappings (`broker-upstox/src/option-chain.ts:96`, `broker-fyers/src/option-chain.ts:168`) stay local — SQL cannot import TS and adapters translate at the boundary.
+- **HTTP/STDIO transport:** `mcpActivityTransportSchema` canonical at `mcp-activity.ts:10`; `ActivityTransport` at `packages/mcp-core/src/activity.ts:9` is a pure duplicate — import the shared type. WebUI `ActivityPanel.tsx:81,134` can derive from the schema; DB CHECK (`schema.ts:397`) stays literal.
+- **Provider IDs:** see A. `live.ts:12` is the one duplicate with a documented cycle-avoidance reason.
+- **Activity status/transport filters:** `ActivityPanel.tsx:81,134,138–139` duplicate `mcpActivityStatusSchema`/`mcpActivityTransportSchema`; `:82` already uses the contract-derived pattern. Derive option lists from shared schemas; keep per-status tone mapping (`:26–31`) local presentation logic.
+- **Retention classes:** `retentionDataClassSchema` canonical at `snapshots.ts:140`; object keys in `retentionSettingsSchema` (`:143–150`), `HistoricalPanel.tsx:268–304` and `historical-routes.ts:52` are type-checked against `RetentionSettings`, so drift is caught at compile time. Lower priority; keep per-class labels local, optionally iterate keys from the shared list.
+- **Not centralized:** presentation labels, colors, CSS classes, formatting and local interaction state remain frontend-owned.
+
+### D. MCP operation discovery — high priority
+- **Current:** 9 tools (`tools.ts:49+`), 7 resource registrations / 6 logical resources (`resources.ts:75+`), 3 prompts (`prompts.ts:18+`), all registered through `createMcpServer` (`factory.ts:13–44`). All **19 operations** are recorded through one `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227` → `mcp-activity.ts:143`). WebUI tool filter is free text (`ActivityPanel.tsx:132`).
+- **SDK constraint:** `McpServer._registeredTools` is private (`mcp-BCJHyo7l.d.mts:3254`); `toolInputSchemaJson()` is `@internal` (`:3266`). No public enumeration API — SDK internals are rejected.
+- **Decision:** define operation descriptors once in `packages/mcp-core` (stable operation name, operation type `tool|resource|prompt`, display title, description, input metadata/schema where appropriate, availability where grounded) and consume them in the registration functions. Expose to WebUI only through a validated read surface if technical validation justifies it. Evaluate an **Operation name** selector with operation-type filtering instead of a Tool-name-only selector. Keep MCP `tools/list`/resource/prompt listing, `server/discover`, and WebUI REST metadata discovery separate. No universal form engine; schema-informed fields only for straightforward inputs, custom components for complex workflows. See [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md).
+
+### E. Catalog and instrument discovery
+- **Current:** `GET /api/catalog/search` (`apps/api/src/catalog-routes.ts:25–55`) supports only `text`, `limit` (1–100), `cursor`; response `{ instruments, nextCursor }`. Repository `searchInstruments` (`packages/database/src/repositories/catalog.ts:237–255`) matches symbol/displayName/identityKey with keyset pagination — **no exchange/category/segment/underlying predicates**. `canonicalInstrumentSchema` (`market.ts:113–136`) carries those fields. WebUI panels still use manual IDs (`SubscriptionPanel.tsx:84–91`, `HistoricalPanel.tsx:181`, `SnapshotPanel.tsx:105`).
+- **Decision:** reusable searchable selector backed by the existing bounded API. Context-aware filters (exchange/category/segment/underlying/product scope/lifecycle) require a repository/API extension first — they are **not** available today; do not add filters for appearance. Never load the full catalogue into the browser.
+
+### F. Derivative expiry and contract discovery
+- **Current:** `findDerivativeContracts({ underlyingCanonicalId?, expiryDate?, derivativeClass? })` exists (`packages/market-core/src/types.ts:52`; `packages/database/src/repositories/catalog.ts:307–315`) but is **unbounded** (`q.all()`, no limit/order/cursor). `DerivativeContractRecord` (`market-core/src/types.ts:12–32`) stores `expiryDate`, `derivativeClass`, per-strike `strikeNormalized`/`strikeKey`. Write paths exist in catalog sync (`catalog.ts:45–71`, `sync/apply.ts:219–221,301–322`) but **no production/offline catalog sync runs**; the current DB has **0 derivative and 0 instrument rows**. No expiry API, MCP operation or WebUI flow exists; `SnapshotPanel.tsx:106` uses a manual expiry text field.
+- **Decision:** distinguish implemented data model / current empty offline state / missing bounded read API / unverified authoritative data. Plan an expiry read API from real derivative records only after (a) a population path exists and (b) the query is made bounded. Never compute expiries from weekdays or hardcode dates. Strikes/exact contracts only where actual data supports them.
+
+### G. Provider capability and availability metadata
+- **Current:** three vocabularies — `capabilityStateSchema` (`provider.ts:75`), `capabilityStatusSchema` (`live-components.ts:159`), `availabilityStateSchema` (`market.ts:36`). Adapters emit `SUPPORTED`/`LIMITED`/`UNSUPPORTED` with `reason` and `entitlementUnverified` (`broker-upstox/src/components.ts:203–224`, `broker-fyers/src/stream.ts:376–393`). `capabilitySourceSchema` (`provider.ts:78`) separates `API` (verified) from `DOCUMENTATION`/`USER`/`UNKNOWN`.
+- **Gap:** WebUI `ProviderStatusView` (`status.ts:33–43`) omits `capabilities`/`limits`; `SubscriptionPanel.tsx:130–134` renders only connection state and last error. Capability metadata is visible via REST/MCP but not rendered in WebUI.
+- **Decision:** consumers must distinguish supported / limited / unavailable / unverified from the owning contract; never present a type-level or documentation-only capability as available. Keep entitlements and live verification distinct from published docs. No frontend hardcoded capability list.
+
+### H. User-managed configuration
+- **Current:** streaming subscriptions (`/api/market/subscriptions`), historical sync configs (`/api/historical/sync-configs`), snapshot capture configs (`/api/snapshots/configs`), retention (`/api/retention`), provider settings/credentials (`/api/provider/*`, local-owner guarded).
+- **Decision:** persisted by the owning backend service/repository; WebUI reads and updates through that API. MCP on-demand operations must not silently modify WebUI-owned operational config. Secrets never appear in metadata responses. Retention controls may keep a small explicit presentation mapping (§C).
+
+### I. Snapshot provider selection behavior
+- **Current:** UI defaults to FYERS and always sends an explicit provider (`SnapshotPanel.tsx:27,86`; `lib/snapshots.ts:86–99`). Contract allows omission (`snapshots.ts:110`); route preserves it (`snapshot-routes.ts:73`). Service semantics differ: explicit provider = **exclusive filter, no fallback** (`market-core/src/snapshots/service.ts:139–141`); omitted = try all configured providers in order (`:143–167`). Historical service uses prefer-then-fallback (`historical/service.ts:206–213`). Production has empty provider collections → 422.
+- **Decision (to resolve before implementation):** define automatic vs explicit preference semantics, unavailable-provider behavior, and whether the UI offers an "automatic/default" choice. Do not silently change service ordering or invent fallback behavior.
+
+### J. WebUI status and presentation accuracy
+- **Current:** four stale statements in `apps/web/src/App.tsx:211,219,281,282` claim market data/providers/catalog/MCP HTTP are not implemented, contradicting implemented provider status/auth (`:21–144`), market-data panels (`:290–301`), and the mounted `/mcp` route (`app.ts:235–238`, `mcp-routes.ts:57–63`). Other panel "not available" statements are accurate.
+- **Decision:** correct this presentation text in a later implementation slice (Phase 6), distinguishing implemented foundation, implemented-but-locked functionality, unavailable provider-backed/live behavior, and genuinely planned features. No source change in this documentation task.

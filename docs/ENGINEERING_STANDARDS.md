@@ -1,7 +1,7 @@
 # Engineering Standards
 
 > **Status:** Canonical engineering standards for MarketHubTS (practical, lightweight, enforceable). All implementation and review work must align with these rules and with confirmed product/architecture requirements.
-> **Last updated:** 2026-11-16
+> **Last updated:** 2026-11-22 (metadata centralization architecture)
 > **Related:** [AGENTS.md](../AGENTS.md), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md)
 
 ## 1. Purpose and scope
@@ -14,7 +14,8 @@ These standards define how MarketHubTS is built and maintained as a **clean, ind
 
 - **Modular monolith, not microservices.** One application/process boundary initially, with clearly separated, independently maintainable modules/packages.
 - **Ownership:** each module owns its internal logic and its data responsibilities. Expose behavior through defined interfaces/contracts; do not reach into another module’s internals.
-- **Dependency direction:** keep dependencies explicit and acyclic. No circular dependencies and no uncontrolled cross-module access. Prefer a clear flow (e.g. adapters → canonical/normalization → shared services → interfaces/consumers) consistent with [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Dependency direction:** keep dependencies explicit and acyclic. No circular dependencies and no uncontrolled cross-module access. Prefer a clear flow (e.g. adapters → canonical/normalization → shared services → interfaces/consumers) consistent with [ARCHITECTURE.md](ARCHITECTURE.md). For shared identity/enum centralization, put the value schema in a dependency-light leaf module and use `import type` in consumers; never move a value schema into a module that already imports the consumer at runtime (for example `provider.ts` ↔ `live.ts`).
+- **Single source of truth for backend-owned values:** every backend-owned identity, contract, capability, selectable option and domain-data value has one owning definition. Consumers (WebUI, MCP, REST/SSE, adapters) import shared contracts directly or discover runtime values from the owning registry/API; they never maintain a duplicate list. Fixed enums are consumed from `@markethub/contracts` with no HTTP discovery; large/changing domain data uses bounded, paginated domain APIs; runtime registrations use read-only metadata only where a consumer need is demonstrated. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025).
 - **Provider/feature isolation:** provider-specific logic stays in adapters; a failure, disconnect, or removal of one provider/feature must not unnecessarily affect unrelated modules or the other provider.
 - **State:** avoid shared mutable state and hidden dependencies. Pass required data/context explicitly; keep mutable state owned, bounded, and observable.
 - **No unnecessary layers:** do not introduce abstractions, patterns, or indirection without a demonstrated need.
