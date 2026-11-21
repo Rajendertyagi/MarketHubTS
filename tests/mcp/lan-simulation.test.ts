@@ -61,7 +61,6 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
       replayMaxEvents: 1000, replayMaxBytes: 10_000_000,
       clientMaxEvents: 1000, clientMaxBytes: 10_000_000, refreshIntervalMs: 0
     });
-    hub.start();
 
     const services: McpServices = {
       getHealth: async () => ({ ok: true, value: HEALTH }),
@@ -88,17 +87,23 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
 
     const handler = createMcpHandler((ctx) => createMcpServer(ctx, services), { maxSubscriptions: 64 });
     const bridge = createMcpNotificationBridge(service, handler.notify);
-    bridge.start();
 
     const client = new Client(
       { name: "m6e-lan-simulation", version: "1.0.0" },
       { versionNegotiation: { mode: { pin: PROTOCOL } } }
     );
     let subscription: Awaited<ReturnType<Client["listen"]>> | null = null;
+    let hubStarted = false;
+    let bridgeStarted = false;
 
-    // Everything after resource creation is inside try/finally so a failed
-    // connect or any failed assertion still tears down all resources.
+    // Startup, connect and assertions are all inside try/finally so a failure
+    // at any point still tears down whatever was started.
     try {
+      hub.start();
+      hubStarted = true;
+      bridge.start();
+      bridgeStarted = true;
+
       await client.connect(new StreamableHTTPClientTransport(new URL("http://simulation.local/mcp"), {
         fetch: (url, init) => handler.fetch(new Request(url, init))
       }));
@@ -189,8 +194,8 @@ describe("M6-E LAN simulation (in-process, no listener)", () => {
       try { if (subscription) await subscription.close(); } catch { /* best effort */ }
       try { await client.close(); } catch { /* best effort */ }
       try { await handler.close(); } catch { /* best effort */ }
-      bridge.stop();
-      hub.stop();
+      try { if (bridgeStarted) bridge.stop(); } catch { /* best effort */ }
+      try { if (hubStarted) hub.stop(); } catch { /* best effort */ }
       resetConfigCache();
     }
   });
