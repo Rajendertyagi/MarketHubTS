@@ -42,6 +42,7 @@ See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for details.
 | [`docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md`](docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) | Bounded, source-verified implementation plan for the first WebUI options slice (operation selector, instrument picker, interval selector) |
 | [`docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md`](docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md) | Detailed phase-wise implementation plan (Phases 0–7) with work packages, dependencies, tests and a self-audit |
 | [`docs/METADATA_DISCOVERY_PHASE_1_PLAN.md`](docs/METADATA_DISCOVERY_PHASE_1_PLAN.md) | Bounded Phase 1 implementation assignment: shared-contract centralization + historical interval selector |
+| [`docs/METADATA_DISCOVERY_PHASE_3_PLAN.md`](docs/METADATA_DISCOVERY_PHASE_3_PLAN.md) | Bounded Phase 3 WP 3b–3c plan: reusable instrument search selector adopted by three WebUI panels |
 | [`docs/MARKET_DATA_AND_CATALOG.md`](docs/MARKET_DATA_AND_CATALOG.md) | Supported universe, canonical catalog/identity, normalization, provenance |
 | [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md) | Upstox/FYERS adapter design, independence, source selection, verification needs |
 | [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) | MCP capability design, transports, permissions, events, parity with services |

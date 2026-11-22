@@ -81,6 +81,7 @@ Start here: [`AGENTS.md`](AGENTS.md) and [`docs/PROJECT_OVERVIEW.md`](docs/PROJE
 | First implementation slice plan | [`docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md`](docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) |
 | Detailed phase-wise implementation plan | [`docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md`](docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md) |
 | Phase 1 implementation assignment | [`docs/METADATA_DISCOVERY_PHASE_1_PLAN.md`](docs/METADATA_DISCOVERY_PHASE_1_PLAN.md) |
+| Phase 3 instrument picker plan | [`docs/METADATA_DISCOVERY_PHASE_3_PLAN.md`](docs/METADATA_DISCOVERY_PHASE_3_PLAN.md) |
 | Catalog & market data | [`docs/MARKET_DATA_AND_CATALOG.md`](docs/MARKET_DATA_AND_CATALOG.md) |
 | Providers (Upstox/FYERS) | [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md) |
 | MCP interface | [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) |
