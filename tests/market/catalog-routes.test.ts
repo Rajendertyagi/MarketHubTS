@@ -19,13 +19,24 @@ const INSTRUMENTS = [
   instrument("v1|NSE|EQ|EQ|CODE:CCCC", "CCCC", "Gamma")
 ];
 
-/** In-memory fake: no SQLite/WAL files, so no cross-test file-lock interference. */
+/**
+ * In-memory fake faithful to SqliteCatalogRepository.searchInstruments:
+ * case-insensitive substring match on symbol/name/identityKey, keyset
+ * `canonicalId > afterCanonicalId`, canonicalId ASC order, limit+1 lookahead.
+ * No SQLite/WAL files, so no cross-test file-lock interference.
+ */
 function fakeCatalog(): CatalogRepository {
   return {
-    async searchInstruments({ limit, afterCanonicalId }) {
-      const start = afterCanonicalId ? INSTRUMENTS.findIndex((i) => i.canonicalId === afterCanonicalId) + 1 : 0;
-      // Fetch limit + 1 rows to exercise the route's lookahead/cursor derivation.
-      return INSTRUMENTS.slice(start, start + limit + 1);
+    async searchInstruments({ text, limit, afterCanonicalId }) {
+      const q = text.trim().toLowerCase();
+      const filtered = INSTRUMENTS
+        .filter((i) =>
+          i.canonicalSymbol.toLowerCase().includes(q) ||
+          i.displayName.toLowerCase().includes(q) ||
+          i.identityKey.toLowerCase().includes(q))
+        .filter((i) => afterCanonicalId === undefined || i.canonicalId > afterCanonicalId)
+        .sort((a, b) => a.canonicalId.localeCompare(b.canonicalId));
+      return filtered.slice(0, Math.max(1, limit) + 1);
     }
   } as unknown as CatalogRepository;
 }
@@ -38,7 +49,7 @@ function makeApp() {
 
 describe("GET /api/catalog/search route", () => {
   test("successful response has a bounded, schema-valid envelope", async () => {
-    const res = await makeApp().request("/api/catalog/search?text=abc&limit=2");
+    const res = await makeApp().request("/api/catalog/search?text=code&limit=2");
     expect(res.status).toBe(200);
     const json = await res.json() as { instruments: unknown[]; nextCursor: string | null };
     expect(Array.isArray(json.instruments)).toBe(true);
@@ -51,26 +62,44 @@ describe("GET /api/catalog/search route", () => {
     const app = makeApp();
     expect((await app.request("/api/catalog/search?text=")).status).toBe(400);
     expect((await app.request("/api/catalog/search?text=%20%20")).status).toBe(400);
-    expect((await app.request("/api/catalog/search?text=abc&limit=0")).status).toBe(400);
-    expect((await app.request("/api/catalog/search?text=abc&limit=101")).status).toBe(400);
-    expect((await app.request("/api/catalog/search?text=abc&limit=abc")).status).toBe(400);
+    expect((await app.request("/api/catalog/search?text=code&limit=0")).status).toBe(400);
+    expect((await app.request("/api/catalog/search?text=code&limit=101")).status).toBe(400);
+    expect((await app.request("/api/catalog/search?text=code&limit=abc")).status).toBe(400);
   });
 
   test("cursor is forwarded and nextCursor is derived from the last returned record", async () => {
-    const res = await makeApp().request("/api/catalog/search?text=abc&limit=1&cursor=" + encodeURIComponent(INSTRUMENTS[0]!.canonicalId));
+    const res = await makeApp().request("/api/catalog/search?text=code&limit=1&cursor=" + encodeURIComponent(INSTRUMENTS[0]!.canonicalId));
     expect(res.status).toBe(200);
     const json = await res.json() as { instruments: CanonicalInstrument[]; nextCursor: string | null };
     expect(json.instruments.map((i) => i.canonicalId)).toEqual([INSTRUMENTS[1]!.canonicalId]);
     expect(json.nextCursor).toBe(INSTRUMENTS[1]!.canonicalId);
   });
 
+  test("non-matching text returns an empty page", async () => {
+    const res = await makeApp().request("/api/catalog/search?text=does-not-exist");
+    expect(res.status).toBe(200);
+    const json = await res.json() as { instruments: unknown[]; nextCursor: string | null };
+    expect(json.instruments).toEqual([]);
+    expect(json.nextCursor).toBeNull();
+  });
+
+  test("unknown cursor follows lexicographic keyset semantics", async () => {
+    // A valid token not present in the dataset: real repo returns rows with
+    // canonicalId > cursor, so a cursor past the last row yields an empty page.
+    const res = await makeApp().request("/api/catalog/search?text=code&cursor=" + encodeURIComponent("v1|NSE|EQ|EQ|CODE:ZZZZ"));
+    expect(res.status).toBe(200);
+    const json = await res.json() as { instruments: unknown[]; nextCursor: string | null };
+    expect(json.instruments).toEqual([]);
+    expect(json.nextCursor).toBeNull();
+  });
+
   test("invalid cursor token is rejected", async () => {
-    const res = await makeApp().request("/api/catalog/search?text=abc&cursor=%20%20");
+    const res = await makeApp().request("/api/catalog/search?text=code&cursor=%20%20");
     expect(res.status).toBe(400);
   });
 
   test("no unbounded list path: limit is always bounded", async () => {
-    const res = await makeApp().request("/api/catalog/search?text=abc");
+    const res = await makeApp().request("/api/catalog/search?text=code");
     expect(res.status).toBe(200);
     const json = await res.json() as { instruments: unknown[] };
     expect(json.instruments.length).toBeLessThanOrEqual(25);

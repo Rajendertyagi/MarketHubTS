@@ -89,9 +89,12 @@ export function createPickerController(deps: PickerControllerDeps) {
       });
       if (!current(gen)) return;
       const seen = new Set(append ? state.results.map((r) => r.canonicalId) : []);
-      const merged = append
+      const mergedRaw = append
         ? [...state.results, ...page.instruments.filter((r) => !seen.has(r.canonicalId) && (seen.add(r.canonicalId), true))]
         : page.instruments;
+      // Enforce the cap on the stored page itself, not just on the Load More guard,
+      // so a partial page can never push the result set past PICKER_MAX_RESULTS.
+      const merged = mergedRaw.slice(0, PICKER_MAX_RESULTS);
       emit({
         results: merged,
         nextCursor: merged.length >= PICKER_MAX_RESULTS ? null : page.nextCursor,

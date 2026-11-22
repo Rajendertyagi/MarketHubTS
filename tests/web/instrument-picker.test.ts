@@ -123,6 +123,32 @@ describe("InstrumentPicker controller", () => {
     c.dispose();
   });
 
+  test("cap is enforced even when a load-more page would overshoot", async () => {
+    let state = initialPickerState();
+    let page = 0;
+    const c = createPickerController({
+      search: async () => {
+        // First page 90, second page 25 -> would merge to 115 without the slice.
+        const count = page++ === 0 ? 90 : 25;
+        const start = page === 1 ? 0 : 90;
+        return {
+          instruments: Array.from({ length: count }, (_, i) => instrument(`id-${start + i}`, `S${start + i}`, `Stock ${start + i}`)),
+          nextCursor: "next"
+        };
+      },
+      sleep: async () => {},
+      onState: (s) => { state = s; }
+    });
+    c.onText("x");
+    await Bun.sleep(0);
+    expect(state.results.length).toBe(90);
+    c.onLoadMore();
+    await Bun.sleep(0);
+    expect(state.results.length).toBe(PICKER_MAX_RESULTS);
+    expect(state.nextCursor).toBeNull();
+    c.dispose();
+  });
+
   test("dispose prevents post-unmount fetch", async () => {
     let resolveSleep: (() => void) | null = null;
     const h = makeController({ sleep: () => new Promise<void>((r) => { resolveSleep = r; }) });
