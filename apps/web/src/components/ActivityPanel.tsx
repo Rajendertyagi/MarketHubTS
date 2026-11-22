@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   mcpActivityStatusSchema, mcpActivityTransportSchema,
-  type McpActivityView
+  type McpActivityView, type McpOperationDescriptor
 } from "@markethub/contracts";
 import {
   ActivityHttpError, fetchActivity, fetchActivityByOperation
 } from "../lib/activity";
+import { fetchMcpOperations, McpOperationsHttpError } from "../lib/mcp-operations";
 import { StatusBadge } from "./StatusBadge";
 
 interface ActivityPanelProps {
@@ -23,7 +24,30 @@ function toError(error: unknown): string {
       : "Error";
     return `${prefix}: ${error.message}`;
   }
+  if (error instanceof McpOperationsHttpError) {
+    const prefix = error.kind === "forbidden" ? "Local-owner only"
+      : error.kind === "validation" ? "Validation error"
+      : error.kind === "not-found" ? "Not found"
+      : error.kind === "unavailable" ? "Unavailable"
+      : "Error";
+    return `${prefix}: ${error.message}`;
+  }
   return error instanceof Error ? error.message : "Unexpected error";
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/**
+ * Shared, render-stable holder for descriptor-load cancellation. The container
+ * keeps this in a ref so an unmount can abort in-flight work and a retry can
+ * supersede an earlier load, regardless of which render's actions are in use.
+ */
+export interface OperationsLoadState {
+  abort: AbortController | null;
+  generation: number;
 }
 
 function statusTone(status: string): "ok" | "warn" | "error" | "neutral" {
@@ -48,6 +72,10 @@ export interface ActivityPanelViewState {
   loading: boolean;
   error: string | null;
   detail: McpActivityView | null;
+  /** Registration-owned descriptors for the Operation selector. */
+  operations: McpOperationDescriptor[];
+  operationsLoading: boolean;
+  operationsError: string | null;
   toolName: string;
   transport: string;
   status: string;
@@ -59,6 +87,7 @@ export interface ActivityPanelViewState {
 export interface ActivityPanelViewActions {
   onRefresh: () => void;
   onApplyFilters: () => void;
+  onRetryOperations: () => void;
   onToolName: (value: string) => void;
   onTransport: (value: string) => void;
   onStatus: (value: string) => void;
@@ -132,7 +161,21 @@ export function ActivityPanelView({ state, actions }: { state: ActivityPanelView
       </div>
 
       <div className="mb-4 grid gap-2 sm:grid-cols-5">
-        <input aria-label="Filter tool" className={inputClass} placeholder="Tool name" value={state.toolName} onChange={(e) => actions.onToolName(e.target.value)} />
+        <select aria-label="Filter operation" className={inputClass} value={state.toolName} onChange={(e) => actions.onToolName(e.target.value)}>
+          <option value="">Any operation</option>
+          {(["tool", "resource", "prompt"] as const).map((type) => {
+            const group = state.operations.filter((operation) => operation.type === type);
+            if (group.length === 0) return null;
+            const label = type === "tool" ? "Tools" : type === "resource" ? "Resources" : "Prompts";
+            return (
+              <optgroup key={type} label={label}>
+                {group.map((operation) => (
+                  <option key={operation.name} value={operation.name}>{"title" in operation ? operation.title : operation.name}</option>
+                ))}
+              </optgroup>
+            );
+          })}
+        </select>
         <select aria-label="Filter transport" className={inputClass} value={state.transport} onChange={(e) => actions.onTransport(e.target.value)}>
           <option value="">Any transport</option>
           {mcpActivityTransportSchema.options.map((value) => <option key={value} value={value}>{value}</option>)}
@@ -145,6 +188,14 @@ export function ActivityPanelView({ state, actions }: { state: ActivityPanelView
         <input aria-label="To time" type="datetime-local" className={inputClass} value={state.to} onChange={(e) => actions.onTo(e.target.value)} />
         <button type="button" className={buttonClass} onClick={actions.onApplyFilters}>Apply filters</button>
       </div>
+
+      {state.operationsLoading && <p className="mb-2 text-xs text-slate-400" role="status">Loading operations…</p>}
+      {state.operationsError && (
+        <p className="mb-3 flex items-center gap-2 text-sm text-rose-300" role="alert">
+          <span>Could not load operations: {state.operationsError}</span>
+          <button type="button" className={buttonClass} onClick={actions.onRetryOperations}>Retry</button>
+        </p>
+      )}
 
       <div className="mb-4 flex gap-2">
         <input aria-label="Operation ID" className={inputClass} placeholder="Exact operation ID" value={state.operationId} onChange={(e) => actions.onOperationId(e.target.value)} />
@@ -213,6 +264,9 @@ export interface ActivityPanelController {
   setLoading: (value: boolean) => void;
   setError: (value: string | null) => void;
   setOperationId: (value: string) => void;
+  setOperations: (value: McpOperationDescriptor[]) => void;
+  setOperationsLoading: (value: boolean) => void;
+  setOperationsError: (value: string | null) => void;
   setToolName: (value: string) => void;
   setTransport: (value: string) => void;
   setStatus: (value: string) => void;
@@ -220,17 +274,20 @@ export interface ActivityPanelController {
   setTo: (value: string) => void;
   fetchActivity: typeof fetchActivity;
   fetchActivityByOperation: typeof fetchActivityByOperation;
+  fetchMcpOperations: typeof fetchMcpOperations;
+  /** Render-stable cancellation holder supplied by the container's ref. */
+  operationsLoad: OperationsLoadState;
   onOpenSnapshot?: ((snapshotId: string) => void) | undefined;
   onOpenHistorical?: ((ref: { canonicalId: string; interval: string; fromMs: number; toMs: number }) => void) | undefined;
 }
 
 /** Build the panel's interaction callbacks from an injectable controller. */
 export function createActivityPanelActions(ctrl: ActivityPanelController): ActivityPanelViewActions {
-  const load = async (cursor?: string) => {
+  const load = async (cursor?: string, overrides?: Partial<ActivityFilterState>) => {
     ctrl.setLoading(true);
     ctrl.setError(null);
     try {
-      const { toolName, transport, status, from, to } = ctrl.state;
+      const { toolName, transport, status, from, to } = { ...ctrl.state, ...overrides };
       const page = await ctrl.fetchActivity(buildActivityQuery({ toolName, transport, status, from, to }, cursor));
       ctrl.setRecords(page.records);
       ctrl.setNextCursor(page.nextCursor);
@@ -240,6 +297,39 @@ export function createActivityPanelActions(ctrl: ActivityPanelController): Activ
       ctrl.setNextCursor(null);
     } finally {
       ctrl.setLoading(false);
+    }
+  };
+
+  // Descriptor discovery is independent of activity history: a failure here
+  // only sets operationsError and never touches records/loading/error.
+  const loadOperations = async () => {
+    if (ctrl.operationsLoad.abort) ctrl.operationsLoad.abort.abort();
+    const controller = new AbortController();
+    ctrl.operationsLoad.abort = controller;
+    const signal = controller.signal;
+    const generation = ++ctrl.operationsLoad.generation;
+    ctrl.setOperationsLoading(true);
+    ctrl.setOperationsError(null);
+    try {
+      const descriptors = await ctrl.fetchMcpOperations(signal);
+      if (generation !== ctrl.operationsLoad.generation) return;
+      ctrl.setOperations(descriptors);
+      // A previously selected operation may have been removed from the
+      // registration set. Reset to "Any operation" and reload page 1 without
+      // the stale toolName; otherwise keep the current selection untouched.
+      const selected = ctrl.state.toolName.trim();
+      if (selected && !descriptors.some((descriptor) => descriptor.name === selected)) {
+        ctrl.setToolName("");
+        ctrl.setPageCursors([undefined]);
+        ctrl.setPageIndex(0);
+        void load(undefined, { toolName: "" });
+      }
+    } catch (cause) {
+      if (generation !== ctrl.operationsLoad.generation) return;
+      if (isAbortError(cause)) return;
+      ctrl.setOperationsError(toError(cause));
+    } finally {
+      if (generation === ctrl.operationsLoad.generation) ctrl.setOperationsLoading(false);
     }
   };
 
@@ -274,7 +364,17 @@ export function createActivityPanelActions(ctrl: ActivityPanelController): Activ
       void load();
       loadStdioPresence();
     },
-    onToolName: ctrl.setToolName,
+    onRetryOperations: () => { void loadOperations(); },
+    // The select applies immediately (page 1 + reload), unlike the old
+    // deferred free-text input. Pass the new value explicitly so the query is
+    // correct even before React commits the state update.
+    onToolName: (value) => {
+      ctrl.setToolName(value);
+      ctrl.setPageCursors([undefined]);
+      ctrl.setPageIndex(0);
+      void load(undefined, { toolName: value });
+      loadStdioPresence();
+    },
     onTransport: ctrl.setTransport,
     onStatus: ctrl.setStatus,
     onFrom: ctrl.setFrom,
@@ -315,22 +415,35 @@ export function ActivityPanel({ httpHandlerMounted, onOpenSnapshot, onOpenHistor
   const [to, setTo] = useState("");
   const [operationId, setOperationId] = useState("");
   const [detail, setDetail] = useState<McpActivityView | null>(null);
+  const [operations, setOperations] = useState<McpOperationDescriptor[]>([]);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationsError, setOperationsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Stable across renders so unmount can abort and retry can supersede work.
+  const operationsLoadRef = useRef<OperationsLoadState>({ abort: null, generation: 0 });
 
   const state: ActivityPanelViewState = {
     httpHandlerMounted, stdioObserved, records, nextCursor, pageIndex,
-    loading, error, detail, toolName, transport, status, from, to, operationId
+    loading, error, detail, operations, operationsLoading, operationsError,
+    toolName, transport, status, from, to, operationId
   };
   const actions = createActivityPanelActions({
     state, pageCursors, setRecords, setNextCursor, setPageCursors, setPageIndex,
     setStdioObserved, setDetail, setLoading, setError, setOperationId,
+    setOperations, setOperationsLoading, setOperationsError,
     setToolName, setTransport, setStatus, setFrom, setTo,
-    fetchActivity, fetchActivityByOperation, onOpenSnapshot, onOpenHistorical
+    fetchActivity, fetchActivityByOperation, fetchMcpOperations,
+    operationsLoad: operationsLoadRef.current, onOpenSnapshot, onOpenHistorical
   });
 
-  // Initial load and STDIO presence probe run once on mount.
-  useEffect(() => { actions.onRefresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Initial descriptor load, activity load and STDIO presence probe run once
+  // on mount. Abort any in-flight descriptor fetch on unmount.
+  useEffect(() => {
+    actions.onRetryOperations();
+    actions.onRefresh();
+    return () => { operationsLoadRef.current.abort?.abort(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <ActivityPanelView state={state} actions={actions} />;
 }
