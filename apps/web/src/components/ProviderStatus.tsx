@@ -7,6 +7,88 @@ import { StatusBadge } from "./StatusBadge";
 export type ProviderStatusMapView = NonNullable<ProviderStatusesResponse["providers"]>;
 export type ProviderStatusView = ProviderStatusMapView[keyof ProviderStatusMapView];
 
+type Capability = ProviderStatusView["capabilities"][number];
+type Limit = ProviderStatusView["limits"][number];
+type CapabilityState = Capability["state"];
+type CapabilitySource = Capability["source"];
+type BadgeTone = "ok" | "warn" | "error" | "neutral";
+
+// Local presentation only: contract state/source values map to a badge tone and
+// label. No capability names, states or sources are invented here — every record
+// rendered below comes from the validated backend response.
+const statePresentation: Record<CapabilityState, { tone: BadgeTone; label: string }> = {
+  AVAILABLE: { tone: "ok", label: "AVAILABLE" },
+  UNAVAILABLE: { tone: "error", label: "UNAVAILABLE" },
+  UNKNOWN: { tone: "warn", label: "UNKNOWN" }
+};
+
+const sourcePresentation: Record<CapabilitySource, { tone: BadgeTone; label: string }> = {
+  API: { tone: "ok", label: "API" },
+  DOCUMENTATION: { tone: "warn", label: "DOCUMENTATION" },
+  USER: { tone: "neutral", label: "USER" },
+  UNKNOWN: { tone: "warn", label: "UNKNOWN" }
+};
+
+function CapabilityList({ capabilities }: { capabilities: Capability[] }) {
+  if (capabilities.length === 0) {
+    return <p className="mt-2 text-xs text-slate-500">No capability metadata reported</p>;
+  }
+  return (
+    <ul className="mt-2 space-y-1">
+      {capabilities.map((capability, index) => {
+        const state = statePresentation[capability.state];
+        const source = sourcePresentation[capability.source];
+        return (
+          <li key={`${capability.name}-${index}`} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-capability-name={capability.name}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-200">{capability.name}</span>
+              <span className="flex items-center gap-1">
+                <span data-state={capability.state}><StatusBadge label={state.label} tone={state.tone} /></span>
+                <span data-source={capability.source}><StatusBadge label={`Source: ${source.label}`} tone={source.tone} /></span>
+              </span>
+            </div>
+            {capability.asOf && <p className="mt-1 text-xs text-slate-500">As of: {capability.asOf}</p>}
+            {capability.note && <p className="mt-1 text-xs text-slate-400">{capability.note}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function LimitList({ limits }: { limits: Limit[] }) {
+  if (limits.length === 0) {
+    return <p className="mt-2 text-xs text-slate-500">No limit metadata reported</p>;
+  }
+  return (
+    <ul className="mt-2 space-y-1">
+      {limits.map((limit, index) => {
+        const state = statePresentation[limit.state];
+        const source = sourcePresentation[limit.source];
+        const unverified = limit.state === "UNKNOWN" && limit.source === "DOCUMENTATION";
+        return (
+          <li key={`${limit.name}-${index}`} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-limit-name={limit.name}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-200">
+                {limit.name} <span className="text-slate-400">= {limit.value === null ? "null" : String(limit.value)}</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span data-state={limit.state}><StatusBadge label={state.label} tone={state.tone} /></span>
+                <span data-source={limit.source}><StatusBadge label={`Source: ${source.label}`} tone={source.tone} /></span>
+              </span>
+            </div>
+            {unverified && (
+              <p data-unverified="true" className="mt-1 text-xs text-amber-300">Unverified — documentation-derived; not a confirmed account entitlement or effective limit.</p>
+            )}
+            {limit.publishedAt && <p className="mt-1 text-xs text-slate-500">Published: {limit.publishedAt}</p>}
+            {limit.note && <p className="mt-1 text-xs text-slate-400">{limit.note}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function ProviderRow({ status }: { status: ProviderStatusView }) {
   const tone = status.authState === "AUTHENTICATED" ? "ok" : status.authState === "ERROR" || status.authState === "EXPIRED" ? "error" : "warn";
   return (
@@ -22,6 +104,14 @@ function ProviderRow({ status }: { status: ProviderStatusView }) {
       </dl>
       {status.error && <p className="mt-2 text-xs text-rose-300">{status.error}</p>}
       {status.restrictions.length > 0 && <p className="mt-1 text-xs text-amber-300">{status.restrictions.join("; ")}</p>}
+      <div className="mt-3 border-t border-slate-800 pt-2">
+        <p className="text-xs font-semibold text-slate-300">Capabilities</p>
+        <CapabilityList capabilities={status.capabilities} />
+      </div>
+      <div className="mt-3 border-t border-slate-800 pt-2">
+        <p className="text-xs font-semibold text-slate-300">Limits</p>
+        <LimitList limits={status.limits} />
+      </div>
     </li>
   );
 }
