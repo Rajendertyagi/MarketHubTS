@@ -194,7 +194,7 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 
 **WP 5A completion evidence:** commits `f7b3dcf` (implementation), `dfd8029` (nit fixes + focused component extraction), `2df616d` (null-vs-undefined state fix). Files: `packages/contracts/src/provider.ts`, `apps/api/src/provider-routes.ts`, `apps/web/src/lib/status.ts`, `apps/web/src/App.tsx`, new `apps/web/src/components/ProviderStatus.tsx`, `tests/providers/status-composition.test.ts`, new `tests/web/provider-status.test.ts`. Focused tests 10 pass / 0 fail; full suite 872 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP (implementation), NEEDS FIX (encoding regression from a tooling edit), KEEP (after encoding fix), KEEP (after null-state fix). All acceptance criteria met; no remaining limitations.
 
-### WP 5B — Provider-wide capabilities and limits
+### WP 5B — Provider-wide capabilities and limits — COMPLETE (published at `bfc1e36`)
 
 1. Extend the provider status presentation to render `ProviderStatus.capabilities` and `ProviderStatus.limits`.
 2. Use the existing `capabilityStateSchema` and `capabilitySourceSchema` values. Do not add new capability states or hardcode provider capability names.
@@ -203,6 +203,8 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 5. Keep current auth/streaming statuses, error/restriction display, and control behavior intact.
 
 **WP 5B exit:** the provider panel displays all supplied capability/limit records without a frontend capability inventory; an empty or unknown report is explicit and honest.
+
+**WP 5B completion evidence:** commits `e2b20f8` (implementation), `bfc1e36` (audit fixes). Files: `apps/web/src/components/ProviderStatus.tsx`, `tests/web/provider-status.test.ts`. Focused tests 33 pass / 0 fail; full suite 885 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP with 5 minor/nit findings → all fixed → KEEP with no outstanding findings. All acceptance criteria met; no remaining limitations.
 
 ### WP 5C.1 — Render per-provider runtime status and capabilities
 
