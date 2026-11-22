@@ -206,7 +206,7 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 
 **WP 5B completion evidence:** commits `e2b20f8` (implementation), `bfc1e36` (audit fixes). Files: `apps/web/src/components/ProviderStatus.tsx`, `tests/web/provider-status.test.ts`. Focused tests 33 pass / 0 fail; full suite 885 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP with 5 minor/nit findings → all fixed → KEEP with no outstanding findings. All acceptance criteria met; no remaining limitations.
 
-### WP 5C.1 — Render per-provider runtime status and capabilities
+### WP 5C.1 — Render per-provider runtime status and capabilities — COMPLETE (published at `16f2b88`)
 
 1. Update the subscription runtime presentation to prefer and iterate `SubscriptionStateView.runtimes` where supplied, with a fallback to the legacy `runtime` field (including `runtimes: {}`).
 2. Display `runtime.capabilities` from the existing `CapabilityResult` contract, including all four status values and `entitlementUnverified`.
@@ -214,6 +214,8 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 4. Do not wire `upstoxCapabilities()` into a new runtime path in this work package. It is mode/instrument-specific and must not be presented as a live runtime report unless an independently approved design establishes the correct source and lifecycle.
 
 **WP 5C.1 exit:** when a provider runtime reports structured capabilities, the WebUI renders them under that provider; no report is not misrepresented as support; legacy single-runtime views remain usable.
+
+**WP 5C.1 completion evidence:** commits `e19b4b8` (implementation), `16f2b88` (audit fixes). Files: `apps/web/src/components/SubscriptionPanel.tsx`, new `apps/web/src/components/SubscriptionRuntimeView.tsx`, `tests/web/subscriptions.test.ts`. Focused tests 17 pass / 0 fail; full suite 892 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP with 4 minor/nit findings → all fixed → KEEP with no outstanding findings. All acceptance criteria met; no remaining limitations.
 
 ### WP 5C.2 — Add safe, bounded automatic refresh
 
