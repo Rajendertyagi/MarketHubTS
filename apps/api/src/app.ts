@@ -98,6 +98,7 @@ import { registerMarketRoutes } from "./market-routes";
 import { registerHistoricalRoutes } from "./historical-routes";
 import { registerSnapshotRoutes } from "./snapshot-routes";
 import { registerMcpActivityRoutes } from "./mcp-activity-routes";
+import { registerMcpOperationsRoutes } from "./mcp-operation-routes";
 export function isAllowedCorsOrigin(origin: string, config: Pick<AppConfig, "lan" | "port" | "webPort">): boolean {
   if (!origin) return false;
   const allowed = new Set<string>([
@@ -202,6 +203,10 @@ export function createApp(deps: AppDependencies) {
   // M6-C: durable activity history. Write routes are local-owner-only, reads
   // follow the LAN model. Same repository instance as retention cleanup.
   registerMcpActivityRoutes(app, { activities: activityRepo });
+
+  // Phase 2: read-only operation discovery for the Activity selector. Sourced
+  // from the same registration-owned descriptors used by the MCP registrations.
+  registerMcpOperationsRoutes(app);
 
   if (deps.service && deps.hub && (deps.supervisor || deps.coordinator)) {
     registerMarketRoutes(app, {
