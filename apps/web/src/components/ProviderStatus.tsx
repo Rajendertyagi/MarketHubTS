@@ -123,7 +123,8 @@ export function ProviderStatusContent({
   return (
     <>
       {isError && <p className="text-sm text-rose-300">Unable to read provider status.</p>}
-      {!providers && !isError && <p className="text-sm text-slate-400">Loading provider status...</p>}
+      {providers === undefined && !isError && <p className="text-sm text-slate-400">Loading provider status...</p>}
+      {providers === null && !isError && <p className="text-sm text-slate-400">Provider status is currently unavailable.</p>}
       {providers && (
         <>
           <ProviderList providers={providers} />

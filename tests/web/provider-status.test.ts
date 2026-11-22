@@ -56,13 +56,22 @@ describe("provider list rendering", () => {
     expect(html).toContain("AUTH REQUIRED");
   });
 
-  test("providers: null renders the honest empty state without throwing", () => {
+  test("providers: null renders an honest unavailable state, not loading", () => {
     const html = renderToStaticMarkup(createElement(ProviderStatusContent, {
       providers: null, note: undefined, isError: false, onChanged: () => {}
     }) as never);
-    expect(html).toContain("Loading provider status...");
+    expect(html).toContain("Provider status is currently unavailable.");
+    expect(html).not.toContain("Loading provider status...");
     expect(html).not.toContain("UPSTOX");
     expect(html).not.toContain("FYERS");
+  });
+
+  test("providers: undefined still renders the loading state", () => {
+    const html = renderToStaticMarkup(createElement(ProviderStatusContent, {
+      providers: undefined, note: undefined, isError: false, onChanged: () => {}
+    }) as never);
+    expect(html).toContain("Loading provider status...");
+    expect(html).not.toContain("Provider status is currently unavailable.");
   });
 
   test("error state is shown independently of the provider list", () => {
