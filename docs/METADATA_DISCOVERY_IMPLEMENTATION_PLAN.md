@@ -107,7 +107,7 @@
 
 **Acceptance:** no duplicate interval list; no manual canonical-ID typing; bounded/paginated behavior; existing panel tests green.
 
-**Risks:** faceted filters need repo/API extension; "load more" scope; no-DOM test approach.
+**Risks:** faceted filters need repo/API extension; bounded Load More pagination is implemented (single-flight, 100-result cap); no-DOM test approach.
 
 ## 6. Phase 4 — Derivative domain discovery
 

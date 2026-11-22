@@ -436,13 +436,13 @@ This plan was **not** authorization to implement, commit or push; those required
 **Commits on `develop` (baseline `6715755`):**
 - `c14d789` — reusable instrument picker + typed catalog client adopted by the three panels.
 - `f4f85ad` — correctness fixes from the independent audit: cap hardening on merged load-more pages, faithful route-test fake.
-- Fix-forward commit for the disabled-state guard, missing test assertions and this documentation close-out (see working tree / subsequent commit).
+- `cd53e5a` — fix-forward: disabled-state guard, missing test assertions and documentation close-out.
 
 **Files:** exactly the §4 scope — new `apps/web/src/lib/catalog.ts`, `apps/web/src/components/InstrumentPicker.tsx`, `tests/web/catalog.test.ts`, `tests/web/instrument-picker.test.ts`, `tests/market/catalog-routes.test.ts`; modified three panels and three panel test files. No API route, repository, database, migration, contract, dependency or M6 changes. Untracked `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` preserved.
 
 **Verification (local evidence):**
 - `bun run typecheck`, `bun run build`, `git diff --check` — clean.
-- Full suite `bun test` — 817 pass / 0 fail (before the fix-forward); focused suites re-run after the fix-forward.
+- Full suite `bun test` — **822 pass / 0 fail, 6,964 assertions** after the fix-forward (817 pass / 0 fail before it).
 - Independent audits: full audit and a dedicated correctness audit on `opencode/iceman-free`, both ending **KEEP** after all findings were fixed and re-audited.
 - Real-browser smoke test (seeded temp DB, local dev server): verified debounced search, 25 readable results, no auto-selection, mouse selection, keyboard ArrowDown/Enter selection, Escape preserving value, unique `useId` ARIA ids, Load More availability, and both History-tab pickers mounted. Load More click, in-browser abort of a slow request and the two pickers' distinct ARIA ids were **not** browser-verified because the browser tool lost keyboard focus; those behaviors remain covered by automated tests only.
 
