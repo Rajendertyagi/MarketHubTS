@@ -1,7 +1,7 @@
 # MarketHubTS — Phase 3 WP 3b–3c: Reusable Instrument Search Picker
 
 **Plan status:** Source study and implementation plan only. No repository files changed by this plan.
-**Repository baseline inspected:** `Rajendertyagi/MarketHubTS`, branch `develop`, commit `172a1e76bc0881533a38b8c8984489f19f5a291d` (Phase 1 implementation and close-out corrections pushed).
+**Repository baseline inspected:** `Rajendertyagi/MarketHubTS`, branch `develop`, commit `671575590f31a91f0dfde9aeb5101aa50e04155d` (Phase 1 implementation and close-out corrections pushed). Source baseline at this commit; this plan document is finalized in the working tree. Source facts were re-verified against this checkout; line numbers may move during implementation, so verify names/usages before editing.
 
 **Governing documents:**
 - [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) — AD-025, especially §§5–8 and §10.E.
@@ -68,7 +68,7 @@ The architecture inventory also records that the current local catalog can be em
 - `apps/web/src/components/HistoricalPanel.tsx` stores `canonicalId`; its `focus` prop can prefill that value from an MCP activity reference. Read-cached and sync-config requests use that existing ID and must keep their shapes.
 - `apps/web/src/components/SnapshotPanel.tsx` stores `underlying`; the underlying ID is used by existing capture-config and capture requests. Expiry and explicit provider selection are separate form fields and must remain unchanged.
 - The current tests use Bun, injected `fetch` mocks and `renderToStaticMarkup`; there is no installed DOM/testing-library dependency in `apps/web/package.json`.
-- `tests/market/catalog.test.ts` and `tests/mcp/catalog-search.test.ts` cover repository search behavior. There is no dedicated catalog-route test in the current test tree.
+- `tests/mcp/catalog-search.test.ts` covers repository search behavior; `tests/market/catalog.test.ts` covers catalog foundation/identity/sync (not search). There is no dedicated catalog-route test in the current test tree.
 
 ### 1.4 Fields available for results
 
@@ -148,12 +148,12 @@ interface InstrumentPickerProps {
 
 The exact prop names may follow local conventions, but the contract is:
 - Parent owns the selected canonical ID.
-- The component owns only transient search text, result list, loading/error/pagination state and the last selected display label.
+- The component owns only transient search text, result list, loading/error/pagination state and a cached selected descriptor `{ canonicalId, label }`. Render the cached label **only** when `canonicalId === value`; otherwise render the safe ID fallback. When the parent changes `value` (e.g. a new activity focus), the old label must not be shown against the new ID.
 - Selecting a result calls `onChange(instrument.canonicalId)` — never the display label.
 - Typing a query does not select the first result automatically.
 - A selected canonical ID supplied by a parent (especially `HistoricalPanel` activity focus) must remain representable even when it is not in the current result page. Show a safe fallback using that ID until a display record is available; do not silently clear or replace it. The search box remains a separate query field; clearing it does not clear `value`.
 - Provide clear loading, results, no-match, empty-catalog, error/retry and load-more states. "Stale" means a superseded in-flight response ignored by generation check, not a separate visible state.
-- Keep search and selection accessible: a labelled search input, keyboard-usable result controls, visible focus, and appropriate list/option semantics. Do not rely on color alone.
+- Keep search and selection accessible: a labelled search input, keyboard-usable result controls, visible focus, and appropriate list/option semantics. Do not rely on color alone. Required keyboard behavior: **ArrowDown/ArrowUp** move an active option, **Enter** selects the active option (not auto-select on typing), **Escape** clears the search text without clearing `value`, and focus returns to the search input after selection. Concretely: `role="listbox"` on the results container, `role="option"` + `aria-selected` on each option, and `aria-activedescendant` on the search input pointing at the active option; assert these attributes in the static-markup test. The selected value is always `canonicalId`; the display label is presentation only.
 - Keep the existing Tailwind visual language and do not introduce a UI framework or generic form renderer.
 
 ### 3.3 Search, debounce, cancellation and pagination
@@ -166,8 +166,9 @@ Recommended behavior:
 5. A query change resets the previous result list and cursor.
 6. Selecting an item stores its `canonicalId` in the parent; search text and selected value remain distinct.
 7. When `nextCursor` is non-null, show a bounded "Load more" action. Request the next page with the **same trimmed query**, limit and cursor; append results and defensively avoid duplicate `canonicalId` entries.
-8. A new query invalidates the old cursor and any in-flight load-more request.
-9. Empty query returns to idle with no request and no stale result list.
+8. **Load More is single-flight (required):** disable or lock the action while a pagination request is pending so a second click cannot issue another request for the same cursor. The old request's settle must not re-enable the lock; re-enable only when it settles (success, error or abort) **and** the generation still matches. A fresh query with a non-null `nextCursor` makes Load More available anew (subject to the 100-result cap); on unmount it stays disabled. The pending state must be reflected in the view (disabled button / busy indicator) and asserted in tests. This is independent of, and in addition to, the generation guard — the lock prevents duplicate requests, the generation guard prevents stale responses from being applied.
+9. A new query invalidates the old cursor and any in-flight load-more request.
+10. Empty query returns to idle with no request and no stale result list.
 
 **Controller topology (required):** use **one `AbortController` per query generation**. On new text, increment a generation counter, abort the previous controller, then run the debounce via `createRetrySleep` (`apps/web/src/lib/retry-sleep.ts:6–24`) with the **new generation's** controller's signal — **never** the aborted controller's (an already-aborted signal makes `createRetrySleep` resolve immediately at `retry-sleep.ts:8–10`, skipping the debounce). Because `createRetrySleep` **resolves** (not rejects) on abort (`retry-sleep.ts:13–17`), guard **both** the post-sleep and post-fetch paths with a generation check — if the generation changed, return without touching state. `AbortError` from `fetch` is caught and ignored for superseded generations. This prevents an aborted debounce from being treated as a completed query.
 
@@ -215,6 +216,7 @@ Do not add exchange/category/segment filters. Do not search alias or ISIN fields
 ### New files
 - `apps/web/src/lib/catalog.ts`
 - `apps/web/src/components/InstrumentPicker.tsx`
+- `tests/web/catalog.test.ts` (typed client tests)
 - `tests/web/instrument-picker.test.ts`
 - `tests/market/catalog-routes.test.ts` (recommended: the current API route has no dedicated route-level test)
 
@@ -232,7 +234,7 @@ Do not add exchange/category/segment filters. Do not search alias or ISIN fields
 - `packages/market-core/src/types.ts`
 - `packages/contracts/src/market.ts`
 - `apps/web/src/lib/activity.ts` as a client/error-handling style reference
-- Existing repository tests `tests/market/catalog.test.ts` and `tests/mcp/catalog-search.test.ts`
+- Existing tests `tests/mcp/catalog-search.test.ts` (repository search) and `tests/market/catalog.test.ts` (catalog foundation/identity/sync)
 
 Expected production changes are WebUI-only. The catalog-route test is test-only. Do not edit API route, repository, database schema, migrations or contracts unless preflight reveals a concrete defect in the existing search contract; any such finding must be reported separately before broadening scope.
 
@@ -288,8 +290,8 @@ The increment is complete only when:
 2. It selects a result by `canonicalId`, not by display name or symbol.
 3. Search uses the existing `GET /api/catalog/search` route and does not add a new endpoint.
 4. Requests are debounced, bounded, cancellable and protected against stale responses (per-generation controller + dual guards).
-5. Cursor pagination is supported up to the 100-result cap without unbounded result loading; changing the query resets pagination.
-6. Loading, empty-query, empty-catalog/no-match, error/retry and load-more states are clear and usable.
+5. Cursor pagination is supported up to the 100-result cap without unbounded result loading; changing the query resets pagination. **Load More is single-flight** — the action is disabled/locked while a pagination request is pending, so no two requests share a cursor.
+6. Loading, empty-query, empty-catalog/no-match, error/retry and load-more states are clear and usable. Keyboard navigation (Arrow keys, Enter, Escape) and selected-value handling (`canonicalId`) work as specified in §3.2.
 7. All three panels preserve their existing request shapes and action behavior.
 8. Historical activity focus continues to prefill the selected canonical ID, even if the ID is not in the currently rendered search results.
 9. Snapshot expiry remains manual, provider selector/default remains unchanged, and no expiry is invented.
@@ -307,7 +309,7 @@ The increment is complete only when:
 Add tests for:
 - Search query encoding, trimming and the default bounded limit.
 - Correct `cursor` forwarding for later pages.
-- `AbortSignal` propagation to `fetch`. For abort, extend the existing `FakeSignal`/`asSignal` structural fake in `tests/web/retry-sleep.test.ts:5–26` and use an enhanced `fakeFetch` that throws a `DOMException` named `"AbortError"` when `init.signal` aborts (the existing `fakeFetch` in `tests/web/activity.test.ts:10–15` ignores the signal and cannot test this); assert `AbortError` propagates unchanged and is not surfaced as an ordinary user error.
+- `AbortSignal` propagation to `fetch`. For abort, replicate the structural-fake pattern from `tests/web/retry-sleep.test.ts:5–26` inside the new `tests/web/catalog.test.ts` (those helpers are module-local and not exported; no source file is modified) and use an enhanced `fakeFetch` that throws a `DOMException` named `"AbortError"` when `init.signal` aborts (the existing `fakeFetch` in `tests/web/activity.test.ts:10–15` ignores the signal and cannot test this); assert `AbortError` propagates unchanged and is not surfaced as an ordinary user error.
 - Valid response parsing with `canonicalInstrumentSchema`.
 - Rejection of malformed envelopes, malformed instrument rows and invalid `nextCursor` values.
 - Structured 400 and server-error responses becoming typed errors.
@@ -323,9 +325,10 @@ Test:
 - Selection calls `onChange` with `canonicalId` only; no auto-selection of the first result.
 - No-results and empty-catalog messages.
 - Error and retry state.
-- Load-more availability only when `nextCursor` exists; stops at the 100-result cap; appends without duplicate canonical IDs.
+- Load-more availability only when `nextCursor` exists; stops at the 100-result cap; appends without duplicate canonical IDs. **Single-flight:** while a pagination request is pending, a second Load More click issues no request and the action is disabled/busy; it re-enables only when the request settles with a matching generation.
+- Keyboard behavior: ArrowDown/ArrowUp move the active option, Enter selects the active option (no auto-select on typing), Escape clears search text without clearing `value`, and focus returns to the search input after selection.
 - A new query clears the previous result page/cursor and aborts the in-flight request; stale completions are ignored by generation check.
-- A parent-supplied selected ID (including a historical activity-focus ID) remains visible when absent from current search results; clearing search text does not clear the selection.
+- A parent-supplied selected ID (including a historical activity-focus ID) remains visible when absent from current search results; clearing search text does not clear the selection. Label coherence: select result A (caching its label), then externally change `value` to B; assert B (or its ID fallback) is shown and A's label is not.
 
 Also perform a real browser smoke test for typing/debounce, aborting a slow request, selecting with keyboard/mouse and loading another page. Do not claim browser behavior was automated unless a browser test actually runs.
 
@@ -351,6 +354,7 @@ Do not modify the route unless a real bug is uncovered and separately scoped.
 Run focused tests first, using only paths that exist or are explicitly created by this plan:
 
 ```bash
+bun test tests/web/catalog.test.ts
 bun test tests/web/instrument-picker.test.ts
 bun test tests/market/catalog-routes.test.ts
 bun test tests/web/subscriptions.test.ts tests/web/historical.test.ts tests/web/snapshots.test.ts
@@ -370,18 +374,24 @@ Report exact commands, test totals and any tests not run. Verify the repository'
 
 ---
 
-## 9. Recommended implementation sequence
+## 9. Implementation sequence — file-by-file with dependencies
 
-1. **Preflight:** `git status`, branch/HEAD, full diff; preserve existing local/untracked changes. Read the latest three governing plans before editing. Confirm Phase 1 remains the current pushed baseline.
-2. **API/client check:** verify catalog route/repository behavior and response safety. Do not change API unless a concrete issue requires separate authorization.
-3. **Typed client:** implement and test `lib/catalog.ts` first.
-4. **Picker core:** implement the reusable component and deterministic presentation/state helpers; cover query, cancellation, pagination and visible states.
-5. **Subscription integration:** smallest integration; preserve `commit()` and the desired-state contract.
-6. **Historical integration:** preserve focus prefill, interval/date controls and request shapes.
-7. **Snapshot integration:** replace only underlying input; preserve manual expiry and explicit provider.
-8. **Tests and browser smoke test:** run focused tests, typecheck, build and complete suite.
-9. **Independent diff audit:** verify no hidden API/request/persistence changes, no unbounded fetch, no stale-response race, no fabricated data and no unrelated scope.
-10. **Report:** changed files, design decisions, test evidence, browser evidence, git status and any unverified items.
+Each step lists the files it touches, what it depends on, and its exit condition. Complete and validate a step before starting the next. All steps are one bounded assignment; no commit/push until after independent review and separate authorization.
+
+| Step | Files | Depends on | Change | Exit condition (acceptance) |
+|---|---|---|---|---|
+| 1. Preflight | none (read-only) | — | `git status`/branch/HEAD/full diff; preserve local + untracked changes; re-read governing plans; confirm Phase 1 baseline. | Baseline recorded; no existing work overwritten; any catalog-contract defect reported separately, not fixed here. |
+| 2. API/client check | none (read-only) | 1 | Verify `catalog-routes.ts`/`searchInstruments` behavior, response safety and empty-catalog handling. | Confirmed no new endpoint/filter/repository method is justified; any defect reported separately. |
+| 3. Typed client | new `apps/web/src/lib/catalog.ts`; new `tests/web/catalog.test.ts` | 2 | `searchInstruments`, local Zod envelope, 3-kind typed errors, `AbortError` propagation, `buildCatalogQuery`/`formatInstrumentLabel` pure helpers. | Client tests pass: query encoding, limit clamp, cursor, envelope/instrument validation, typed errors, abort propagation. |
+| 4. Picker core | new `apps/web/src/components/InstrumentPicker.tsx`; new `tests/web/instrument-picker.test.ts` | 3 | Controlled picker, pure view/controller split, debounce, per-generation `AbortController` + dual guards, unmount increment, single-flight Load More, 100-result cap, keyboard behavior, all UI states. | Picker tests pass: states, selection by `canonicalId`, debounce/cancellation/stale guards, single-flight, cap, keyboard, externally-set `value`. |
+| 5. Subscription integration | `apps/web/src/components/SubscriptionPanel.tsx`; `tests/web/subscriptions.test.ts` | 4 | Replace `draftId` input with picker; keep `commit()`/`replaceSubscriptions()` and duplicate/busy/error/toggle/remove behavior. | Add still sends `{ canonicalId, enabled: true }`; no auto-commit; existing subscription tests green. |
+| 6. Historical integration | `apps/web/src/components/HistoricalPanel.tsx`; `tests/web/historical.test.ts` | 4 | Replace canonical-ID input only; keep interval/date controls, read-cached/sync-config shapes and activity-focus prefill. | Focus prefill displays the ID even when absent from results; all 16 intervals + `1D` default intact; request shapes unchanged. |
+| 7. Snapshot integration | `apps/web/src/components/SnapshotPanel.tsx`; `tests/web/snapshots.test.ts` | 4 | Replace underlying input only; keep manual expiry and explicit provider. | Capture/config payloads unchanged; expiry manual; provider default FYERS unchanged; focused/stored snapshot views intact. |
+| 8. API route test | new `tests/market/catalog-routes.test.ts` | 2 | Route-level test for the existing `GET /api/catalog/search` (envelope, validation, cursor, no unbounded path). | Route test passes; route source unchanged. |
+| 9. Full validation | none (commands) | 3–8 | Run §8 focused tests, then typecheck, build, full suite, `git diff --check`; perform the manual browser smoke test. | All commands pass with reported totals; browser behavior recorded honestly (not claimed automated). |
+| 10. Independent diff audit + report | none (read-only) | 9 | Verify no hidden API/request/persistence changes, no unbounded fetch, no stale-response race, no fabricated data, no unrelated scope; produce §11 report. | Audit findings resolved or recorded; report complete; no commit/push. |
+
+**Critical path:** 1 → 2 → 3 → 4 → {5, 6, 7} → 9 → 10. Step 8 (API route test) depends only on step 2 and may start in parallel with steps 3–4. Steps 5–7 depend on step 4 and are independent of each other; step 9 requires steps 3–8.
 
 ---
 
@@ -393,6 +403,7 @@ Report exact commands, test totals and any tests not run. Verify the repository'
 | Old results arrive after a new query | Per-generation `AbortController`; abort previous fetch and guard stale completions on both post-sleep and post-fetch paths. |
 | Cursor reused for a different query | Reset cursor and results on every new trimmed query. |
 | Large match sets | Default page 25, API max 100, explicit Load more only, hard 100-result cap. |
+| Duplicate Load More requests for the same cursor | Single-flight lock: disable/busy the action while a pagination request is pending; re-enable only on settle with matching generation. Generation guard remains for stale responses. |
 | User cannot identify similar instruments | Show display name, symbol, exchange and segment; keep canonical ID as the selected value. |
 | Context-specific validity differs across panels | Do not invent filters; backend validation remains authoritative. |
 | Historical activity focus provides an ID not in search results | Preserve/display the externally supplied value as a fallback. |
