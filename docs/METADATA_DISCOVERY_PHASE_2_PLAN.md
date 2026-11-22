@@ -217,7 +217,7 @@ Do **not** add input schemas, argument values, SDK annotations, categories, prov
 
 - `ActivityPanelViewState` gains `operations: McpOperationDescriptor[]`, `operationsLoading: boolean`, `operationsError: string | null`.
 - `ActivityPanelViewActions` gains `onRetryOperations: () => void`; `toolName`/`onToolName` are unchanged.
-- The controller gains a mount fetch via `fetchMcpOperations(signal)`; its failure sets **only** `operationsError` and leaves activity records, `loading` and `error` untouched.
+- The controller gains a mount fetch via `fetchMcpOperations(signal)`; its failure sets **only** `operationsError` and leaves activity records, `loading` and `error` untouched. Following the existing `fetchActivity`/`fetchActivityByOperation` pattern (`ActivityPanel.tsx:204–226`, `tests/web/activity-panel.test.tsx:123–156`), the controller must accept `fetchMcpOperations` as an injectable dependency so tests can make it reject and prove isolation through the real code path.
 - The view renders the grouped native `<select>` in place of the free-text input at `:135`, sourcing options entirely from `state.operations` (no component constant).
 
 ## 4. Exact implementation scope and work packages
@@ -415,7 +415,7 @@ Extend `tests/web/activity-panel.test.tsx` and focused client tests as needed:
 - operation selection combines with transport/status/date filters;
 - pagination resets when the operation changes;
 - loading, error, retry and empty states render correctly;
-- descriptor fetch failure does not prevent activity refresh or use of other controls — set `operationsError` in view state and assert activity records/`loading`/`error` are untouched and `onRetryOperations` is wired;
+- descriptor fetch failure does not prevent activity refresh or use of other controls — **drive a real rejected fetch through the controller**, not just a preset view-state flag: extend the existing `makeController()` helper (`tests/web/activity-panel.test.tsx:123–156`) with an injectable `fetchMcpOperations` mock, make it reject, run the mount load, and assert (a) `operationsError` is set, (b) the activity list request still succeeds and records render, (c) activity `loading`/`error` are untouched, and (d) `onRetryOperations` re-invokes `fetchMcpOperations`. A separate view-level test may still assert the error/retry rendering; the controller test is what proves isolation;
 - invalid descriptor response is rejected by the shared schema;
 - removed operation selection is reset to `Any operation` after a successful descriptor fetch/retry, pagination returns to the first page, and the next activity query omits `toolName`;
 - changing the Operation select immediately applies the filter (page 1 + load with the new `toolName`), matching Apply-filters behavior;
