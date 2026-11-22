@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 // react-dom is a workspace dependency of @markethub/web, not the repo root.
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import {
-  mcpActivityStatusSchema, mcpActivityTransportSchema,
+  mcpActivityStatusSchema, mcpActivityTransportSchema, mcpOperationTypeSchema,
   type McpActivityView, type McpOperationDescriptor
 } from "../../packages/contracts/src/index";
 import {
@@ -143,6 +143,8 @@ describe("Phase 2C — ActivityPanel operation selector rendering", () => {
     expect(html).toContain('<optgroup label="Tools">');
     expect(html).toContain('<optgroup label="Resources">');
     expect(html).toContain('<optgroup label="Prompts">');
+    // Group set is driven by the shared contract, not a duplicated local list.
+    expect((html.match(/<optgroup /g) ?? []).length).toBe(mcpOperationTypeSchema.options.length);
     // Tools show the stable name; resources/prompts show their title.
     expect(html).toContain('<option value="markethub_health">markethub_health</option>');
     expect(html).toContain('<option value="catalog-instruments">Catalog instruments</option>');

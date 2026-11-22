@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  mcpActivityStatusSchema, mcpActivityTransportSchema,
+  mcpActivityStatusSchema, mcpActivityTransportSchema, mcpOperationTypeSchema,
   type McpActivityView, type McpOperationDescriptor
 } from "@markethub/contracts";
 import {
@@ -163,7 +163,7 @@ export function ActivityPanelView({ state, actions }: { state: ActivityPanelView
       <div className="mb-4 grid gap-2 sm:grid-cols-5">
         <select aria-label="Filter operation" className={inputClass} value={state.toolName} onChange={(e) => actions.onToolName(e.target.value)}>
           <option value="">Any operation</option>
-          {(["tool", "resource", "prompt"] as const).map((type) => {
+          {mcpOperationTypeSchema.options.map((type) => {
             const group = state.operations.filter((operation) => operation.type === type);
             if (group.length === 0) return null;
             const label = type === "tool" ? "Tools" : type === "resource" ? "Resources" : "Prompts";
