@@ -1,6 +1,6 @@
 # Phase 2 — MCP Operation Discovery and Activity Selector
 
-> **Status:** Proposed, bounded implementation plan. **Planning only:** this document does not authorize implementation, commits, pushes, merges, migrations, or runtime changes. Implementation requires separate product-owner authorization.
+> **Status:** IMPLEMENTED, TESTED AND PUBLISHED on `develop` (see §12 close-out). This document is now a historical implementation record as well as the original plan. It did not itself authorize implementation; that required separate product-owner authorization.
 >
 > **Repository baseline reviewed:** `Rajendertyagi/MarketHubTS`, branch `develop`, HEAD `b5ab9458c7bce7180f806ba5e1db72864991ba5c` (2026-11-22).
 >
@@ -501,3 +501,27 @@ Re-verify the latest stable protocol and installed SDK at implementation start. 
 ---
 
 **Completion definition:** Phase 2 is accepted only after actual registration parity, safe API delivery, a working Activity selector, regression validation and independent diff review are evidenced. Publishing the plan itself does not mark Phase 2 implemented.
+
+---
+
+## 12. Implementation close-out (WP 2a–2c)
+
+**Status:** Implemented, tested and published on `develop`. Not merged into `main`.
+
+**Commits on `develop` (baseline `b5ab945`):**
+- `280c4fa` — WP 2A: central operation descriptors + registration parity.
+- `a981e69` — WP 2B: validated read-only `GET /api/mcp/operations` route.
+- `9cae78d` — WP 2C: Activity panel native operation selector.
+- `729723f` — fix-forward: derive operation groups from `mcpOperationTypeSchema.options` instead of a duplicated local list (independent-audit finding).
+
+**Files:** exactly the §5 allowed set — new `contracts/src/mcp-operations.ts`, `mcp-core/src/operation-descriptors.ts`, `api/src/mcp-operation-routes.ts`, `web/src/lib/mcp-operations.ts`, and their tests; modified `contracts/src/index.ts`, `mcp-core/src/{tools,resources,prompts,index}.ts`, `api/src/app.ts`, `web/src/components/ActivityPanel.tsx`, and the MCP/Activity test files. No database, migration, provider, M6 transport, dependency or manifest changes. Untracked `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` preserved.
+
+**Verification (local evidence):**
+- `bun run typecheck`, `bun run build`, `git diff --check` — clean.
+- Full suite `bun test` — **857 pass / 0 fail, 7,637 assertions** after the fix-forward.
+- Independent reviews: three per-task reviews (WP 2A/2B/2C) all Spec ✅ / Quality Approved; final whole-branch review on `opencode/iceman-free` — **APPROVE** (no Critical/Important/Minor findings; 4 nits triaged as acceptable). A post-publication independent audit returned **KEEP** with one minor finding (duplicated operation-type list), fixed in `729723f` and re-audited **KEEP**.
+- No CI status checks or workflow runs were reported on GitHub; test/typecheck/build figures are local evidence, not independently confirmed CI results.
+
+**Decisions applied:** preserve existing MCP metadata (tools have no `title`, selector falls back to stable name); no availability field; native grouped `<select>` with `Any operation` default; operation groups derived from `mcpOperationTypeSchema.options`. Both user conditions met — no operation names, activity storage, database schema or MCP registration behavior changed to support the selector.
+
+**Deferred / separate:** the inherited catalog-response concern (full `CanonicalInstrument` schema permits arbitrary `sourceMeta`/`supplementalMeta` in the API response) predates Phase 2 and remains separate security hardening before catalog data is populated; it is deliberately out of scope here.

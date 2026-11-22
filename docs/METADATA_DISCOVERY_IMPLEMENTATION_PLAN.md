@@ -1,6 +1,6 @@
 # Backend-Driven Metadata & Capability Discovery — Detailed Implementation Plan
 
-> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a and Phase 3 WP 3b–3c have since been implemented, tested and published on `develop` (WP 3b–3c close-out in [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12); the remaining phases are still planned.
+> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a, Phase 3 WP 3b–3c and Phase 2 WP 2a–2c have been implemented, tested and published on `develop` (close-outs in [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12 and [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12); the remaining phases are still planned.
 > **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025, source-verified inventory §10), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (phase table), [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) (bounded first slice), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment).
 > **Last updated:** 2026-11-22.
 
@@ -8,8 +8,8 @@
 
 - **Phase numbers are architectural groupings, not implementation order.** The canonical increment order is defined in §1 and matches the roadmap and first-slice plan. Phase 2 is **not** the second implementation task.
 - **Architecture areas A–J** are the source-verified centralization inventory in [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) §10. The coverage matrix in §10 of this plan maps every area to a phase.
-- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a and WP 3b–3c are now implemented and published on `develop`; no descriptor module, metadata endpoint or registry change exists yet.
-- **Endpoint decision stays open.** No HTTP endpoint is a prerequisite for shared contract values; a WebUI metadata surface is justified only after technical validation (Phase 2 work package 2b).
+- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a, WP 3b–3c and Phase 2 WP 2a–2c are now implemented and published on `develop`; the descriptor module and read-only metadata endpoint exist. No universal registry or metadata database exists.
+- **Endpoint decision resolved.** Phase 2 WP 2b selected a dedicated read-only `GET /api/mcp/operations` endpoint (the WebUI cannot import server-side `mcp-core`); no HTTP endpoint is a prerequisite for shared contract values, which remain direct contract imports.
 - **Boundaries:** no M6-C/M6-D/E/B4 ownership change, no physical LAN testing, no universal registry/metadata database/microservice/generic form framework, no dynamic provider claim before contract/registry support, no hardcoded expiry or computed contracts.
 
 ## 1. Dependency graph and canonical implementation order
@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 0 | Architecture & contract design | Inventory (done) | 1, 2 | Design only; partially done |
 | 1 | Shared contract consistency | 0 | 2, 3, 5 | **1st** (with Phase 3 WP 3a) |
-| 2 | Runtime capability discovery | 0 decision, 1 types | 5, 7 | **3rd** |
+| 2 | Runtime capability discovery | 0 decision, 1 types | 5, 7 | **3rd** — implemented and published on `develop` |
 | 3 | Instrument discovery UX | 1 shared types, existing catalog API | 4, 6, 7 | **1st (3a) / 2nd (3b–3c)** — both implemented and published on `develop` |
 | 4 | Derivative domain discovery | Populated catalog + bounded query (absent) | 7 | Deferred — blocked |
 | 5 | Provider & capability extensibility | 1 identity, 2 descriptor pattern | 7 | Later |
@@ -28,7 +28,7 @@
 **Canonical increment order (authoritative):**
 1. **First implementation milestone** — Phase 1 shared-contract consistency + Phase 3 WP 3a (historical interval selector from `candleIntervalSchema`).
 2. Phase 3 WP 3b–3c — reusable instrument picker using existing `GET /api/catalog/search` — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12).
-3. Phase 2 — MCP Activity Operation selector, after the descriptor-delivery decision (WP 2b).
+3. Phase 2 — MCP Activity Operation selector, after the descriptor-delivery decision (WP 2b) — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12).
 4. Phases 4–6 as their prerequisites clear; Phase 7 last.
 
 ## 2. Phase 0 — Architecture & contract design
@@ -71,7 +71,7 @@
 
 **Risks:** circular imports; export compatibility; DB SQL literals must stay.
 
-## 4. Phase 2 — Runtime capability discovery
+## 4. Phase 2 — Runtime capability discovery — IMPLEMENTED (WP 2a–2c; published on `develop`)
 
 **Objective:** operation descriptors derived from actual registrations; Activity Operation selector.
 
@@ -224,14 +224,14 @@ An audit was performed against the governing documents and actual source. Result
 | Catalog search bounded | **Pass** — WP 3b uses existing bounded API; no full-catalogue download |
 | Derivative expiry blocked | **Pass** — Phase 4 explicitly deferred on populated data + bounded query |
 | M6 scope / LAN untouched | **Pass** — no M6 ownership change; no physical LAN testing |
-| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a and WP 3b–3c are marked implemented/published; all other phases remain planned |
+| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a/WP 3b–3c and Phase 2 WP 2a–2c are marked implemented/published; all other phases remain planned |
 | Area coverage A–J | **Pass** — §10 matrix covers all ten areas |
 | Dependencies acyclic | **Pass** — §1 graph has no cycles; Phase 4 blocked, not looping |
 | File paths plausible | **Pass** — all paths match source verified in architecture doc §10 |
 
 **Findings requiring attention during implementation (not plan defects):**
 1. Phase 4 cannot start until a catalog population path and bounded query exist — treat as a hard gate, not a scheduling preference.
-2. Phase 2 WP 2b must record evidence before an endpoint is created; a shared-module route may suffice.
+2. Phase 2 WP 2b recorded its evidence and selected a dedicated read-only endpoint; it is now implemented and published.
 3. Phase 6 WP 6b needs a product decision on automatic vs explicit provider preference before code changes.
 4. No-DOM test approach for debounce/cancellation must be validated in Phase 3 (pure helpers + `renderToStaticMarkup` pattern already used in `tests/web/`).
 

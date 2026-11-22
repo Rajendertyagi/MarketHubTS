@@ -17,9 +17,9 @@ This is an architecture rule, not a claim that discovery is implemented today. S
 
 ### 1.1 Implemented today vs proposed
 
-**Already implemented (verified):** shared Zod enums/schemas in `@markethub/contracts`; `GET /api/catalog/search` (bounded, paginated); MCP tool/resource/prompt registrations in `packages/mcp-core`; `ProviderRegistry` with fixed `UPSTOX`/`FYERS` typing; WebUI panels that consume the local API and shared contracts.
+**Already implemented (verified):** shared Zod enums/schemas in `@markethub/contracts`; `GET /api/catalog/search` (bounded, paginated); MCP tool/resource/prompt registrations in `packages/mcp-core`; `ProviderRegistry` with fixed `UPSTOX`/`FYERS` typing; WebUI panels that consume the local API and shared contracts; registration-derived operation descriptors in `mcp-core/src/operation-descriptors.ts` consumed by all three registration functions; the read-only `GET /api/mcp/operations` endpoint with a strict shared contract; the reusable instrument picker adopted by three panels; the Activity panel's native grouped Operation selector; and direct WebUI consumption of shared enum options (interval, transport, status, operation type).
 
-**Proposed, not implemented:** a read-only runtime metadata endpoint (only if justified); registration-derived operation descriptors exposed to the WebUI; reusable instrument/operation selectors; direct WebUI consumption of shared enum options; schema-informed basic forms where a supported derivation exists. No metadata API, registry, WebUI component, dependency or migration exists for this requirement yet.
+**Proposed, not implemented:** schema-informed basic forms where a supported derivation exists; provider/capability extensibility (Phase 5); derivative expiry discovery (Phase 4, blocked on catalog population); configuration/correctness work (Phase 6); cross-system acceptance (Phase 7). No universal metadata registry, metadata database, microservice or generic form framework exists.
 
 ## 2. Source-of-truth ownership
 
@@ -87,7 +87,7 @@ No universal metadata database, no generic options framework, no new service, no
 
 ## 4. MCP operation discovery — the concrete example
 
-`packages/mcp-core/src/factory.ts:13–44` registers nine tools (`tools.ts:49+`), seven resource registrations / six logical resources (`resources.ts:75+`) and three prompts (`prompts.ts:18+`). All **19 operations** produce activity through the shared `withActivity()` mechanism using the same `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227`). The registrations are the source of truth; there is currently **no** exported descriptor array and no WebUI-facing metadata contract. Descriptors are observable only through MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`), used by tests.
+`packages/mcp-core/src/factory.ts:13–44` registers nine tools (`tools.ts:49+`), seven resource registrations / six logical resources (`resources.ts:75+`) and three prompts (`prompts.ts:18+`). All **19 operations** produce activity through the shared `withActivity()` mechanism using the same `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227`). The registrations are the source of truth. **Implemented:** `packages/mcp-core/src/operation-descriptors.ts` is the single registration-owned descriptor source, consumed by all three registration functions and exposed to the WebUI through the read-only `GET /api/mcp/operations` endpoint with a strict shared contract (`contracts/src/mcp-operations.ts`). MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`) remain the protocol-level observation surface and are used by parity tests.
 
 Descriptors must be split into a **minimum set required for operation discovery** and **optional future metadata**:
 
@@ -97,14 +97,14 @@ Descriptors must be split into a **minimum set required for operation discovery*
 
 **Critical requirement:** operation metadata must not be separately hardcoded in the frontend or maintained in a second unrelated backend list. WebUI-facing descriptors must be derived from the actual MCP registrations so they cannot drift.
 
-The Activity panel's free-text filter (`apps/web/src/components/ActivityPanel.tsx:132`) should become a searchable **Operation name** selector sourced from those descriptors, with operation type distinguished from the descriptor. **Keep the existing `toolName` storage and filter contract** for the first implementation; there is no persisted `operationType` field or API filter. Operation-type filtering needs additional API/data design and is explicitly deferred — no migration solely for type filtering without a demonstrated requirement. New registered operations must appear automatically.
+The Activity panel's former free-text filter is now a native grouped **Operation name** selector (`apps/web/src/components/ActivityPanel.tsx`) sourced from those descriptors, with operation type shown as an option group (not a filter). The existing `toolName` storage and filter contract are preserved; there is no persisted `operationType` field or API filter. Operation-type filtering remains explicitly deferred — no migration solely for type filtering without a demonstrated requirement. New registered operations appear automatically.
 
 Future WebUI operation discovery and schema-informed basic forms should reuse the same descriptors where a supported derivation exists. A simple operation should not require a new hand-written React form. This does **not** mandate a universal JSON Schema form generator for complex workflows (see §5).
 
 Distinguish three things:
 - `server/discover` — protocol-level discovery (version, capabilities); it does **not** supply operation descriptors.
 - MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`) — protocol-level descriptors for MCP clients, not a WebUI contract.
-- A WebUI-facing read-only metadata surface — **proposed only**; whether it must be an HTTP endpoint or can reuse a shared module in an existing safe response remains an open technical decision (§3, first-slice plan §2.1).
+- A WebUI-facing read-only metadata surface — **implemented** as `GET /api/mcp/operations` (Phase 2 WP 2b). The WebUI cannot import server-side `mcp-core`, so a dedicated read-only endpoint was selected over embedding descriptors in an existing response (§3, first-slice plan §2.1 resolved).
 
 ## 5. Dynamic WebUI components
 
@@ -121,19 +121,19 @@ Every such component must define: loading, empty, unavailable, error, stale and 
 
 Caching: static metadata is cached and refreshed on load/explicit refresh; dynamic domain data uses query-based fetching with appropriate invalidation. No aggressive polling of static metadata.
 
-## 6. Verified current gaps (not implemented)
+## 6. Verified current state (gaps closed by Phases 1–3)
 
 | Area | Verified current state |
 |---|---|
-| Instrument search | `GET /api/catalog/search` exists (`apps/api/src/catalog-routes.ts:25`); the WebUI never calls it. `SubscriptionPanel.tsx:84–91`, `HistoricalPanel.tsx:181` and `SnapshotPanel.tsx:105` still ask for manual canonical IDs. |
-| Candle intervals | Shared `candleIntervalSchema` has 16 values (`packages/contracts/src/historical.ts:7–11`); `HistoricalPanel.tsx:12` duplicates a 7-value `INTERVALS` array, omitting 9 valid intervals. |
-| Providers | `ProviderRegistry` exists (`packages/market-core/src/provider.ts:22`); `providerIdSchema` and `ProviderStatusMap` have fixed `UPSTOX`/`FYERS` typing (`packages/contracts/src/provider.ts:5,113–116`). `App.tsx:133–134` and `SnapshotPanel.tsx:107–110` reference both explicitly. |
-| MCP tools | Registered in `packages/mcp-core/src/tools.ts`; no separate WebUI metadata discovery contract or endpoint exists. |
-| MCP Activity | Tool-name filter is free text (`ActivityPanel.tsx:132`); transport (`L133–135`) and status (`L136–140`) options are hardcoded despite shared schemas. |
-| Snapshot capture | Underlying and expiry are manually entered (`SnapshotPanel.tsx:105–106`); provider is a hardcoded select (`L107–110`). Do not invent dynamic expiry data where no authoritative source is available. |
+| Instrument search | `GET /api/catalog/search` exists (`apps/api/src/catalog-routes.ts:25`) and is consumed by a reusable `InstrumentPicker` adopted by `SubscriptionPanel`, `HistoricalPanel` and `SnapshotPanel` (Phase 3 WP 3b–3c). No manual canonical-ID entry remains in those controls. |
+| Candle intervals | `HistoricalPanel` derives all 16 values from shared `candleIntervalSchema` (`packages/contracts/src/historical.ts:7–11`); the duplicated local `INTERVALS` array is gone (Phase 3 WP 3a). |
+| Providers | `ProviderRegistry` exists (`packages/market-core/src/provider.ts:22`); `providerIdSchema` and `ProviderStatusMap` have fixed `UPSTOX`/`FYERS` typing (`packages/contracts/src/provider.ts:5,113–116`). Enumerable provider status and capability rendering remain Phase 5 work. |
+| MCP tools / operations | Registered in `packages/mcp-core/src/{tools,resources,prompts}.ts`; descriptors are owned by `mcp-core/src/operation-descriptors.ts` and exposed through the read-only `GET /api/mcp/operations` endpoint with a strict shared contract (Phase 2 WP 2a–2b). |
+| MCP Activity | The free-text tool filter is replaced by a native grouped Operation selector sourced from descriptors; transport, status and operation-type options derive from shared contract schemas (`ActivityPanel.tsx`, Phase 2 WP 2c). |
+| Snapshot capture | Underlying uses the instrument picker; expiry remains manual and provider remains an explicit select. Do not invent dynamic expiry data where no authoritative source is available — derivative expiry discovery is Phase 4 and blocked on catalog population. |
 | Future indicators/alerts/scanners | Must follow metadata discovery when their backend services and registries are introduced. |
 
-No metadata/discovery endpoint exists in `apps/api/src`, and no options/metadata contract exists in `packages/contracts`. The untracked local note `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` records the same pending requirement; it is not an implementation.
+The read-only `GET /api/mcp/operations` endpoint exists in `apps/api/src`, and the strict `mcp-operations` contract exists in `packages/contracts`. The untracked local note `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` records the original pending requirement; it is not an implementation and is preserved as historical context.
 
 ## 7. Security and correctness
 
@@ -161,7 +161,7 @@ Tests must prove the actual source-to-API-to-WebUI relationship, not merely matc
 
 ## 9. Roadmap
 
-The cross-cutting initiative **Backend-Driven Metadata and Capability Discovery** is recorded in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (Phases 0–7). Documentation/protocol and the read-only source-of-truth inventory are **done**. The implementation sequence is: (1) shared-contract centralization + historical interval selector — **first implementation milestone**; (2) reusable instrument picker using the existing catalog API; (3) MCP operation selector after the descriptor-delivery approach is resolved. No discovery API is assumed in this sequence — endpoint necessity remains an open question. See [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) for the bounded increments.
+The cross-cutting initiative **Backend-Driven Metadata and Capability Discovery** is recorded in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (Phases 0–7). Documentation/protocol and the read-only source-of-truth inventory are **done**. The implementation sequence — (1) shared-contract centralization + historical interval selector, (2) reusable instrument picker using the existing catalog API, (3) MCP operation selector after the descriptor-delivery decision — is **complete and published on `develop`**. The descriptor-delivery question was resolved in favor of a dedicated read-only `GET /api/mcp/operations` endpoint. See [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) for the bounded increments and the Phase 2/Phase 3 plan §12 close-outs for evidence.
 
 This initiative does not change M6-C acceptance, M6-D/E/B4 ownership, or reopen physical LAN testing.
 
@@ -192,12 +192,12 @@ For each candidate: current definition → owner → duplicators/consumers → e
 - **Not centralized:** presentation labels, colors, CSS classes, formatting and local interaction state remain frontend-owned.
 
 ### D. MCP operation discovery — high priority
-- **Current:** 9 tools (`tools.ts:49+`), 7 resource registrations / 6 logical resources (`resources.ts:75+`), 3 prompts (`prompts.ts:18+`), all registered through `createMcpServer` (`factory.ts:13–44`). All **19 operations** are recorded through one `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227` → `mcp-activity.ts:143`). WebUI tool filter is free text (`ActivityPanel.tsx:132`).
+- **Current:** 9 tools (`tools.ts:49+`), 7 resource registrations / 6 logical resources (`resources.ts:75+`), 3 prompts (`prompts.ts:18+`), all registered through `createMcpServer` (`factory.ts:13–44`). All **19 operations** are recorded through one `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227` → `mcp-activity.ts:143`). Descriptors are owned by `mcp-core/src/operation-descriptors.ts` and exposed via `GET /api/mcp/operations`; the WebUI uses a native grouped Operation selector (`ActivityPanel.tsx`).
 - **SDK constraint:** `McpServer._registeredTools` is private (`mcp-BCJHyo7l.d.mts:3254`); `toolInputSchemaJson()` is `@internal` (`:3266`). No public enumeration API — SDK internals are rejected.
-- **Decision:** define operation descriptors once in `packages/mcp-core` (stable operation name, operation type `tool|resource|prompt`, display title, description, input metadata/schema where appropriate, availability where grounded) and consume them in the registration functions. Expose to WebUI only through a validated read surface if technical validation justifies it. Evaluate an **Operation name** selector with operation-type filtering instead of a Tool-name-only selector. Keep MCP `tools/list`/resource/prompt listing, `server/discover`, and WebUI REST metadata discovery separate. No universal form engine; schema-informed fields only for straightforward inputs, custom components for complex workflows. See [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md).
+- **Decision (implemented in Phase 2):** operation descriptors are defined once in `packages/mcp-core/src/operation-descriptors.ts` (stable operation name, operation type `tool|resource|prompt` derived from the owning group, display title for resources/prompts, description) and consumed by all three registration functions. They are exposed to the WebUI through the validated read-only `GET /api/mcp/operations` endpoint. The Activity panel uses a native grouped **Operation name** selector; operation-type filtering is deferred. MCP `tools/list`/resource/prompt listing, `server/discover`, and WebUI REST metadata discovery remain separate. No universal form engine. See [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12.
 
 ### E. Catalog and instrument discovery
-- **Current:** `GET /api/catalog/search` (`apps/api/src/catalog-routes.ts:25–55`) supports only `text`, `limit` (1–100), `cursor`; response `{ instruments, nextCursor }`. Repository `searchInstruments` (`packages/database/src/repositories/catalog.ts:237–255`) matches symbol/displayName/identityKey with keyset pagination — **no exchange/category/segment/underlying predicates**. `canonicalInstrumentSchema` (`market.ts:113–136`) carries those fields. WebUI panels still use manual IDs (`SubscriptionPanel.tsx:84–91`, `HistoricalPanel.tsx:181`, `SnapshotPanel.tsx:105`).
+- **Current:** `GET /api/catalog/search` (`apps/api/src/catalog-routes.ts:25–55`) supports only `text`, `limit` (1–100), `cursor`; response `{ instruments, nextCursor }`. Repository `searchInstruments` (`packages/database/src/repositories/catalog.ts:237–255`) matches symbol/displayName/identityKey with keyset pagination — **no exchange/category/segment/underlying predicates**. `canonicalInstrumentSchema` (`market.ts:113–136`) carries those fields. WebUI panels now use the reusable `InstrumentPicker` backed by this endpoint (Phase 3 WP 3b–3c); no manual canonical-ID entry remains in those controls.
 - **Decision:** reusable searchable selector backed by the existing bounded API. Context-aware filters (exchange/category/segment/underlying/product scope/lifecycle) require a repository/API extension first — they are **not** available today; do not add filters for appearance. Never load the full catalogue into the browser.
 
 ### F. Derivative expiry and contract discovery

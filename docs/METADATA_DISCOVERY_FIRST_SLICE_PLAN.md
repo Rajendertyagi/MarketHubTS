@@ -1,26 +1,28 @@
 # First Slice — Backend-Driven WebUI Options (Implementation Plan)
 
-> **Status:** Bounded implementation plan. **Documentation only — no application, test, contract, manifest or API change is made by this document.** Implementation requires separate authorization.
+> **Status:** Bounded implementation plan — **all three increments implemented, tested and published on `develop`** (increment 3 = Phase 1 + interval selector; increment 2 = Phase 3 WP 3b–3c instrument picker; increment 1 = Phase 2 WP 2a–2c operation selector). This document is now a historical implementation record as well as the original plan. It did not itself authorize implementation; that required separate authorization.
 > **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment). This plan is the **bounded first milestone** of the cross-cutting initiative in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (Phases 1–3); later phases cover provider identity centralization, SSE events, derivative expiry discovery, capability extensibility and configuration correctness.
 > **Last updated:** 2026-11-22 (operation scope reconciled to all 19 MCP operations; sequence aligned with roadmap; first milestone narrowed to the interval selector).
 
 ## 0. Scope and non-goals
 
-Three increments only: (1) MCP Activity **operation** selector covering all activity-producing operations (tools, resources and prompts), (2) reusable instrument search selector adopted by Subscription/Historical/Snapshot panels, (3) historical interval selector derived from the shared contract. The **first implementation milestone is increment 3 only**; increments 2 and 1 follow after their prerequisites are resolved.
+Three increments only: (1) MCP Activity **operation** selector covering all activity-producing operations (tools, resources and prompts), (2) reusable instrument search selector adopted by Subscription/Historical/Snapshot panels, (3) historical interval selector derived from the shared contract. All three are now **implemented and published on `develop`**; the implementation order was increment 3 → increment 2 → increment 1.
 
 **Out of scope:** provider-registry redesign, expiry/derivative discovery, indicators, alerts, scanners, a universal JSON Schema form renderer, any new dependency, migration or runtime config change. These are later work. No M6-C/M6-D/E/B4 change; no physical LAN testing.
 
 ## 1. Verified technical findings (source evidence)
 
+> These are the **baseline findings at plan-writing time** that motivated the increments. Several gaps listed here have since been closed by the completed implementation; the resolution is noted where applicable.
+
 ### 1.1 MCP operation descriptors — no public SDK accessor
 - `packages/mcp-core/src/factory.ts:13–44` builds a fresh `McpServer` per request and calls `registerTools()` / `registerResources()` / `registerPrompts()`.
-- Registrations are inline and return `void`: nine tools (`tools.ts:49+`), seven resource registrations / six logical resources (`resources.ts:75+`), three prompts (`prompts.ts:18+`). There is **no exported descriptor array**.
+- At baseline, registrations were inline and returned `void`: nine tools (`tools.ts:49+`), seven resource registrations / six logical resources (`resources.ts:75+`), three prompts (`prompts.ts:18+`), with **no exported descriptor array**. Phase 2 WP 2a since added `mcp-core/src/operation-descriptors.ts`, consumed by all three registration functions.
 - All **19 operations** produce activity through the shared `withActivity()` mechanism using the same `toolName` field (`tools.ts:33–42`, `resources.ts:57–67`, `prompts.ts:7–16` → `activity.ts:168–227`). Activity contracts and filters expose `toolName` only (`mcp-activity.ts:94,143,169`); there is **no persisted `operationType` field or operation-type API filter**.
 - Installed SDK `2.4.0`: `McpServer._registeredTools` is **private** (`mcp-BCJHyo7l.d.mts:3254`); the only descriptor-adjacent public method is `toolInputSchemaJson(name)`, marked `@internal` (`:3266`). **Relying on SDK internals is rejected.**
 - SDK `ToolSchema` (`@modelcontextprotocol/core` schemas, L734–747) exposes `name`, `title`, `description`, `inputSchema`, `annotations`, `outputSchema`, `_meta`. There is **no `category` field** — category is optional MarketHub-owned display metadata, not SDK-supplied. Browser-facing input JSON Schema is **not promised**: a supported derivation path without SDK internals has not been identified.
-- Descriptors are currently observable only via MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`; e.g. `tests/mcp/tools.test.ts:54–74`). These are protocol surfaces, not a WebUI metadata contract.
+- At baseline, descriptors were observable only via MCP protocol list methods (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`; e.g. `tests/mcp/tools.test.ts:54–74`) — protocol surfaces, not a WebUI metadata contract. Phase 2 WP 2b added the read-only `GET /api/mcp/operations` endpoint with a strict shared contract.
 
-**Conclusion:** the only non-duplicating route is to **extract operation descriptors into one shared module** in `packages/mcp-core` that all three registration functions iterate and that a WebUI-facing read surface can also consume. Whether that read surface must be an HTTP endpoint is an open question (§2.1). Do **not** create a second unrelated operation-name list.
+**Conclusion:** the only non-duplicating route is to **extract operation descriptors into one shared module** in `packages/mcp-core` that all three registration functions consume and that a WebUI-facing read surface can also consume. The §2.1 question was resolved in favor of a dedicated read-only `GET /api/mcp/operations` endpoint (implemented in Phase 2). Do **not** create a second unrelated operation-name list.
 
 ### 1.2 Catalog search already exists
 - `apps/api/src/catalog-routes.ts:25–55`: `GET /api/catalog/search` with `text` (required, non-empty), `limit` (1–100, default 25), `cursor`; response `{ instruments, nextCursor }`; read-only, no `isLocalPeer` guard.
@@ -37,7 +39,7 @@ Three increments only: (1) MCP Activity **operation** selector covering all acti
 - `ActivityPanel.tsx` separates a pure `ActivityPanelView` (`:97`) from a data-loading container; tests call the view directly with `renderToStaticMarkup` (`tests/web/activity-panel.test.tsx:27–31`). Tool-name filter is a free-text input at `ActivityPanel.tsx:132`; transport/status options hardcoded at `:133–140`.
 - Activity contracts: `packages/contracts/src/mcp-activity.ts:6,10` (`mcpActivityStatusSchema`, `mcpActivityTransportSchema`); routes `apps/api/src/mcp-activity-routes.ts` expose list/by-operation endpoints only.
 
-## 2. Increment 1 — MCP Activity operation selector
+## 2. Increment 1 — MCP Activity operation selector — IMPLEMENTED (Phase 2 WP 2a–2c)
 
 **Verified behavior / files:** §1.1, §1.4. All 19 operations (tools, resources, prompts) produce activity under `toolName`; the Activity filter is free text.
 
@@ -59,12 +61,12 @@ Three increments only: (1) MCP Activity **operation** selector covering all acti
 
 **Acceptance criteria:** a newly registered operation (tool, resource or prompt) appears in the selector without a frontend options-list edit; descriptors match actual MCP registrations; existing Activity filtering/pagination/detail tests remain green.
 
-**Risks / unresolved:** (a) whether an HTTP endpoint is necessary vs. a shared module import into the API (§2.1); (b) descriptor response must not expose internal schemas or config; (c) `category` is optional MarketHub-owned metadata, not an SDK field; (d) operation-type filtering requires API/data design beyond the `toolName` contract and is not part of this increment.
+**Risks / resolution:** (a) resolved — a dedicated read-only endpoint was implemented (§2.1); (b) enforced — the response exposes only `name`/`type`/`title?`/`description` via a strict contract; (c) `category` remains deferred (not an SDK field); (d) operation-type filtering remains deferred — it needs API/data design beyond the `toolName` contract.
 
-### 2.1 Technical question to resolve first
-Validate whether the WebUI can receive descriptors without a new endpoint. Options: (i) a small read-only Hono route returning the shared descriptor array (recommended if the WebUI needs runtime data); (ii) a shared module imported by the API and embedded in an existing safe response. Do not use `McpServer` private fields or `@internal` methods. Record the decision with evidence before implementing.
+### 2.1 Technical question — RESOLVED
+The WebUI cannot import server-side `mcp-core` (MCP SDK bound), so option (i) was selected: a small read-only Hono route `GET /api/mcp/operations` returning the shared descriptor array, validated by a strict shared contract. Implemented in Phase 2 WP 2b. No `McpServer` private fields or `@internal` methods were used.
 
-## 3. Increment 2 — Reusable instrument search selector
+## 3. Increment 2 — Reusable instrument search selector — IMPLEMENTED (Phase 3 WP 3b–3c)
 
 **Verified behavior / files:** §1.2. `GET /api/catalog/search` is bounded/paginated; three panels use manual IDs.
 
@@ -82,7 +84,7 @@ Validate whether the WebUI can receive descriptors without a new endpoint. Optio
 
 **Risks / unresolved:** debounce/cancellation behavior in a no-DOM test environment (use pure helpers + `renderToStaticMarkup` as existing tests do); whether "load more" is needed for the first slice or a single bounded page suffices.
 
-## 4. Increment 3 — Historical interval selector from shared contract
+## 4. Increment 3 — Historical interval selector from shared contract — IMPLEMENTED (Phase 1 + Phase 3 WP 3a)
 
 **Verified behavior / files:** §1.3.
 
@@ -98,7 +100,7 @@ Validate whether the WebUI can receive descriptors without a new endpoint. Optio
 
 ## 5. Cross-cutting acceptance and sequencing
 
-- Sequence (matches [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1): **first implementation milestone = increment 3** (shared-contract centralization + historical interval selector, lowest risk, proves direct contract consumption); then increment 2 (reusable instrument picker using the existing catalog API); then increment 1 (MCP operation selector, after the §2.1 descriptor-delivery decision). Increment 1's technical validation may run in parallel, but its implementation follows the other two.
+- Sequence (matches [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1), all completed: **increment 3** (shared-contract centralization + historical interval selector, lowest risk, proved direct contract consumption) → **increment 2** (reusable instrument picker using the existing catalog API) → **increment 1** (MCP operation selector, after the §2.1 descriptor-delivery decision). All three are implemented and published on `develop`.
 - Every increment must include the Option and Metadata Impact Assessment (PROJECT_MANAGER_PROTOCOL.md §4.1) in its assignment.
 - Validation for each: focused tests, `bun run typecheck`, `bun run build`, `bun test`, `git diff --check`, independent diff review.
 - No milestone declared complete by this plan; no M6 scope change.
