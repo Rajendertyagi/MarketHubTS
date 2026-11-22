@@ -79,6 +79,8 @@ Start here: [`AGENTS.md`](AGENTS.md) and [`docs/PROJECT_OVERVIEW.md`](docs/PROJE
 | Architecture & decisions | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md) |
 | Metadata & capability discovery (authoritative) | [`docs/METADATA_AND_CAPABILITY_DISCOVERY.md`](docs/METADATA_AND_CAPABILITY_DISCOVERY.md) |
 | First implementation slice plan | [`docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md`](docs/METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) |
+| Detailed phase-wise implementation plan | [`docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md`](docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md) |
+| Phase 1 implementation assignment | [`docs/METADATA_DISCOVERY_PHASE_1_PLAN.md`](docs/METADATA_DISCOVERY_PHASE_1_PLAN.md) |
 | Catalog & market data | [`docs/MARKET_DATA_AND_CATALOG.md`](docs/MARKET_DATA_AND_CATALOG.md) |
 | Providers (Upstox/FYERS) | [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md) |
 | MCP interface | [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) |
