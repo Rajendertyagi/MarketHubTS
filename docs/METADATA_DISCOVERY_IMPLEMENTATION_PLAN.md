@@ -218,7 +218,7 @@ An audit was performed against the governing documents and actual source. Result
 | All 19 operations covered | **Pass** — 9 tools + 7 resource registrations + 3 prompts verified against `tools.ts`, `resources.ts`, `prompts.ts` |
 | `toolName` compatibility preserved | **Pass** — WP 2c keeps storage/filter contract; no migration; type filtering deferred |
 | Category / input-schema treatment | **Pass** — WP 0d/2a treat category as optional MarketHub metadata; input JSON Schema separate and unproven |
-| Endpoint decision open | **Pass** — WP 0e/2b; no endpoint prerequisite for shared enums |
+| Endpoint decision resolved | **Pass** — WP 0e/2b selected a dedicated read-only `GET /api/mcp/operations` endpoint for registered MCP descriptors (implemented in Phase 2); shared contract enum values continue to be imported directly from `@markethub/contracts`, not fetched over HTTP |
 | Ownership model unchanged | **Pass** — five categories preserved; no universal registry/DB/microservice/form framework |
 | Provider identity fixed | **Pass** — WP 5a keeps UPSTOX/FYERS until contract/registry extended |
 | Catalog search bounded | **Pass** — WP 3b uses existing bounded API; no full-catalogue download |

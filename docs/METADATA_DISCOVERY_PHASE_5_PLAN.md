@@ -451,6 +451,6 @@ No official provider API behavior or account entitlement is changed or newly ass
 
 This document is a proposed plan, not an implementation assignment and not permission to modify application code.
 
-Once the documentation close-out is complete and the product owner authorizes Phase 5 implementation, split the work into the four bounded assignments in §4 (5A, 5B, 5C.1, 5C.2). Use the latest `develop` state and repeat the repository/protocol checks before assigning WP 5A.
+The Phase 2 documentation close-out is complete (`5dcfb6d`) and this plan is published on `develop` (`41924ce`). When the product owner authorizes Phase 5 implementation, split the work into the four bounded assignments in §4 (5A, 5B, 5C.1, 5C.2). Use the latest `develop` state and repeat the repository/protocol checks before assigning WP 5A.
 
-**Recommended sequence:** close the in-flight Phase 2 documentation updates → review this Phase 5 plan against the updated roadmap → authorize WP 5A → independently audit → authorize WP 5B → independently audit → authorize WP 5C.1 → independently audit → authorize WP 5C.2 → independently audit → run cross-system acceptance in Phase 7 when its other prerequisites are complete.
+**Recommended sequence:** Phase 2 documentation close-out is complete (committed in `5dcfb6d`) and this Phase 5 plan is published on `develop` (`41924ce`) → authorize WP 5A → independently audit → authorize WP 5B → independently audit → authorize WP 5C.1 → independently audit → authorize WP 5C.2 → independently audit → run cross-system acceptance in Phase 7 when its other prerequisites are complete. Each work package is separately authorized and audited; do not authorize all of Phase 5 as one implementation task.
