@@ -215,7 +215,7 @@ export function InstrumentPickerView({
       {state.error && (
         <div className="flex items-center gap-2" role="alert">
           <span className="text-xs text-amber-300">{state.error}</span>
-          <button type="button" className={button} onClick={actions.onRetry}>Retry</button>
+          <button type="button" className={button} onClick={actions.onRetry} disabled={disabled}>Retry</button>
         </div>
       )}
       {!state.loading && !state.error && state.text.trim() && state.results.length === 0 && (
@@ -229,8 +229,9 @@ export function InstrumentPickerView({
               id={optionId(index)}
               role="option"
               aria-selected={instrument.canonicalId === value}
-              className={`cursor-pointer px-2 py-1 text-xs ${index === state.activeIndex ? "bg-slate-800 text-slate-100" : "text-slate-300"}`}
-              onClick={() => actions.onSelect(instrument)}
+              aria-disabled={disabled}
+              className={`px-2 py-1 text-xs ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} ${index === state.activeIndex ? "bg-slate-800 text-slate-100" : "text-slate-300"}`}
+              onClick={() => { if (!disabled) actions.onSelect(instrument); }}
             >
               {formatInstrumentLabel(instrument)}
             </li>
@@ -238,7 +239,7 @@ export function InstrumentPickerView({
         </ul>
       )}
       {state.nextCursor && !state.loadingMore && state.results.length < PICKER_MAX_RESULTS && (
-        <button type="button" className={button} onClick={actions.onLoadMore}>Load more</button>
+        <button type="button" className={button} onClick={actions.onLoadMore} disabled={disabled}>Load more</button>
       )}
       {state.loadingMore && <p className="text-xs text-slate-400" role="status">Loading more…</p>}
     </div>
@@ -275,12 +276,16 @@ export function InstrumentPicker({ value, onChange, label, placeholder, disabled
     forceRender((n) => n + 1);
   };
 
+  // Guard every interaction when disabled, not just the search input: panels
+  // disable the picker while a save/load is in flight, and no option, retry or
+  // pagination action may mutate selection state during that window.
   const actions: PickerActions = {
-    onText: (text) => controllerRef.current?.onText(text),
-    onSelect: (instrument) => { controllerRef.current?.select(instrument); restoreFocus(); },
-    onLoadMore: () => controllerRef.current?.onLoadMore(),
-    onRetry: () => controllerRef.current?.onRetry(),
+    onText: (text) => { if (!disabled) controllerRef.current?.onText(text); },
+    onSelect: (instrument) => { if (disabled) return; controllerRef.current?.select(instrument); restoreFocus(); },
+    onLoadMore: () => { if (!disabled) controllerRef.current?.onLoadMore(); },
+    onRetry: () => { if (!disabled) controllerRef.current?.onRetry(); },
     onKeyDown: (event) => {
+      if (disabled) return;
       const result = controllerRef.current?.onKey(event.key);
       if (result) { event.preventDefault(); if (result === "select") restoreFocus(); }
     }

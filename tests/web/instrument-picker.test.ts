@@ -24,9 +24,9 @@ const noopActions: PickerActions = {
   onText: () => {}, onSelect: () => {}, onLoadMore: () => {}, onRetry: () => {}, onKeyDown: () => {}
 };
 
-function render(state: PickerState, value = "", cached: { canonicalId: string; label: string } | null = null): string {
+function render(state: PickerState, value = "", cached: { canonicalId: string; label: string } | null = null, disabled?: boolean): string {
   return renderToStaticMarkup(createElement(InstrumentPickerView, {
-    state, value, cached, label: "Instrument", placeholder: undefined, disabled: undefined, actions: noopActions
+    state, value, cached, label: "Instrument", placeholder: undefined, disabled, actions: noopActions
   }) as never);
 }
 
@@ -267,6 +267,31 @@ describe("InstrumentPicker view", () => {
     expect(render(withCursor)).toContain("Load more");
     const atCap = { ...withCursor, results: Array.from({ length: PICKER_MAX_RESULTS }, (_, i) => instrument(`id-${i}`, `S${i}`, `S ${i}`)) };
     expect(render(atCap)).not.toContain("Load more");
+  });
+
+  test("loading state shows Searching…", () => {
+    const html = render({ ...initialPickerState(), text: "x", loading: true });
+    expect(html).toContain("Searching…");
+    expect(html).not.toContain("No matching instruments in the catalog.");
+  });
+
+  test("pending Load More shows Loading more… and hides the button", () => {
+    const html = render({ ...initialPickerState(), text: "x", results: [A], nextCursor: "c", loadingMore: true });
+    expect(html).toContain("Loading more…");
+    expect(html).not.toContain("Load more");
+  });
+
+  test("disabled state disables input, options, Retry and Load more", () => {
+    const state = { ...initialPickerState(), text: "x", results: [A], nextCursor: "c", error: "boom" };
+    const html = render(state, "", null, true);
+    // Search input
+    expect(html).toMatch(/<input[^>]*disabled=""/);
+    // Result option
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain("cursor-not-allowed");
+    // Retry and Load more buttons
+    const disabledButtons = (html.match(/<button[^>]*disabled=""/g) || []).length;
+    expect(disabledButtons).toBe(2);
   });
 
   test("error state shows retry", () => {

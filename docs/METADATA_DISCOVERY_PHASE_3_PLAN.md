@@ -1,7 +1,7 @@
 # MarketHubTS — Phase 3 WP 3b–3c: Reusable Instrument Search Picker
 
-**Plan status:** Source study and implementation plan only. No repository files changed by this plan.
-**Repository baseline inspected:** `Rajendertyagi/MarketHubTS`, branch `develop`, commit `671575590f31a91f0dfde9aeb5101aa50e04155d` (Phase 1 implementation and close-out corrections pushed). Source baseline at this commit; this plan document is finalized in the working tree. Source facts were re-verified against this checkout; line numbers may move during implementation, so verify names/usages before editing.
+**Plan status:** IMPLEMENTED, TESTED AND PUBLISHED on `develop` (see §12 close-out). This document is now a historical implementation record as well as the original plan.
+**Repository baseline inspected:** `Rajendertyagi/MarketHubTS`, branch `develop`, commit `671575590f31a91f0dfde9aeb5101aa50e04155d` (Phase 1 implementation and close-out corrections pushed). Source baseline at this commit; source facts were re-verified against this checkout; line numbers may move during implementation, so verify names/usages before editing.
 
 **Governing documents:**
 - [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) — AD-025, especially §§5–8 and §10.E.
@@ -17,7 +17,7 @@
 The repository's canonical implementation order is:
 
 1. Phase 1 shared-contract consistency + Phase 3 WP 3a historical interval selector — completed and pushed.
-2. **Phase 3 WP 3b–3c — reusable instrument picker using the existing `GET /api/catalog/search`** — next.
+2. **Phase 3 WP 3b–3c — reusable instrument picker using the existing `GET /api/catalog/search`** — implemented, tested and published on `develop` (see §12).
 3. Phase 2 MCP Activity Operation selector — later, after the descriptor-delivery decision.
 4. Later phases only when their prerequisites are satisfied.
 
@@ -425,4 +425,25 @@ Report:
 8. Full diff summary, `git diff --check`, and confirmation unrelated changes/untracked files were preserved.
 9. Incomplete or unverified acceptance criteria.
 
-This plan is **not** authorization to implement, commit or push. Implementation and testing require separate authorization. Commit/push requires a further explicit authorization after independent review.
+This plan was **not** authorization to implement, commit or push; those required separate authorization, which was given. The resulting implementation, verification and publication are recorded in §12.
+
+---
+
+## 12. Implementation close-out (WP 3b–3c)
+
+**Status:** Implemented, tested and published on `develop`. Not merged into `main`.
+
+**Commits on `develop` (baseline `6715755`):**
+- `c14d789` — reusable instrument picker + typed catalog client adopted by the three panels.
+- `f4f85ad` — correctness fixes from the independent audit: cap hardening on merged load-more pages, faithful route-test fake.
+- Fix-forward commit for the disabled-state guard, missing test assertions and this documentation close-out (see working tree / subsequent commit).
+
+**Files:** exactly the §4 scope — new `apps/web/src/lib/catalog.ts`, `apps/web/src/components/InstrumentPicker.tsx`, `tests/web/catalog.test.ts`, `tests/web/instrument-picker.test.ts`, `tests/market/catalog-routes.test.ts`; modified three panels and three panel test files. No API route, repository, database, migration, contract, dependency or M6 changes. Untracked `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` preserved.
+
+**Verification (local evidence):**
+- `bun run typecheck`, `bun run build`, `git diff --check` — clean.
+- Full suite `bun test` — 817 pass / 0 fail (before the fix-forward); focused suites re-run after the fix-forward.
+- Independent audits: full audit and a dedicated correctness audit on `opencode/iceman-free`, both ending **KEEP** after all findings were fixed and re-audited.
+- Real-browser smoke test (seeded temp DB, local dev server): verified debounced search, 25 readable results, no auto-selection, mouse selection, keyboard ArrowDown/Enter selection, Escape preserving value, unique `useId` ARIA ids, Load More availability, and both History-tab pickers mounted. Load More click, in-browser abort of a slow request and the two pickers' distinct ARIA ids were **not** browser-verified because the browser tool lost keyboard focus; those behaviors remain covered by automated tests only.
+
+**Deferred / separate:** the inherited catalog-response concern (full `CanonicalInstrument` schema permits arbitrary `sourceMeta`/`supplementalMeta` in the API response) predates WP 3b–3c and is tracked as separate security hardening before catalog data is populated; it is deliberately out of scope here.

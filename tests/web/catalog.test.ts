@@ -69,11 +69,29 @@ describe("catalog client", () => {
     await expect(searchInstruments({ text: "x" })).rejects.toThrow();
   });
 
-  test("AbortError propagates unchanged", async () => {
-    globalThis.fetch = (async () => {
-      throw new DOMException("aborted", "AbortError");
+  test("malformed instrument rows are rejected", async () => {
+    fakeFetch(() => ({ status: 200, body: { instruments: [{ canonicalId: 123 }], nextCursor: null } }));
+    await expect(searchInstruments({ text: "x" })).rejects.toThrow();
+  });
+
+  test("invalid nextCursor values are rejected", async () => {
+    for (const nextCursor of [123, "", {}, true]) {
+      fakeFetch(() => ({ status: 200, body: { instruments: [], nextCursor } }));
+      await expect(searchInstruments({ text: "x" })).rejects.toThrow();
+    }
+  });
+
+  test("AbortSignal reaches fetch and AbortError propagates unchanged", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      receivedSignal = init?.signal ?? undefined;
+      if (receivedSignal?.aborted) throw new DOMException("aborted", "AbortError");
+      return new Response(JSON.stringify({ instruments: [], nextCursor: null }), { status: 200 });
     }) as typeof fetch;
-    await expect(searchInstruments({ text: "x", signal: new AbortController().signal }))
+    controller.abort();
+    await expect(searchInstruments({ text: "x", signal: controller.signal }))
       .rejects.toMatchObject({ name: "AbortError" });
+    expect(receivedSignal).toBe(controller.signal);
   });
 });
