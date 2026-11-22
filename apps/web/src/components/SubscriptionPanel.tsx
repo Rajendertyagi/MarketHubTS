@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SubscriptionSelection } from "@markethub/contracts";
 import {
-  fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError, type SubscriptionErrorKind
+  fetchSubscriptions, getWriteGeneration, isWritePending, replaceSubscriptions,
+  SubscriptionHttpError, type SubscriptionErrorKind
 } from "../lib/subscriptions";
+import { createSubscriptionPoller, type SubscriptionPoller } from "../lib/subscription-poller";
+import { createRetrySleep } from "../lib/retry-sleep";
 import { useLiveStore, type SubscriptionErrorState } from "../store/live-store";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
@@ -23,6 +26,23 @@ function errorState(error: unknown): SubscriptionErrorState {
   return { kind: "internal", message: error instanceof Error ? error.message : "Unexpected error" };
 }
 
+/** Distinct from post-commit write/runtime errors: the last good view is kept. */
+export function RefreshErrorNotice({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="mt-3 rounded-lg border border-sky-800/60 bg-sky-950/20 p-3 text-xs text-sky-100" role="status" data-testid="refresh-error">
+      <span>Refresh unavailable — showing last known state</span>
+      <span className="ml-2 text-sky-200/80">{message}</span>
+      <button
+        type="button"
+        className="ml-3 rounded-md border border-sky-700 bg-sky-900/40 px-2 py-1 font-medium hover:bg-sky-900/70"
+        onClick={onRetry}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export function SubscriptionPanel() {
   const view = useLiveStore((s) => s.subscriptions);
   const setSubscriptions = useLiveStore((s) => s.setSubscriptions);
@@ -30,7 +50,11 @@ export function SubscriptionPanel() {
   const setError = useLiveStore((s) => s.setSubscriptionError);
   const [draftId, setDraftId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const pollerRef = useRef<SubscriptionPoller | null>(null);
 
+  // First load only. The bounded refresh below is a separate concern and
+  // reports into `refreshError`, never into the write/runtime `subscriptionError`.
   useEffect(() => {
     let active = true;
     void fetchSubscriptions()
@@ -38,6 +62,23 @@ export function SubscriptionPanel() {
       .catch((cause) => { if (active) setError(errorState(cause)); });
     return () => { active = false; };
   }, [setSubscriptions, setError]);
+
+  useEffect(() => {
+    const poller = createSubscriptionPoller({
+      fetchView: fetchSubscriptions,
+      getWriteGeneration,
+      isWritePending,
+      applyView: setSubscriptions,
+      onRefreshError: setRefreshError,
+      sleep: createRetrySleep()
+    });
+    pollerRef.current = poller;
+    poller.start();
+    return () => {
+      poller.dispose();
+      if (pollerRef.current === poller) pollerRef.current = null;
+    };
+  }, [setSubscriptions]);
 
   const selections: SubscriptionSelection[] = view?.selections ?? [];
 
@@ -51,6 +92,9 @@ export function SubscriptionPanel() {
   const commit = async (next: SubscriptionSelection[]) => {
     setBusy(true);
     setError(null);
+    // Suspend before the PUT so no poll can start or apply while the write is
+    // in flight. The PUT-returned view stays authoritative.
+    pollerRef.current?.suspend();
     try {
       const result = await replaceSubscriptions(next);
       if (result.view) setSubscriptions(result.view);
@@ -60,6 +104,8 @@ export function SubscriptionPanel() {
     } catch (cause) {
       setError(errorState(cause));
     } finally {
+      // Always resume, including on failure, so the panel never gets stuck.
+      pollerRef.current?.resume();
       setBusy(false);
     }
   };
@@ -106,6 +152,10 @@ export function SubscriptionPanel() {
         <p className="mt-3 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-100" role="alert">
           {error.message}
         </p>
+      )}
+
+      {refreshError && (
+        <RefreshErrorNotice message={refreshError} onRetry={() => pollerRef.current?.resume()} />
       )}
 
       {view && (

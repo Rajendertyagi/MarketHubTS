@@ -2,11 +2,12 @@ import { createElement } from "../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import { subscriptionStateViewSchema, type SubscriptionStateView } from "../../packages/contracts/src/index";
-import { SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
+import { RefreshErrorNotice, SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
 import { useLiveStore } from "../../apps/web/src/store/live-store";
 import {
   fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError
 } from "../../apps/web/src/lib/subscriptions";
+import { createSubscriptionPoller, isAbortError } from "../../apps/web/src/lib/subscription-poller";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -258,5 +259,358 @@ describe("subscription runtime presentation", () => {
     const empty = renderPanelWith(emptyView);
     expect(empty).toContain("No runtime capability report");
     expect(empty).not.toContain("SUPPORTED");
+  });
+});
+
+// --- Bounded refresh controller (framework-free, no DOM) -------------------
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+/** Sleep that only advances when the test says so, or when aborted. */
+function makeControlledSleep() {
+  const waiters: Array<{ done: () => void; settled: boolean }> = [];
+  const intervals: number[] = [];
+  const sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
+    intervals.push(ms);
+    return new Promise<void>((resolve) => {
+      const entry = { settled: false, done: () => {} };
+      entry.done = () => {
+        if (entry.settled) return;
+        entry.settled = true;
+        signal?.removeEventListener("abort", entry.done);
+        resolve();
+      };
+      waiters.push(entry);
+      signal?.addEventListener("abort", entry.done, { once: true });
+    });
+  };
+  return {
+    sleep,
+    intervals,
+    advance: () => {
+      while (waiters.length > 0) {
+        const entry = waiters.shift()!;
+        if (!entry.settled) { entry.done(); return; }
+      }
+    },
+    pending: () => waiters.filter((w) => !w.settled).length
+  };
+}
+
+function abortError(): Error {
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function rejectingFetchOnAbort(signal?: AbortSignal): Promise<SubscriptionStateView> {
+  return new Promise<SubscriptionStateView>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(abortError()), { once: true });
+  });
+}
+
+describe("subscription poller", () => {
+  test("MANDATORY RACE: a stale GET resolving after a successful PUT does not overwrite the PUT view", async () => {
+    const applied: SubscriptionStateView[] = [];
+    let writeGen = 0;
+    let writePending = false;
+    const staleGet = deferred<SubscriptionStateView>();
+    const clock = makeControlledSleep();
+
+    const poller = createSubscriptionPoller({
+      // Ignores the signal on purpose: this models a response that parses
+      // before the abort is observed, so only the generation guard can save us.
+      fetchView: () => staleGet.promise,
+      getWriteGeneration: () => writeGen,
+      isWritePending: () => writePending,
+      applyView: (next) => applied.push(next),
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance(); // first sleep -> loadOnce starts, GET in flight
+    await Bun.sleep(0);
+    expect(applied).toHaveLength(0);
+
+    // A write starts and completes; the component applies the PUT view.
+    writeGen++;
+    writePending = true;
+    const putView = view(2);
+    applied.push(putView); // authoritative PUT result applied by the component
+    writePending = false;
+
+    // The older GET now resolves with stale generation-1 data.
+    staleGet.resolve(view(1));
+    await Bun.sleep(0);
+
+    expect(applied).toEqual([putView]);
+    expect(applied[0]?.generation).toBe(2);
+    poller.dispose();
+  });
+
+  test("does not start a second load while the first is in flight", async () => {
+    const clock = makeControlledSleep();
+    let calls = 0;
+    const gets: Array<ReturnType<typeof deferred<SubscriptionStateView>>> = [];
+    const poller = createSubscriptionPoller({
+      fetchView: () => {
+        calls++;
+        const d = deferred<SubscriptionStateView>();
+        gets.push(d);
+        return d.promise;
+      },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+
+    clock.advance(); // loop iterates while GET #1 is still pending
+    await Bun.sleep(0);
+    expect(calls).toBe(1); // single-flight
+
+    gets[0]!.resolve(view(1));
+    await Bun.sleep(0);
+
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(2);
+    poller.dispose();
+  });
+
+  test("suspend aborts the in-flight fetch and stops scheduling; resume restarts", async () => {
+    const clock = makeControlledSleep();
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+    const poller = createSubscriptionPoller({
+      fetchView: (signal) => {
+        calls++;
+        signals.push(signal!);
+        return rejectingFetchOnAbort(signal);
+      },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+    expect(signals[0]!.aborted).toBe(false);
+
+    poller.suspend();
+    expect(signals[0]!.aborted).toBe(true);
+    await Bun.sleep(0);
+
+    clock.advance(); // suspended: must not start a new fetch
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+
+    poller.resume();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(2);
+    poller.dispose();
+  });
+
+  test("dispose aborts in-flight work and stops scheduling", async () => {
+    const clock = makeControlledSleep();
+    let calls = 0;
+    let captured: AbortSignal | null = null;
+    const poller = createSubscriptionPoller({
+      fetchView: (signal) => {
+        calls++;
+        captured = signal!;
+        return rejectingFetchOnAbort(signal);
+      },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+
+    poller.dispose();
+    expect(captured!.aborted).toBe(true);
+    await Bun.sleep(0);
+
+    const intervalsBefore = clock.intervals.length;
+    clock.advance();
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+    expect(clock.intervals.length).toBe(intervalsBefore); // no new sleep scheduled
+    poller.dispose(); // idempotent
+  });
+
+  test("forwards the same AbortSignal object to fetchView", async () => {
+    const clock = makeControlledSleep();
+    let captured: AbortSignal | undefined;
+    const poller = createSubscriptionPoller({
+      fetchView: (signal) => { captured = signal; return new Promise(() => {}); },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(captured).toBeInstanceOf(AbortSignal);
+    const same = captured;
+    poller.suspend();
+    expect(same!.aborted).toBe(true);
+    poller.dispose();
+  });
+
+  test("refresh failure reports an error, keeps last-known-good, and a later success clears it", async () => {
+    const clock = makeControlledSleep();
+    const applied: SubscriptionStateView[] = [];
+    const errors: Array<string | null> = [];
+    let shouldFail = true;
+    const poller = createSubscriptionPoller({
+      fetchView: async () => {
+        if (shouldFail) throw new Error("network down");
+        return view(3);
+      },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: (next) => applied.push(next),
+      onRefreshError: (message) => errors.push(message),
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(errors).toEqual(["network down"]);
+    expect(applied).toHaveLength(0); // never cleared / never applied a null
+
+    shouldFail = false;
+    clock.advance();
+    await Bun.sleep(0);
+    expect(errors).toEqual(["network down", null]);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]?.generation).toBe(3);
+    poller.dispose();
+  });
+
+  test("results from a superseded generation are discarded", async () => {
+    const clock = makeControlledSleep();
+    const applied: SubscriptionStateView[] = [];
+    const stale = deferred<SubscriptionStateView>();
+    const poller = createSubscriptionPoller({
+      fetchView: () => stale.promise, // ignores abort
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: (next) => applied.push(next),
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+
+    poller.resume(); // bumps generation; old fetch still pending
+    stale.resolve(view(9));
+    await Bun.sleep(0);
+    expect(applied).toHaveLength(0);
+    poller.dispose();
+  });
+
+  test("uses a bounded default interval of 10000ms and honours an override", async () => {
+    const clock = makeControlledSleep();
+    const poller = createSubscriptionPoller({
+      fetchView: () => new Promise(() => {}),
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+    poller.start();
+    expect(clock.intervals[0]).toBe(10000);
+    poller.dispose();
+
+    const custom = makeControlledSleep();
+    const poller2 = createSubscriptionPoller({
+      fetchView: () => new Promise(() => {}),
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: () => {},
+      onRefreshError: () => {},
+      intervalMs: 2500,
+      sleep: custom.sleep
+    });
+    poller2.start();
+    expect(custom.intervals[0]).toBe(2500);
+    poller2.dispose();
+  });
+
+  test("isAbortError recognises only Error objects named AbortError", () => {
+    expect(isAbortError(abortError())).toBe(true);
+    expect(isAbortError(new Error("other"))).toBe(false);
+    expect(isAbortError({ name: "AbortError" })).toBe(false);
+  });
+});
+
+describe("subscription refresh error presentation", () => {
+  test("GET forwards the same AbortSignal object to fetch and propagates AbortError", async () => {
+    const controller = new AbortController();
+    let captured: AbortSignal | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured = init?.signal ?? undefined;
+      throw abortError();
+    }) as typeof fetch;
+    await expect(fetchSubscriptions(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(captured).toBe(controller.signal);
+  });
+
+  test("refresh error notice renders separately from the write/runtime error", () => {
+    const html = renderToStaticMarkup(
+      createElement(RefreshErrorNotice, { message: "network down", onRetry: () => {} }) as never
+    );
+    expect(html).toContain("Refresh unavailable — showing last known state");
+    expect(html).toContain("network down");
+    expect(html).toContain("Retry");
+    expect(html).not.toContain("Desired state saved");
+    expect(html).not.toContain("Persistence failure");
+  });
+
+  test("panel write/runtime error does not render the refresh notice", () => {
+    const initial = useLiveStore.getInitialState();
+    const previous = { ...initial };
+    initial.subscriptionError = {
+      kind: "runtime", message: "Desired state saved; runtime reconciliation failed"
+    };
+    try {
+      const html = renderToStaticMarkup(createElement(SubscriptionPanel, {}) as never);
+      expect(html).toContain("Desired state saved");
+      expect(html).not.toContain("Refresh unavailable");
+    } finally {
+      Object.assign(initial, previous);
+    }
   });
 });

@@ -40,8 +40,11 @@ async function readPayload(response: Response): Promise<unknown> {
   }
 }
 
-export async function fetchSubscriptions(): Promise<SubscriptionStateView> {
-  const response = await fetch("/api/market/subscriptions", { headers: { Accept: "application/json" } });
+export async function fetchSubscriptions(signal?: AbortSignal): Promise<SubscriptionStateView> {
+  const response = await fetch("/api/market/subscriptions", {
+    headers: { Accept: "application/json" },
+    ...(signal ? { signal } : {})
+  });
   const payload = await readPayload(response);
   if (!response.ok) throw new SubscriptionHttpError(classify(response.status, payload), messageOf(payload, response.status));
   return subscriptionStateViewSchema.parse(payload);
@@ -50,6 +53,18 @@ export async function fetchSubscriptions(): Promise<SubscriptionStateView> {
 /** Serialized full-replacement writes; only the latest generation may apply. */
 let writeQueue: Promise<void> = Promise.resolve();
 let writeGeneration = 0;
+/** Number of replace calls that have not yet settled (queued or in flight). */
+let pendingWrites = 0;
+
+/** Monotonic write version shared with the subscription poller's apply guard. */
+export function getWriteGeneration(): number {
+  return writeGeneration;
+}
+
+/** True while any serialized write is queued or in flight. */
+export function isWritePending(): boolean {
+  return pendingWrites > 0;
+}
 
 export interface ReplaceResult {
   /** null means a newer write superseded this one — do not mutate state. */
@@ -60,18 +75,25 @@ export interface ReplaceResult {
 
 export function replaceSubscriptions(selections: SubscriptionSelection[]): Promise<ReplaceResult> {
   const generation = ++writeGeneration;
+  pendingWrites++;
   const run = async (): Promise<ReplaceResult> => {
-    const body = subscriptionReplaceRequestSchema.parse({ selections });
-    const response = await fetch("/api/market/subscriptions", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body)
-    });
-    const payload = await readPayload(response);
-    if (!response.ok) throw new SubscriptionHttpError(classify(response.status, payload), messageOf(payload, response.status));
-    const view = subscriptionStateViewSchema.parse(payload);
-    if (generation !== writeGeneration) return { view: null, runtimeError: null };
-    return { view, runtimeError: view.runtime.lastError };
+    try {
+      const body = subscriptionReplaceRequestSchema.parse({ selections });
+      const response = await fetch("/api/market/subscriptions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await readPayload(response);
+      if (!response.ok) throw new SubscriptionHttpError(classify(response.status, payload), messageOf(payload, response.status));
+      const view = subscriptionStateViewSchema.parse(payload);
+      if (generation !== writeGeneration) return { view: null, runtimeError: null };
+      return { view, runtimeError: view.runtime.lastError };
+    } finally {
+      // Settles before the returned promise's reactions, so a caller that
+      // resumes polling after `await` observes isWritePending() === false.
+      pendingWrites--;
+    }
   };
   const queued = writeQueue.then(run, run);
   writeQueue = queued.then(() => undefined, () => undefined);
