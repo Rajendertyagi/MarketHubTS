@@ -33,7 +33,7 @@ export function SubscriptionRuntimeView({
         <h5 className="mb-2 text-xs font-semibold text-slate-200 break-all">{providerKey}</h5>
       )}
       <p className="text-xs text-slate-400">
-        Connection: {runtime.connectionState.replaceAll("_", " ")}
+        Connection: {runtime.connectionState.replaceAll("_", " ")} · Generation: {runtime.generation}
       </p>
       {runtime.lastError && <p className="mt-1 text-xs text-amber-300">{runtime.lastError}</p>}
 
@@ -58,7 +58,7 @@ export function SubscriptionRuntimeView({
                 {capability.levels !== undefined && (
                   <p className="mt-1 text-xs text-slate-400">Levels: {capability.levels}</p>
                 )}
-                {capability.reason && (
+                {capability.reason !== undefined && (
                   <p className="mt-1 text-xs text-slate-400">Reason: {capability.reason}</p>
                 )}
                 {capability.entitlementUnverified === true && (

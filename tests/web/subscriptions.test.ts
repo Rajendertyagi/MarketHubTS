@@ -27,14 +27,15 @@ function view(generation: number, lastError: string | null = null): Subscription
 function renderPanelWith(subscriptionView: SubscriptionStateView): string {
   // Zustand 5 uses getInitialState() as the useSyncExternalStore server
   // snapshot, so static rendering reads the initial state rather than the
-  // live state. Seed it temporarily and restore it afterwards.
+  // live state. Seed it temporarily and restore it afterwards. This relies on
+  // that v5 invariant; if it changes, these SSR render tests must be revisited.
   const initial = useLiveStore.getInitialState();
-  const previous = initial.subscriptions;
+  const previousInitial = { ...initial };
   initial.subscriptions = subscriptionView;
   try {
     return renderToStaticMarkup(createElement(SubscriptionPanel, {}) as never);
   } finally {
-    initial.subscriptions = previous;
+    Object.assign(initial, previousInitial);
   }
 }
 
@@ -202,23 +203,26 @@ describe("subscription runtime presentation", () => {
     expect(html.match(/Connection:/g)?.length).toBe(2);
   });
 
-  test("all four capability statuses render distinctly", () => {
-    const subscriptionView = view(1);
-    subscriptionView.runtime.capabilities = [
-      { component: "quote", provider: "UPSTOX", status: "SUPPORTED" },
-      { component: "depth", provider: "UPSTOX", status: "UNSUPPORTED" },
-      { component: "derivatives", provider: "UPSTOX", status: "LIMITED" },
-      { component: "quote", provider: "FYERS", status: "UNAVAILABLE" }
-    ];
-    const html = renderPanelWith(subscriptionView);
-    for (const status of ["SUPPORTED", "UNSUPPORTED", "LIMITED", "UNAVAILABLE"]) {
+  test("all four capability statuses render with their own distinct tone", () => {
+    // Render each status in isolation so the assertion pins the status→tone
+    // pairing, not merely the presence of four labels and four tone classes.
+    const expectedTone: Record<string, string> = {
+      SUPPORTED: "bg-emerald-500/15",
+      UNSUPPORTED: "bg-rose-500/15",
+      LIMITED: "bg-amber-500/15",
+      UNAVAILABLE: "bg-slate-500/15"
+    };
+    for (const [status, tone] of Object.entries(expectedTone)) {
+      const subscriptionView = view(1);
+      subscriptionView.runtime.capabilities = [
+        { component: "quote", provider: "UPSTOX", status: status as "SUPPORTED" | "UNSUPPORTED" | "LIMITED" | "UNAVAILABLE" }
+      ];
+      const html = renderPanelWith(subscriptionView);
       expect(html).toContain(status);
+      expect(html).toContain(tone);
+      // The badge for this status carries the expected tone in the same element.
+      expect(html).toMatch(new RegExp(`bg-${tone.split("bg-")[1].split("/")[0]}[^>]*>${status}<`));
     }
-    // Distinct tones: ok / error / warn / neutral.
-    expect(html).toContain("bg-emerald-500/15");
-    expect(html).toContain("bg-rose-500/15");
-    expect(html).toContain("bg-amber-500/15");
-    expect(html).toContain("bg-slate-500/15");
   });
 
   test("fields, levels, reason and entitlementUnverified render only when supplied", () => {
