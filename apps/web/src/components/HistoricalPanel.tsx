@@ -7,6 +7,7 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../lib/historical";
+import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
 function errorLabel(kind: string, message: string): string {
@@ -176,7 +177,13 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
       </p>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <input aria-label="Canonical instrument ID" className={input} placeholder="v1|NSE|EQ|EQ|CODE:SBIN" value={canonicalId} onChange={(e) => setCanonicalId(e.target.value)} />
+        <InstrumentPicker
+          value={canonicalId}
+          onChange={setCanonicalId}
+          label="Instrument"
+          placeholder="Search by symbol or name…"
+          disabled={loading}
+        />
         <select aria-label="Interval" className={input} value={interval} onChange={(e) => setInterval(e.target.value as CandleInterval)}>
           {candleIntervalSchema.options.map((i) => <option key={i} value={i}>{i}</option>)}
         </select>

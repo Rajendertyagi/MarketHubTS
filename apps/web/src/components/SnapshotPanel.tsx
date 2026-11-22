@@ -4,6 +4,7 @@ import {
   captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshot, fetchSnapshots,
   saveCaptureConfig, SnapshotHttpError
 } from "../lib/snapshots";
+import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
 function toError(error: unknown): string {
@@ -102,7 +103,13 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
       </p>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <input aria-label="Underlying canonical ID" className={input} placeholder="v1|NSE|INDEX|INDEX|CODE:NIFTY50" value={underlying} onChange={(e) => setUnderlying(e.target.value)} />
+        <InstrumentPicker
+          value={underlying}
+          onChange={setUnderlying}
+          label="Underlying"
+          placeholder="Search by symbol or name…"
+          disabled={loading}
+        />
         <input aria-label="Expiry" className={input} placeholder="2026-01-29" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
         <select aria-label="Provider" className={input} value={provider} onChange={(e) => setProvider(e.target.value as "UPSTOX" | "FYERS")}>
           <option value="FYERS">FYERS</option>

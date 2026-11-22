@@ -1,5 +1,8 @@
+import { createElement } from "../../apps/web/node_modules/react";
+import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { OptionChainCaptureConfig, OptionChainSnapshot } from "../../packages/contracts/src/index";
+import { SnapshotPanel } from "../../apps/web/src/components/SnapshotPanel";
 import {
   captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshot, fetchSnapshots,
   saveCaptureConfig, SnapshotHttpError
@@ -36,6 +39,14 @@ const config: OptionChainCaptureConfig = {
 };
 
 describe("snapshot web client", () => {
+  test("panel renders the underlying picker; expiry and provider stay manual", () => {
+    const html = renderToStaticMarkup(createElement(SnapshotPanel, {}) as never);
+    expect(html).toContain("picker-value");
+    expect(html).not.toContain('aria-label="Underlying canonical ID"');
+    expect(html).toContain('aria-label="Expiry"');
+    expect(html).toContain('aria-label="Provider"');
+  });
+
   test("stored snapshots preserve null, zero and observation semantics", async () => {
     fakeFetch(() => ({ status: 200, body: { snapshots: [snapshot] } }));
     const list = await fetchSnapshots();

@@ -4,6 +4,7 @@ import {
   fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError, type SubscriptionErrorKind
 } from "../lib/subscriptions";
 import { useLiveStore, type SubscriptionErrorState } from "../store/live-store";
+import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
 const ERROR_LABELS: Record<SubscriptionErrorKind | "runtime", string> = {
@@ -77,18 +78,19 @@ export function SubscriptionPanel() {
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
       <h3 className="text-base font-semibold">Streaming selections</h3>
       <p className="mt-1 text-xs text-slate-400">
-        Enter canonical instrument IDs directly. Instrument search is not available in this stage.
+        Search the canonical catalog to add an instrument to your streaming selections.
       </p>
 
-      <div className="mt-3 flex gap-2">
-        <input
-          aria-label="Canonical instrument ID"
-          className={input}
-          placeholder="v1|NSE|INDEX|INDEX|CODE:NIFTY50"
-          value={draftId}
-          onChange={(event) => setDraftId(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") add(); }}
-        />
+      <div className="mt-3 flex items-end gap-2">
+        <div className="flex-1">
+          <InstrumentPicker
+            value={draftId}
+            onChange={setDraftId}
+            label="Instrument"
+            placeholder="Search by symbol or name…"
+            disabled={busy}
+          />
+        </div>
         <button type="button" disabled={busy || draftId.trim().length === 0} className={button} onClick={add}>Add</button>
       </div>
 

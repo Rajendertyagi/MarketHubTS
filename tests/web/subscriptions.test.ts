@@ -1,5 +1,8 @@
+import { createElement } from "../../apps/web/node_modules/react";
+import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import { subscriptionStateViewSchema, type SubscriptionStateView } from "../../packages/contracts/src/index";
+import { SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
 import {
   fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError
 } from "../../apps/web/src/lib/subscriptions";
@@ -29,6 +32,12 @@ function fakeFetch(handler: (url: string, init?: RequestInit) => { status: numbe
 }
 
 describe("subscription client", () => {
+  test("panel renders the instrument picker, not a manual canonical-ID input", () => {
+    const html = renderToStaticMarkup(createElement(SubscriptionPanel, {}) as never);
+    expect(html).toContain("picker-value");
+    expect(html).not.toContain('aria-label="Canonical instrument ID"');
+  });
+
   test("GET validates the view with the contracts schema", async () => {
     fakeFetch(() => ({ status: 200, body: view(1) }));
     const result = await fetchSubscriptions();

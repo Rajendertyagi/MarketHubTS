@@ -151,6 +151,12 @@ describe("M6-C Finding 3 — activity historical ref navigation uses IST dates",
     expect(historicalFocusToForm({ canonicalId: "NIFTY", interval: "60m", fromMs, toMs: fromMs })?.interval).toBe("60m");
   });
 
+  test("panel renders the instrument picker, not a manual canonical-ID input", () => {
+    const html = renderToStaticMarkup(createElement(HistoricalPanel, {}));
+    expect(html).toContain("picker-value");
+    expect(html).not.toContain('aria-label="Canonical instrument ID"');
+  });
+
   test("interval selector renders every shared contract value including 30m", () => {
     // HistoricalPanel uses hooks, so render it rather than calling it directly.
     const html = renderToStaticMarkup(createElement(HistoricalPanel, {}));
