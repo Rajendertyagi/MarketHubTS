@@ -5,7 +5,7 @@ import {
   emptyProviderStatus, providerStatusesResponseSchema,
   type ProviderId, type ProviderStatusesResponse
 } from "../../packages/contracts/src/index";
-import { ProviderList, ProviderStatusContent } from "../../apps/web/src/App";
+import { ProviderList, ProviderStatusContent } from "../../apps/web/src/components/ProviderStatus";
 import { fetchProvidersStatus } from "../../apps/web/src/lib/status";
 
 type ProviderStatusMapView = NonNullable<ProviderStatusesResponse["providers"]>;
@@ -42,8 +42,8 @@ describe("provider list rendering", () => {
     expect(html).toContain("NOT CONFIGURED");
   });
 
-  test("enumerates an additional provider without named UPSTOX/FYERS property access", () => {
-    // A third key is intentionally supplied: named property access would drop it.
+  test("enumerates any validated provider entry, including an unexpected key", () => {
+    // A third key is intentionally supplied: a hardcoded two-provider render would drop it.
     const providers = {
       UPSTOX: makeStatus("UPSTOX"),
       FYERS: makeStatus("FYERS"),
