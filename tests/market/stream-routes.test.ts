@@ -251,7 +251,11 @@ describe("market SSE route", () => {
       const frames = await readSse(res, 2);
       expect(frames[0]!.event).toBe("snapshot");
       expect(frames[0]!.id).toBe("0");
-      expect(liveSnapshotSchema.safeParse(JSON.parse(frames[0]!.data)).success).toBe(true);
+      const snapshotPayload = JSON.parse(frames[0]!.data);
+      // snapshot is a transport event: the raw payload must not carry a `type`
+      // discriminator (Zod would strip it, so assert against the raw JSON).
+      expect(snapshotPayload).not.toHaveProperty("type");
+      expect(liveSnapshotSchema.safeParse(snapshotPayload).success).toBe(true);
       expect(frames[1]!.event).toBe("item-updated");
       expect(frames[1]!.id).toBe("1");
     } finally { h.cleanup(); }

@@ -159,6 +159,7 @@ describe("M6-C Finding 3 — activity historical ref navigation uses IST dates",
       expect(html).toContain(`value="${interval}"`);
     }
     expect(html).toContain('value="30m"');
+    expect(html).toMatch(/<option value="1D" selected="">1D<\/option>/);
   });
 
   test("IST boundary near midnight maps to the correct local date", () => {

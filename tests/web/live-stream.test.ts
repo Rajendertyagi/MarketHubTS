@@ -70,7 +70,7 @@ class FakeEventSource implements EventSourceLike {
     this.dispatch(type, { data: JSON.stringify(payload), lastEventId: this.lastEventId });
   }
   emitData(payload: unknown, revision: number): void {
-    this.emitNamed("item-updated", payload, revision);
+    this.emitNamed(LIVE_EVENT.itemUpdated, payload, revision);
   }
   emitControl(type: typeof LIVE_EVENT.refresh | typeof LIVE_EVENT.snapshotRequired): void {
     this.emitNamed(type, { type });
