@@ -224,6 +224,56 @@ describe("provider capability metadata rendering", () => {
     expect(html).toContain("Documentation figure, not verified account limit");
   });
 
+  test("marks any UNKNOWN+DOCUMENTATION limit unverified, including non-numeric values", () => {
+    const providers = {
+      UPSTOX: makeStatus("UPSTOX", {
+        limits: [
+          { name: "string_limit", value: "custom", state: "UNKNOWN", source: "DOCUMENTATION" },
+          { name: "null_limit", value: null, state: "UNKNOWN", source: "DOCUMENTATION" }
+        ]
+      })
+    } as unknown as ProviderStatusMapView;
+    const html = renderToStaticMarkup(createElement(ProviderList, { providers }) as never);
+    expect((html.match(/data-unverified="true"/g) ?? []).length).toBe(2);
+    expect(html).toContain("custom");
+    expect(html).toContain("null");
+  });
+
+  test("renders all three limit states and all four limit sources distinctly", () => {
+    const providers = {
+      UPSTOX: makeStatus("UPSTOX", {
+        limits: [
+          { name: "l_avail", value: 1, state: "AVAILABLE", source: "API" },
+          { name: "l_unavail", value: 2, state: "UNAVAILABLE", source: "USER" },
+          { name: "l_unknown", value: 3, state: "UNKNOWN", source: "UNKNOWN" },
+          { name: "l_doc", value: 4, state: "UNKNOWN", source: "DOCUMENTATION" }
+        ]
+      })
+    } as unknown as ProviderStatusMapView;
+    const html = renderToStaticMarkup(createElement(ProviderList, { providers }) as never);
+    expect(html).toContain('data-state="AVAILABLE"');
+    expect(html).toContain('data-state="UNAVAILABLE"');
+    expect(html).toContain('data-state="UNKNOWN"');
+    expect(html).toContain('data-source="API"');
+    expect(html).toContain('data-source="USER"');
+    expect(html).toContain('data-source="UNKNOWN"');
+    expect(html).toContain('data-source="DOCUMENTATION"');
+  });
+
+  test("supplied empty-string optional metadata is rendered, not silently hidden", () => {
+    const providers = {
+      UPSTOX: makeStatus("UPSTOX", {
+        capabilities: [{ name: "c", state: "AVAILABLE", source: "API", asOf: "", note: "" }],
+        limits: [{ name: "l", value: 1, state: "AVAILABLE", source: "API", publishedAt: "", note: "" }]
+      })
+    } as unknown as ProviderStatusMapView;
+    const html = renderToStaticMarkup(createElement(ProviderList, { providers }) as never);
+    expect(html).toContain("As of:");
+    expect(html).toContain("Published:");
+    expect((html.match(/>As of: </g) ?? []).length).toBe(1);
+    expect((html.match(/>Published: </g) ?? []).length).toBe(1);
+  });
+
   test("does not mark an API-sourced AVAILABLE limit as unverified", () => {
     const providers = {
       UPSTOX: makeStatus("UPSTOX", {
@@ -281,7 +331,8 @@ describe("provider capability metadata rendering", () => {
   });
 
   test("component source contains no hardcoded adapter capability or limit names", async () => {
-    const source = await Bun.file("apps/web/src/components/ProviderStatus.tsx").text();
+    const sourcePath = new URL("../../apps/web/src/components/ProviderStatus.tsx", import.meta.url);
+    const source = await Bun.file(sourcePath).text();
     for (const name of [
       "market_quote", "historical_data", "option_chain", "market_information",
       "market_data", "other_standard_apis_per_second", "data_api_per_second"

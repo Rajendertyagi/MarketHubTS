@@ -35,11 +35,11 @@ function CapabilityList({ capabilities }: { capabilities: Capability[] }) {
   }
   return (
     <ul className="mt-2 space-y-1">
-      {capabilities.map((capability, index) => {
+      {capabilities.map((capability) => {
         const state = statePresentation[capability.state];
         const source = sourcePresentation[capability.source];
         return (
-          <li key={`${capability.name}-${index}`} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-capability-name={capability.name}>
+          <li key={capability.name} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-capability-name={capability.name}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-slate-200">{capability.name}</span>
               <span className="flex items-center gap-1">
@@ -47,8 +47,8 @@ function CapabilityList({ capabilities }: { capabilities: Capability[] }) {
                 <span data-source={capability.source}><StatusBadge label={`Source: ${source.label}`} tone={source.tone} /></span>
               </span>
             </div>
-            {capability.asOf && <p className="mt-1 text-xs text-slate-500">As of: {capability.asOf}</p>}
-            {capability.note && <p className="mt-1 text-xs text-slate-400">{capability.note}</p>}
+            {capability.asOf != null && <p className="mt-1 text-xs text-slate-500">As of: {capability.asOf}</p>}
+            {capability.note != null && <p className="mt-1 text-xs text-slate-400">{capability.note}</p>}
           </li>
         );
       })}
@@ -62,12 +62,12 @@ function LimitList({ limits }: { limits: Limit[] }) {
   }
   return (
     <ul className="mt-2 space-y-1">
-      {limits.map((limit, index) => {
+      {limits.map((limit) => {
         const state = statePresentation[limit.state];
         const source = sourcePresentation[limit.source];
         const unverified = limit.state === "UNKNOWN" && limit.source === "DOCUMENTATION";
         return (
-          <li key={`${limit.name}-${index}`} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-limit-name={limit.name}>
+          <li key={limit.name} className="rounded border border-slate-800 bg-slate-950/30 p-2" data-limit-name={limit.name}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-slate-200">
                 {limit.name} <span className="text-slate-400">= {limit.value === null ? "null" : String(limit.value)}</span>
@@ -80,8 +80,8 @@ function LimitList({ limits }: { limits: Limit[] }) {
             {unverified && (
               <p data-unverified="true" className="mt-1 text-xs text-amber-300">Unverified — documentation-derived; not a confirmed account entitlement or effective limit.</p>
             )}
-            {limit.publishedAt && <p className="mt-1 text-xs text-slate-500">Published: {limit.publishedAt}</p>}
-            {limit.note && <p className="mt-1 text-xs text-slate-400">{limit.note}</p>}
+            {limit.publishedAt != null && <p className="mt-1 text-xs text-slate-500">Published: {limit.publishedAt}</p>}
+            {limit.note != null && <p className="mt-1 text-xs text-slate-400">{limit.note}</p>}
           </li>
         );
       })}
