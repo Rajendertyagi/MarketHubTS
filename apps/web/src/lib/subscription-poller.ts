@@ -20,6 +20,8 @@ export interface SubscriptionPoller {
   start: () => void;
   suspend: () => void;
   resume: () => void;
+  /** Immediate guarded refresh for an explicit Retry — no full interval wait. */
+  refreshNow: () => void;
   dispose: () => void;
 }
 
@@ -45,9 +47,10 @@ export function createSubscriptionPoller(deps: SubscriptionPollerDeps): Subscrip
   let disposed = false;
   let sleepController: AbortController | null = null;
   let fetchController: AbortController | null = null;
-  // Token rather than a boolean so a stale generation's `finally` cannot
-  // clear the in-flight flag of a newer generation after resume().
-  let inFlightToken: symbol | null = null;
+  // Track in-flight ownership by generation: prevent same-generation overlap,
+  // but let a newer generation proceed if an older aborted fetch never settles
+  // (otherwise resume()/refreshNow() could get permanently stuck).
+  let inFlight: { token: symbol; gen: number } | null = null;
 
   function abortControllers(): void {
     sleepController?.abort();
@@ -56,16 +59,16 @@ export function createSubscriptionPoller(deps: SubscriptionPollerDeps): Subscrip
 
   function bumpGeneration(): void {
     generation++;
-    // Allow the fresh generation to start a load even if an aborted older
-    // fetch has not settled yet; the token keeps its cleanup scoped.
-    inFlightToken = null;
     abortControllers();
   }
 
   async function loadOnce(myGen: number): Promise<void> {
-    if (disposed || myGen !== generation || suspended || inFlightToken !== null) return;
+    if (disposed || myGen !== generation || suspended || deps.isWritePending()) return;
+    // Same-generation single-flight; an older generation's in-flight fetch
+    // (already aborted by bumpGeneration) must not block this generation.
+    if (inFlight !== null && inFlight.gen === myGen) return;
     const token = Symbol("poll");
-    inFlightToken = token;
+    inFlight = { token, gen: myGen };
     // Capture BEFORE the fetch: any write that starts from here on invalidates
     // this read even if its response arrives after the write completed.
     const writeGenBefore = deps.getWriteGeneration();
@@ -91,7 +94,7 @@ export function createSubscriptionPoller(deps: SubscriptionPollerDeps): Subscrip
       // Keep the last-known-good view: never call applyView on a failure.
       deps.onRefreshError(error instanceof Error ? error.message : "Unexpected error");
     } finally {
-      if (inFlightToken === token) inFlightToken = null;
+      if (inFlight?.token === token) inFlight = null;
       if (fetchController === controller) fetchController = null;
     }
   }
@@ -128,6 +131,13 @@ export function createSubscriptionPoller(deps: SubscriptionPollerDeps): Subscrip
       suspended = false;
       bumpGeneration();
       if (started) startLoop();
+    },
+    refreshNow(): void {
+      if (disposed || suspended) return;
+      // Cancel the pending sleep so the loop does not fire a second load; the
+      // inFlightToken guard keeps this single-flight if a GET is already active.
+      sleepController?.abort();
+      void loadOnce(generation);
     },
     dispose(): void {
       if (disposed) return;

@@ -2,7 +2,7 @@ import { createElement } from "../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import { subscriptionStateViewSchema, type SubscriptionStateView } from "../../packages/contracts/src/index";
-import { RefreshErrorNotice, SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
+import { createCommitHandler, RefreshErrorNotice, SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
 import { useLiveStore } from "../../apps/web/src/store/live-store";
 import {
   fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError
@@ -540,6 +540,35 @@ describe("subscription poller", () => {
     poller.dispose();
   });
 
+  test("a newer generation can load even if an aborted older fetch never settles", async () => {
+    const clock = makeControlledSleep();
+    const applied: SubscriptionStateView[] = [];
+    const stuck = deferred<SubscriptionStateView>(); // ignores abort, never settles
+    let call = 0;
+    const poller = createSubscriptionPoller({
+      fetchView: () => { call++; return call === 1 ? stuck.promise : Promise.resolve(view(11)); },
+      getWriteGeneration: () => 0,
+      isWritePending: () => false,
+      applyView: (next) => applied.push(next),
+      onRefreshError: () => {},
+      sleep: clock.sleep
+    });
+
+    poller.start();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(call).toBe(1);
+
+    // Old fetch never settles; a new generation must still be able to load.
+    poller.resume();
+    clock.advance();
+    await Bun.sleep(0);
+    expect(call).toBe(2);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.generation).toBe(11);
+    poller.dispose();
+  });
+
   test("uses a bounded default interval of 10000ms and honours an override", async () => {
     const clock = makeControlledSleep();
     const poller = createSubscriptionPoller({
@@ -612,5 +641,60 @@ describe("subscription refresh error presentation", () => {
     } finally {
       Object.assign(initial, previous);
     }
+  });
+});
+
+describe("write orchestration suspends and resumes polling", () => {
+  function makePollerSpy() {
+    const calls: string[] = [];
+    return {
+      calls,
+      poller: {
+        suspend: () => { calls.push("suspend"); },
+        resume: () => { calls.push("resume"); }
+      }
+    };
+  }
+
+  test("resumes polling after a successful write", async () => {
+    const spy = makePollerSpy();
+    const applied: SubscriptionStateView[] = [];
+    const commit = createCommitHandler({
+      replace: async () => ({ view: view(2), runtimeError: null }),
+      getPoller: () => spy.poller,
+      applyView: (v) => { applied.push(v); },
+      setError: () => {},
+      setBusy: () => {}
+    });
+    await commit([{ canonicalId: "A", enabled: true }]);
+    expect(spy.calls).toEqual(["suspend", "resume"]);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.generation).toBe(2);
+  });
+
+  test("resumes polling after a failed write", async () => {
+    const spy = makePollerSpy();
+    const errors: unknown[] = [];
+    const commit = createCommitHandler({
+      replace: async () => { throw new Error("put failed"); },
+      getPoller: () => spy.poller,
+      applyView: () => {},
+      setError: (e) => { errors.push(e); },
+      setBusy: () => {}
+    });
+    await commit([{ canonicalId: "A", enabled: true }]);
+    expect(spy.calls).toEqual(["suspend", "resume"]);
+    expect(errors.filter((e) => e !== null)).toHaveLength(1);
+  });
+
+  test("resumes polling even when no poller is present", async () => {
+    const commit = createCommitHandler({
+      replace: async () => ({ view: view(3), runtimeError: null }),
+      getPoller: () => null,
+      applyView: () => {},
+      setError: () => {},
+      setBusy: () => {}
+    });
+    await commit([]); // must not throw
   });
 });

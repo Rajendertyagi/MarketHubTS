@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { SubscriptionSelection } from "@markethub/contracts";
+import type { SubscriptionSelection, SubscriptionStateView } from "@markethub/contracts";
 import {
   fetchSubscriptions, getWriteGeneration, isWritePending, replaceSubscriptions,
   SubscriptionHttpError, type SubscriptionErrorKind
@@ -24,6 +24,39 @@ function errorState(error: unknown): SubscriptionErrorState {
     return { kind: error.kind, message: `${ERROR_LABELS[error.kind]}: ${error.message}` };
   }
   return { kind: "internal", message: error instanceof Error ? error.message : "Unexpected error" };
+}
+
+/**
+ * Write orchestration extracted so the suspend/resume-around-write contract is
+ * directly testable without React DOM. The component uses this exact function.
+ */
+export function createCommitHandler(deps: {
+  replace: typeof replaceSubscriptions;
+  getPoller: () => Pick<SubscriptionPoller, "suspend" | "resume"> | null;
+  applyView: (view: SubscriptionStateView) => void;
+  setError: (error: SubscriptionErrorState | null) => void;
+  setBusy: (busy: boolean) => void;
+}) {
+  return async (next: SubscriptionSelection[]): Promise<void> => {
+    deps.setBusy(true);
+    deps.setError(null);
+    // Suspend before the PUT so no poll can start or apply while the write is
+    // in flight. The PUT-returned view stays authoritative.
+    deps.getPoller()?.suspend();
+    try {
+      const result = await deps.replace(next);
+      if (result.view) deps.applyView(result.view);
+      if (result.runtimeError) {
+        deps.setError({ kind: "runtime", message: `${ERROR_LABELS.runtime}: ${result.runtimeError}` });
+      }
+    } catch (cause) {
+      deps.setError(errorState(cause));
+    } finally {
+      // Always resume, including on failure, so the panel never gets stuck.
+      deps.getPoller()?.resume();
+      deps.setBusy(false);
+    }
+  };
 }
 
 /** Distinct from post-commit write/runtime errors: the last good view is kept. */
@@ -57,9 +90,15 @@ export function SubscriptionPanel() {
   // reports into `refreshError`, never into the write/runtime `subscriptionError`.
   useEffect(() => {
     let active = true;
+    // Guard the first load with the same write-generation invariant the poller
+    // uses: a GET started before a newer write must never overwrite that
+    // write's authoritative view, even if it resolves after the PUT.
+    const writeGenBefore = getWriteGeneration();
+    const stillCurrent = () => active &&
+      writeGenBefore === getWriteGeneration() && !isWritePending();
     void fetchSubscriptions()
-      .then((loaded) => { if (active) setSubscriptions(loaded); })
-      .catch((cause) => { if (active) setError(errorState(cause)); });
+      .then((loaded) => { if (stillCurrent()) setSubscriptions(loaded); })
+      .catch((cause) => { if (stillCurrent()) setError(errorState(cause)); });
     return () => { active = false; };
   }, [setSubscriptions, setError]);
 
@@ -89,26 +128,13 @@ export function SubscriptionPanel() {
     ? Object.entries(view.runtimes)
     : null;
 
-  const commit = async (next: SubscriptionSelection[]) => {
-    setBusy(true);
-    setError(null);
-    // Suspend before the PUT so no poll can start or apply while the write is
-    // in flight. The PUT-returned view stays authoritative.
-    pollerRef.current?.suspend();
-    try {
-      const result = await replaceSubscriptions(next);
-      if (result.view) setSubscriptions(result.view);
-      if (result.runtimeError) {
-        setError({ kind: "runtime", message: `${ERROR_LABELS.runtime}: ${result.runtimeError}` });
-      }
-    } catch (cause) {
-      setError(errorState(cause));
-    } finally {
-      // Always resume, including on failure, so the panel never gets stuck.
-      pollerRef.current?.resume();
-      setBusy(false);
-    }
-  };
+  const commit = createCommitHandler({
+    replace: replaceSubscriptions,
+    getPoller: () => pollerRef.current,
+    applyView: setSubscriptions,
+    setError,
+    setBusy
+  });
 
   const add = () => {
     const canonicalId = draftId.trim();
@@ -155,7 +181,7 @@ export function SubscriptionPanel() {
       )}
 
       {refreshError && (
-        <RefreshErrorNotice message={refreshError} onRetry={() => pollerRef.current?.resume()} />
+        <RefreshErrorNotice message={refreshError} onRetry={() => pollerRef.current?.refreshNow()} />
       )}
 
       {view && (
