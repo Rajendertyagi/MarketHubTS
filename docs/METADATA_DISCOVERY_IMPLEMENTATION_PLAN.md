@@ -63,7 +63,7 @@
 - **1d — Activity filter options (area C).** Derive transport/status options in `ActivityPanel.tsx:134,138–139` from `mcpActivityTransportSchema`/`mcpActivityStatusSchema`; keep per-status tone mapping (`:26–31`) local.
 - **1e — Retention classes (area C, lower priority).** Optionally iterate `retentionDataClassSchema` (`snapshots.ts:140`) keys; keep per-class labels local; preserve fail-closed cleanup (`historical-routes.ts:39–61`).
 
-**Expected files:** `packages/contracts/src/{provider,market,live,live-components,historical,snapshots,mcp-activity,index}.ts`, `packages/mcp-core/src/activity.ts`, `packages/realtime/src/types.ts`, `apps/api/src/market-routes.ts`, `apps/web/src/{lib/status.ts,lib/live.ts,lib/live-stream.ts,components/ActivityPanel.tsx}`, related tests.
+**Expected files:** `packages/contracts/src/{provider,market,live,live-components,historical,snapshots,mcp-activity,index}.ts`, `packages/mcp-core/src/activity.ts`, `packages/realtime/src/{types,hub}.ts`, `apps/api/src/market-routes.ts`, `apps/web/src/{lib/status.ts,lib/live.ts,lib/live-stream.ts,components/ActivityPanel.tsx}`, related tests.
 
 **Tests:** one shared provider identity definition; SSE name consistency across hub/API/WebUI; CE/PE and HTTP/STDIO parity; existing suites green.
 

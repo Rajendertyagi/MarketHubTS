@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { LiveSnapshot, LiveChangeEvent } from "../../packages/contracts/src/index";
+import { LIVE_EVENT, type LiveSnapshot, type LiveChangeEvent } from "../../packages/contracts/src/index";
 import {
   LiveStreamController, SSE_EVENT_NAMES,
   type EventSourceLike, type SseEventLike, type SseListener, type StreamState
@@ -72,7 +72,7 @@ class FakeEventSource implements EventSourceLike {
   emitData(payload: unknown, revision: number): void {
     this.emitNamed("item-updated", payload, revision);
   }
-  emitControl(type: "refresh" | "snapshot-required"): void {
+  emitControl(type: typeof LIVE_EVENT.refresh | typeof LIVE_EVENT.snapshotRequired): void {
     this.emitNamed(type, { type });
   }
   fail(): void { this.dispatch("error", { data: "", lastEventId: this.lastEventId }); }

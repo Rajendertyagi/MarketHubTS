@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { provenanceSchema, type Provenance } from "./market";
-import type { ProviderId } from "./provider";
+import { optionTypeSchema, type OptionType, provenanceSchema, type Provenance } from "./market";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 
 // --- Canonical snapshot envelope ---
 
@@ -17,7 +17,7 @@ export interface OptionGreeks {
 
 export interface OptionChainStrike {
   strike: number;
-  optionType: "CE" | "PE";
+  optionType: OptionType;
   ltp?: number;
   oi?: number;
   volume?: number;
@@ -48,7 +48,7 @@ export const optionChainSnapshotEnvelopeSchema = z.object({
   underlyingLtp: z.number().finite().nullable(),
   strikes: z.array(z.object({
     strike: z.number().finite(),
-    optionType: z.enum(["CE", "PE"]),
+    optionType: optionTypeSchema,
     ltp: z.number().finite().optional(),
     oi: z.number().int().nonnegative().optional(),
     volume: z.number().int().nonnegative().optional(),
@@ -80,7 +80,7 @@ export const optionChainSnapshotSchema = z.object({
   id: z.string().min(1),
   configId: z.string().nullable(),
   capturedAt: z.string(),
-  provider: z.enum(["UPSTOX", "FYERS"]),
+  provider: providerIdSchema,
   envelope: optionChainSnapshotEnvelopeSchema,
   provenance: provenanceSchema
 });
@@ -107,7 +107,7 @@ export interface OptionChainCaptureConfig {
 export const optionChainCaptureRequestSchema = z.object({
   underlyingCanonicalId: z.string().min(1),
   expiryDate: z.string().min(1),
-  provider: z.enum(["UPSTOX", "FYERS"]).optional(),
+  provider: providerIdSchema.optional(),
   strikeRangeJson: z.string().nullable().optional(),
   nativeIdentifier: z.string().optional()
 });
@@ -121,7 +121,7 @@ export const optionChainCaptureConfigSchema = z.object({
   captureMode: captureModeSchema,
   scheduleJson: z.string().nullable(),
   streamingEnabled: z.boolean(),
-  provider: z.enum(["UPSTOX", "FYERS"]),
+  provider: providerIdSchema,
   createdAt: z.string(),
   updatedAt: z.string()
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AvailabilityState, Provenance } from "./market";
-import type { ProviderId } from "./provider";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 import type { LiveFreshnessState, SelectionMode, TimestampUnit } from "./live";
 
 // --- Canonical component kinds (exactly three; index is an instrument type) ---
@@ -188,7 +188,7 @@ export type CapabilityRequest = z.infer<typeof capabilityRequestSchema>;
 
 export const capabilityResultSchema = z.object({
   component: componentKindSchema,
-  provider: z.enum(["UPSTOX", "FYERS"]),
+  provider: providerIdSchema,
   status: capabilityStatusSchema,
   fields: z.array(z.string()).optional(),
   levels: z.number().int().positive().optional(),

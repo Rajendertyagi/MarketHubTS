@@ -1,4 +1,5 @@
 import {
+  LIVE_EVENT,
   liveSnapshotSchema,
   liveChangeEventSchema,
   snapshotRequiredEventSchema,
@@ -49,10 +50,12 @@ export function parseSnapshot(payload: unknown): LiveSnapshot {
 
 // --- SSE message parsing ---
 
+export type LiveControlEventName = typeof LIVE_EVENT.snapshotRequired | typeof LIVE_EVENT.refresh;
+
 export type ParsedSseMessage =
   | { kind: "snapshot"; snapshot: LiveSnapshot }
   | { kind: "data"; event: LiveChangeEvent }
-  | { kind: "control"; control: "snapshot-required" | "refresh" }
+  | { kind: "control"; control: LiveControlEventName }
   | { kind: "invalid"; reason: string };
 
 /**
@@ -70,10 +73,10 @@ export function parseSseMessage(lastEventId: string, dataText: string): ParsedSs
   }
 
   if (snapshotRequiredEventSchema.safeParse(payload).success) {
-    return { kind: "control", control: "snapshot-required" };
+    return { kind: "control", control: LIVE_EVENT.snapshotRequired };
   }
   if (refreshEventSchema.safeParse(payload).success) {
-    return { kind: "control", control: "refresh" };
+    return { kind: "control", control: LIVE_EVENT.refresh };
   }
 
   const snapshot = liveSnapshotSchema.safeParse(payload);

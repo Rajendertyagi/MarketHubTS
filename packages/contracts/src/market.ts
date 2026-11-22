@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 
 // --- Classification / lifecycle ---
 export const exchangeSchema = z.enum(["NSE", "BSE"]);
@@ -29,8 +30,9 @@ export type InstrumentLifecycleStatus = z.infer<typeof instrumentLifecycleStatus
 export const optionTypeSchema = z.enum(["CE", "PE"]);
 export type OptionType = z.infer<typeof optionTypeSchema>;
 
-export const providerSchema = z.enum(["UPSTOX", "FYERS"]);
-export type Provider = z.infer<typeof providerSchema>;
+// Same schema instance as providerIdSchema — a compatibility alias, not a second enum.
+export const providerSchema = providerIdSchema;
+export type Provider = ProviderId;
 
 // --- Provenance / freshness / availability ---
 export const availabilityStateSchema = z.enum(["AVAILABLE", "UNAVAILABLE", "UNSUPPORTED", "UNKNOWN", "LIMITED"]);

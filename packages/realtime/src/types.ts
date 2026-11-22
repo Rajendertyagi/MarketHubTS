@@ -1,7 +1,9 @@
+import type { LiveEventName } from "@markethub/contracts";
+
 /** SSE-ready outbound message. The route maps this directly to writeSSE(). */
 export interface OutboundEvent {
-  /** SSE event name: snapshot | item-updated | item-removed | provider-connection-changed | snapshot-required | refresh */
-  event: string;
+  /** SSE event name — the canonical set is owned by @markethub/contracts. */
+  event: LiveEventName;
   /** SSE id — the canonical data revision for data/snapshot events; absent for control events. */
   id?: string;
   /** JSON payload. */

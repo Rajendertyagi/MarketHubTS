@@ -1,4 +1,4 @@
-import type { LiveChangeEvent, LiveEventSource } from "@markethub/contracts";
+import { LIVE_EVENT, type LiveChangeEvent, type LiveEventSource } from "@markethub/contracts";
 import type {
   ClientSession, CursorInput, FeedReadResult, HubStats, IntervalScheduler, LiveEventHubOptions, OpenStreamResult, OutboundEvent
 } from "./types";
@@ -100,7 +100,7 @@ class ClientQueue implements ClientSession {
     if (this.queue.length >= this.opts.clientMaxEvents || this.bytes + bytes > this.opts.clientMaxBytes) {
       this.drop();
       this.resyncRequired = true;
-      this.pushControl({ event: "snapshot-required", data: { type: "snapshot-required", reason: "client-queue-overflow" } });
+      this.pushControl({ event: LIVE_EVENT.snapshotRequired, data: { type: LIVE_EVENT.snapshotRequired, reason: "client-queue-overflow" } });
       return;
     }
     this.enqueue({ outbound, bytes });
@@ -118,10 +118,10 @@ class ClientQueue implements ClientSession {
   /** Control events are small and coalesced; they are never blocked by a full data queue. */
   pushControl(outbound: OutboundEvent): void {
     if (this.closed) return;
-    if (outbound.event === "snapshot-required") {
+    if (outbound.event === LIVE_EVENT.snapshotRequired) {
       if (this.pendingSnapshotRequired) return;
       this.pendingSnapshotRequired = true;
-    } else if (outbound.event === "refresh") {
+    } else if (outbound.event === LIVE_EVENT.refresh) {
       if (this.pendingRefresh) return;
       this.pendingRefresh = true;
     }
@@ -149,8 +149,8 @@ class ClientQueue implements ClientSession {
   private dequeue(): OutboundEvent {
     const item = this.queue.shift()!;
     this.bytes -= item.bytes;
-    if (item.outbound.event === "snapshot-required") this.pendingSnapshotRequired = false;
-    if (item.outbound.event === "refresh") this.pendingRefresh = false;
+    if (item.outbound.event === LIVE_EVENT.snapshotRequired) this.pendingSnapshotRequired = false;
+    if (item.outbound.event === LIVE_EVENT.refresh) this.pendingRefresh = false;
     return item.outbound;
   }
 
@@ -242,7 +242,7 @@ export class LiveEventHub {
 
   /** Periodic freshness control event. Carries no data revision. */
   emitRefresh(): void {
-    const outbound: OutboundEvent = { event: "refresh", data: { type: "refresh" } };
+    const outbound: OutboundEvent = { event: LIVE_EVENT.refresh, data: { type: LIVE_EVENT.refresh } };
     for (const client of this.clients.values()) client.pushControl(outbound);
   }
 
@@ -275,7 +275,7 @@ export class LiveEventHub {
       // budget before registering a session. If it cannot fit, return a
       // deterministic snapshot-required so the client retrieves via REST.
       const snapshotEvent: OutboundEvent = {
-        event: "snapshot", id: String(snapshot.revision), data: snapshot
+        event: LIVE_EVENT.snapshot, id: String(snapshot.revision), data: snapshot
       };
       const bytes = estimateBytes(snapshotEvent);
       if (bytes > this.opts.clientMaxBytes || 1 > this.opts.clientMaxEvents) {

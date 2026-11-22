@@ -1,4 +1,4 @@
-import { systemStatusSchema, type SystemStatus } from "@markethub/contracts";
+import { systemStatusSchema, type ProviderId, type SystemStatus } from "@markethub/contracts";
 
 function extractErrorMessage(payload: unknown, status: number): string {
   if (payload && typeof payload === "object" && "message" in payload) {
@@ -31,7 +31,7 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
 }
 
 export interface ProviderStatusView {
-  id: "UPSTOX" | "FYERS";
+  id: ProviderId;
   enabled: boolean;
   authState: string;
   streamingState: string;

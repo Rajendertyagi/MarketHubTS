@@ -1,15 +1,33 @@
 import { z } from "zod";
-import type { ProviderId } from "./provider";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 import { availabilityStateSchema, provenanceSchema, type AvailabilityState, type Provenance } from "./market";
 import type { CapabilityResult, ComponentKind, SelectedComponent } from "./live-components";
 // live-components.ts imports only TYPES from live.ts (erased at runtime), so a
 // runtime import of the capability schema here does not create a runtime cycle.
 import { capabilityResultSchema } from "./live-components";
 
-// Provider ids are inlined as a value schema here so live.ts never needs a
-// runtime import from provider.ts (provider.ts imports the connection schema
-// from this module). This keeps the dependency direction acyclic at runtime.
-const liveProviderIdSchema = z.enum(["UPSTOX", "FYERS"]);
+// Canonical SSE event names in wire order. `snapshot` is a transport event
+// carrying LiveSnapshot; it deliberately has no payload `type` discriminator.
+export const LIVE_EVENT_NAMES = [
+  "snapshot",
+  "item-updated",
+  "item-removed",
+  "provider-connection-changed",
+  "snapshot-required",
+  "refresh"
+] as const;
+export type LiveEventName = (typeof LIVE_EVENT_NAMES)[number];
+export const LIVE_EVENT = {
+  snapshot: LIVE_EVENT_NAMES[0],
+  itemUpdated: LIVE_EVENT_NAMES[1],
+  itemRemoved: LIVE_EVENT_NAMES[2],
+  providerConnectionChanged: LIVE_EVENT_NAMES[3],
+  snapshotRequired: LIVE_EVENT_NAMES[4],
+  refresh: LIVE_EVENT_NAMES[5]
+} as const;
+
+// Local alias for readability; the value comes from the dependency-light leaf.
+const liveProviderIdSchema = providerIdSchema;
 
 // --- Provider connection state (owned by the streaming supervisor) ---
 // Deliberately separate from observation freshness: DISCONNECTED is a connection
@@ -176,18 +194,18 @@ export const liveSnapshotSchema = z.object({
 
 // --- Compact, revisioned change events emitted by the canonical service ---
 export const liveItemUpdatedEventSchema = z.object({
-  type: z.literal("item-updated"),
+  type: z.literal(LIVE_EVENT.itemUpdated),
   revision: z.number().int().nonnegative(),
   canonicalId: z.string().min(1),
   item: liveItemSchema
 });
 export const liveItemRemovedEventSchema = z.object({
-  type: z.literal("item-removed"),
+  type: z.literal(LIVE_EVENT.itemRemoved),
   revision: z.number().int().nonnegative(),
   canonicalId: z.string().min(1)
 });
 export const liveProviderConnectionChangedEventSchema = z.object({
-  type: z.literal("provider-connection-changed"),
+  type: z.literal(LIVE_EVENT.providerConnectionChanged),
   revision: z.number().int().nonnegative(),
   provider: liveProviderIdSchema,
   status: providerConnectionStatusSchema,
@@ -202,11 +220,11 @@ export type LiveChangeEvent = z.infer<typeof liveChangeEventSchema>;
 
 // Control events carry no data revision and never advance it.
 export const snapshotRequiredEventSchema = z.object({
-  type: z.literal("snapshot-required"),
+  type: z.literal(LIVE_EVENT.snapshotRequired),
   reason: z.string().optional()
 });
 export type SnapshotRequiredEvent = z.infer<typeof snapshotRequiredEventSchema>;
-export const refreshEventSchema = z.object({ type: z.literal("refresh") });
+export const refreshEventSchema = z.object({ type: z.literal(LIVE_EVENT.refresh) });
 export type RefreshEvent = z.infer<typeof refreshEventSchema>;
 
 // --- Desired subscription state (persisted, durable generation) ---

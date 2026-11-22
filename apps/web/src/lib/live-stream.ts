@@ -1,4 +1,4 @@
-import type { LiveSnapshot } from "@markethub/contracts";
+import { LIVE_EVENT, LIVE_EVENT_NAMES, type LiveSnapshot } from "@markethub/contracts";
 import { applyDataEvent, isSafeRevision, parseSseMessage } from "./live";
 
 /** Event payload shape delivered to named SSE listeners. */
@@ -19,15 +19,8 @@ export interface EventSourceLike {
   close(): void;
 }
 
-/** All named SSE events emitted by the Stage D backend. */
-export const SSE_EVENT_NAMES = [
-  "snapshot",
-  "item-updated",
-  "item-removed",
-  "provider-connection-changed",
-  "snapshot-required",
-  "refresh"
-] as const;
+/** Compatibility alias — the canonical event names live in @markethub/contracts. */
+export const SSE_EVENT_NAMES = LIVE_EVENT_NAMES;
 
 export type StreamStatus = "idle" | "connecting" | "live" | "recovering" | "error" | "closed";
 export type RefreshStatus = "idle" | "fetching" | "stale" | "error";
@@ -226,7 +219,7 @@ export class LiveStreamController {
       return;
     }
     if (parsed.kind === "control") {
-      if (parsed.control === "snapshot-required") this.triggerRecovery("snapshot-required");
+      if (parsed.control === LIVE_EVENT.snapshotRequired) this.triggerRecovery(LIVE_EVENT.snapshotRequired);
       else this.handleRefresh();
       return;
     }

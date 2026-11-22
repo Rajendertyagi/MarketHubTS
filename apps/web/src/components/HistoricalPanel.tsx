@@ -9,8 +9,6 @@ import {
 } from "../lib/historical";
 import { StatusBadge } from "./StatusBadge";
 
-const INTERVALS: CandleInterval[] = ["1m", "5m", "15m", "60m", "1D", "1W", "1M"];
-
 function errorLabel(kind: string, message: string): string {
   const prefix = kind === "forbidden" ? "Local-owner only"
     : kind === "validation" ? "Validation error"
@@ -180,7 +178,7 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
         <input aria-label="Canonical instrument ID" className={input} placeholder="v1|NSE|EQ|EQ|CODE:SBIN" value={canonicalId} onChange={(e) => setCanonicalId(e.target.value)} />
         <select aria-label="Interval" className={input} value={interval} onChange={(e) => setInterval(e.target.value as CandleInterval)}>
-          {INTERVALS.map((i) => <option key={i} value={i}>{i}</option>)}
+          {candleIntervalSchema.options.map((i) => <option key={i} value={i}>{i}</option>)}
         </select>
         <input aria-label="From" type="date" className={input} value={from} onChange={(e) => setFrom(e.target.value)} />
         <input aria-label="To" type="date" className={input} value={to} onChange={(e) => setTo(e.target.value)} />

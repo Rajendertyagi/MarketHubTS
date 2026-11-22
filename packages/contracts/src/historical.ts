@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { provenanceSchema, type Provenance } from "./market";
-import type { ProviderId } from "./provider";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 
 // --- Canonical candle intervals (provider-agnostic) ---
 
@@ -50,7 +50,7 @@ export const historicalCandleSchema = z.object({
   close: z.number().finite(),
   volume: z.number().int().nonnegative().nullable(),
   oi: z.number().int().nonnegative().nullable(),
-  provider: z.enum(["UPSTOX", "FYERS"]),
+  provider: providerIdSchema,
   provenance: provenanceSchema,
   receivedAtMs: z.number().int().nonnegative()
 });
@@ -75,7 +75,7 @@ export const candleRangeRequestSchema = z.object({
   interval: candleIntervalSchema,
   fromMs: z.number().int().nonnegative(),
   toMs: z.number().int().nonnegative(),
-  provider: z.enum(["UPSTOX", "FYERS"]).optional(),
+  provider: providerIdSchema.optional(),
   nativeIdentifier: z.string().optional(),
   expired: z.boolean().optional()
 });
@@ -133,7 +133,7 @@ export type ReportReasonCode = UnavailableReasonCode | "REQUEST_ERROR";
 export const candleRangeNoteSchema = z.object({
   canonicalId: z.string().min(1),
   interval: candleIntervalSchema,
-  provider: z.enum(["UPSTOX", "FYERS"]),
+  provider: providerIdSchema,
   rangeStartMs: z.number().int().nonnegative(),
   kind: rangeNoteKindSchema,
   rangeEndMs: z.number().int().nonnegative(),
@@ -172,7 +172,7 @@ export interface HistoricalSyncConfig {
 
 /** Minimal, validated provider preference policy — never a fixed priority. */
 export const providerPolicySchema = z.object({
-  preferredProvider: z.enum(["UPSTOX", "FYERS"]).optional()
+  preferredProvider: providerIdSchema.optional()
 });
 export type ProviderPolicy = z.infer<typeof providerPolicySchema>;
 

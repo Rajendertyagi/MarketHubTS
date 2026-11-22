@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { providerConnectionStateSchema, type ProviderConnectionState } from "./live";
+import { providerIdSchema, type ProviderId } from "./provider-identity";
 
 // --- Provider identity and configuration (non-secret only) ---
-export const providerIdSchema = z.enum(["UPSTOX", "FYERS"]);
-export type ProviderId = z.infer<typeof providerIdSchema>;
+// Re-exported to preserve the existing public API of this module.
+export { providerIdSchema, type ProviderId } from "./provider-identity";
 
 export const providerConfigSchema = z.object({
   enabled: z.boolean(),

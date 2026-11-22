@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import {
   apiErrorSchema,
+  LIVE_EVENT,
   liveSnapshotSchema,
   subscriptionReplaceRequestSchema,
   subscriptionStateViewSchema,
@@ -81,8 +82,8 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
       const result = deps.hub.openStream({ lastEventId, since });
       if (result.outcome === "snapshot-required") {
         await stream.writeSSE({
-          event: "snapshot-required",
-          data: JSON.stringify({ type: "snapshot-required", reason: result.reason })
+          event: LIVE_EVENT.snapshotRequired,
+          data: JSON.stringify({ type: LIVE_EVENT.snapshotRequired, reason: result.reason })
         });
         return;
       }

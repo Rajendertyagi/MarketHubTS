@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 // react-dom is a workspace dependency of @markethub/web, not the repo root.
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
-import type { McpActivityView } from "../../packages/contracts/src/index";
+import { mcpActivityStatusSchema, mcpActivityTransportSchema, type McpActivityView } from "../../packages/contracts/src/index";
 import {
   ActivityPanelView, buildActivityQuery, createActivityPanelActions,
   type ActivityPanelController, type ActivityPanelViewActions, type ActivityPanelViewState
@@ -104,6 +104,18 @@ describe("M6-C ActivityPanel component rendering", () => {
     expect(html).toContain('value="catalog_search"');
     expect(html).toContain('value="STDIO" selected');
     expect(html).toContain('value="failed" selected');
+  });
+
+  test("transport and status options derive from the shared contracts", () => {
+    const html = render(baseState());
+    expect(html).toMatch(/<option value=""[^>]*>Any transport<\/option>/);
+    expect(html).toMatch(/<option value=""[^>]*>Any status<\/option>/);
+    for (const transport of mcpActivityTransportSchema.options) {
+      expect(html).toContain(`value="${transport}"`);
+    }
+    for (const status of mcpActivityStatusSchema.options) {
+      expect(html).toContain(`value="${status}"`);
+    }
   });
 });
 

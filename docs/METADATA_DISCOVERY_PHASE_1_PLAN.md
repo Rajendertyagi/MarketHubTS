@@ -44,7 +44,7 @@ Phase 2 is therefore **not** the second implementation task. This assignment del
 4. Consumer discovery: direct import from `@markethub/contracts`; no HTTP discovery.
 5. Existing API/schema: yes — all canonical schemas already exist; duplicates are the problem.
 6. New discovery/read API necessary: **no** — not justified.
-7. UI update on new registration: a new enum value reaches all consumers through the shared contract at build time; no frontend list edit.
+7. UI update on new registration: a new enum value reaches all consumers **that derive their values from the shared contract** at build time, with no frontend list edit. Consumers that still hold a duplicate literal are not covered until they are migrated; provider extensibility remains deferred to Phase 5 (see Q17).
 8. Cache invalidation/refresh: **N/A** — no HTTP metadata; static imports need no cache policy.
 9. Sensitive metadata: **none** — no credentials, tokens, secrets, internal provider identifiers or sensitive configuration are exposed; no new response surface.
 10. Consistency tests: contract schema tests, SSE wire-compatibility tests, rendered interval-option test, existing regression suites.
@@ -279,7 +279,7 @@ Do not combine the instrument-picker or MCP Operation-selector work into this as
 - Verify `OutboundEvent.event` is restricted to `LiveEventName` at compile time.
 - Run realtime hub tests for initial snapshot, item updates/removals, provider connection changes, overflow `snapshot-required`, and `refresh`.
 - Run API stream-route tests to verify event names, IDs, payload JSON and termination behavior remain unchanged.
-- Run WebUI live-stream tests to verify all six listeners are registered, invoked and removed, and recovery/refresh behavior remains unchanged.
+- Run WebUI live-stream tests to verify all six listeners are registered, invoked and removed, and recovery/refresh behavior remains unchanged. In `tests/web/live-stream.test.ts`, derive the `emitControl()` helper's accepted type from the shared `LIVE_EVENT` constants (for example `typeof LIVE_EVENT.snapshotRequired | typeof LIVE_EVENT.refresh`) rather than maintaining another `"refresh" | "snapshot-required"` literal union.
 - Explicitly verify that `snapshot` still carries a `LiveSnapshot` payload without a `type` discriminator and that control events still carry no revision ID.
 
 ### 6.4 Historical selector

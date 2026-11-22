@@ -1,4 +1,4 @@
-import type { CanonicalInstrument, InstrumentCategory } from "@markethub/contracts";
+import type { CanonicalInstrument, InstrumentCategory, OptionType } from "@markethub/contracts";
 
 export const IDENTITY_VERSION = 1;
 
@@ -64,7 +64,7 @@ export interface IdentityInput {
     expiryDate: string;
     strike?: number | string | undefined;
     strikeNormalized?: string | undefined;
-    optionType?: "CE" | "PE" | undefined;
+    optionType?: OptionType | undefined;
   } | undefined;
 }
 

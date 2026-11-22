@@ -1,5 +1,9 @@
+// react is a workspace dependency of @markethub/web, not the repo root.
+import { createElement } from "../../apps/web/node_modules/react";
+import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  candleIntervalSchema,
   istCalendarParts, istDateString, istDayStartMs, istMonthStartMs, nextIstMonthStartMs,
   parseIstDateOnly, parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig
 } from "../../packages/contracts/src/index";
@@ -7,7 +11,7 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../../apps/web/src/lib/historical";
-import { historicalFocusToForm } from "../../apps/web/src/components/HistoricalPanel";
+import { HistoricalPanel, historicalFocusToForm } from "../../apps/web/src/components/HistoricalPanel";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -145,6 +149,16 @@ describe("M6-C Finding 3 — activity historical ref navigation uses IST dates",
     const fromMs = Date.parse("2026-01-04T18:30:00.000Z");
     expect(historicalFocusToForm({ canonicalId: "NIFTY", interval: "BOGUS", fromMs, toMs: fromMs })).toBeNull();
     expect(historicalFocusToForm({ canonicalId: "NIFTY", interval: "60m", fromMs, toMs: fromMs })?.interval).toBe("60m");
+  });
+
+  test("interval selector renders every shared contract value including 30m", () => {
+    // HistoricalPanel uses hooks, so render it rather than calling it directly.
+    const html = renderToStaticMarkup(createElement(HistoricalPanel, {}));
+    expect(candleIntervalSchema.options).toHaveLength(16);
+    for (const interval of candleIntervalSchema.options) {
+      expect(html).toContain(`value="${interval}"`);
+    }
+    expect(html).toContain('value="30m"');
   });
 
   test("IST boundary near midnight maps to the correct local date", () => {

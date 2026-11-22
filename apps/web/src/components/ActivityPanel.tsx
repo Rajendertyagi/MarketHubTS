@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import type { McpActivityView } from "@markethub/contracts";
+import {
+  mcpActivityStatusSchema, mcpActivityTransportSchema,
+  type McpActivityView
+} from "@markethub/contracts";
 import {
   ActivityHttpError, fetchActivity, fetchActivityByOperation
 } from "../lib/activity";
@@ -131,12 +134,12 @@ export function ActivityPanelView({ state, actions }: { state: ActivityPanelView
       <div className="mb-4 grid gap-2 sm:grid-cols-5">
         <input aria-label="Filter tool" className={inputClass} placeholder="Tool name" value={state.toolName} onChange={(e) => actions.onToolName(e.target.value)} />
         <select aria-label="Filter transport" className={inputClass} value={state.transport} onChange={(e) => actions.onTransport(e.target.value)}>
-          <option value="">Any transport</option><option value="HTTP">HTTP</option><option value="STDIO">STDIO</option>
+          <option value="">Any transport</option>
+          {mcpActivityTransportSchema.options.map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
         <select aria-label="Filter status" className={inputClass} value={state.status} onChange={(e) => actions.onStatus(e.target.value)}>
           <option value="">Any status</option>
-          <option value="started">started</option><option value="succeeded">succeeded</option>
-          <option value="failed">failed</option><option value="interrupted">interrupted</option>
+          {mcpActivityStatusSchema.options.map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
         <input aria-label="From time" type="datetime-local" className={inputClass} value={state.from} onChange={(e) => actions.onFrom(e.target.value)} />
         <input aria-label="To time" type="datetime-local" className={inputClass} value={state.to} onChange={(e) => actions.onTo(e.target.value)} />

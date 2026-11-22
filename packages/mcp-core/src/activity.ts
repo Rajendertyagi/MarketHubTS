@@ -2,11 +2,12 @@ import { CLIENT_INFO_META_KEY, type ServerContext } from "@modelcontextprotocol/
 import {
   candleIntervalSchema, mcpActivityResultRefSchema, mcpActivitySummarySchema,
   MCP_ACTIVITY_SUMMARY_KEYS, sanitizeSensitiveText,
-  type McpActivityResultRef, type McpActivitySummary
+  type McpActivityResultRef, type McpActivitySummary, type McpActivityTransport
 } from "@markethub/contracts";
 import type { McpServices } from "./services";
 
-export type ActivityTransport = "HTTP" | "STDIO";
+// Compatibility alias — the shared contract owns the transport values.
+export type ActivityTransport = McpActivityTransport;
 
 export interface WithActivityArgs<T> {
   services: McpServices;
