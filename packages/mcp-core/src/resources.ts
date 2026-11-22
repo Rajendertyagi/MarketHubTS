@@ -7,6 +7,10 @@ import { candleIntervalSchema } from "@markethub/contracts";
 import { withActivity, safeSummary, type ActivityTransport } from "./activity";
 import { parseRange } from "./schemas";
 import type { McpServices } from "./services";
+import {
+  catalogInstrumentsDescriptor, marketSnapshotResourceDescriptor, historicalCandlesResourceDescriptor,
+  snapshotsConfigDescriptor, snapshotsNullConfigDescriptor, eventsLiveDescriptor, eventsAlertsDescriptor
+} from "./operation-descriptors";
 
 /** Explicit error helpers — a failed read is never an empty success. */
 function invalid(message: string): never {
@@ -80,14 +84,14 @@ function hasCursor(variables: Variables, name: string): boolean {
 export function registerResources(server: McpServer, services: McpServices, transport: ActivityTransport): void {
   // 1. Catalog instruments (template) — requires a non-empty query.
   server.registerResource(
-    "catalog-instruments",
+    catalogInstrumentsDescriptor.name,
     new ResourceTemplate("markethub://catalog/instruments{?query,limit,cursor}", { list: undefined }),
     {
-      title: "Catalog instruments",
-      description: "Bounded, keyset-paginated canonical instrument search. Requires a non-empty query; no unfiltered listing.",
+      title: catalogInstrumentsDescriptor.title,
+      description: catalogInstrumentsDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, variables, ctx) => record(services, transport, "catalog-instruments", ctx, variables, ["query", "limit"], async () => {
+    async (uri, variables, ctx) => record(services, transport, catalogInstrumentsDescriptor.name, ctx, variables, ["query", "limit"], async () => {
       const query = decodeVar(variables, "query");
       if (query.trim().length === 0) invalid("query must be non-empty");
       const limit = parseLimit(decodeVar(variables, "limit"));
@@ -104,14 +108,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 2. Market snapshot (static).
   server.registerResource(
-    "market-snapshot",
+    marketSnapshotResourceDescriptor.name,
     "markethub://market/snapshot",
     {
-      title: "Market snapshot",
-      description: "Canonical live market snapshot (quotes/depth). Empty state is honest, never fabricated.",
+      title: marketSnapshotResourceDescriptor.title,
+      description: marketSnapshotResourceDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, ctx) => record(services, transport, "market-snapshot", ctx, {}, [], async () => {
+    async (uri, ctx) => record(services, transport, marketSnapshotResourceDescriptor.name, ctx, {}, [], async () => {
       const result = await services.getLiveSnapshot();
       if (!result.ok) return mapFailure(result.error);
       return contents(uri, result.value);
@@ -120,14 +124,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 3. Historical candles + coverage (template).
   server.registerResource(
-    "historical-candles",
+    historicalCandlesResourceDescriptor.name,
     new ResourceTemplate("markethub://historical/{canonicalId}/{interval}{?from,to}", { list: undefined }),
     {
-      title: "Historical candles and coverage",
-      description: "Cached candles plus derived coverage for a canonical instrument and ISO-8601 range.",
+      title: historicalCandlesResourceDescriptor.title,
+      description: historicalCandlesResourceDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, variables, ctx) => record(services, transport, "historical-candles", ctx, variables, ["canonicalId", "interval", "from", "to"], async () => {
+    async (uri, variables, ctx) => record(services, transport, historicalCandlesResourceDescriptor.name, ctx, variables, ["canonicalId", "interval", "from", "to"], async () => {
       const canonicalId = decodeVar(variables, "canonicalId");
       const intervalParsed = candleIntervalSchema.safeParse(decodeVar(variables, "interval"));
       if (!intervalParsed.success) invalid("invalid candle interval");
@@ -148,14 +152,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 4a. Snapshots by real config id (template). "none" is a valid config id here.
   server.registerResource(
-    "snapshots-config",
+    snapshotsConfigDescriptor.name,
     new ResourceTemplate("markethub://snapshots/config/{configId}{?cursor}", { list: undefined }),
     {
-      title: "Snapshots by capture configuration",
-      description: "Newest-first bounded page of snapshots for a real capture configuration ID (including 'none'). Stored-data opaque cursor.",
+      title: snapshotsConfigDescriptor.title,
+      description: snapshotsConfigDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, variables, ctx) => record(services, transport, "snapshots-config", ctx, variables, ["configId"], async () => {
+    async (uri, variables, ctx) => record(services, transport, snapshotsConfigDescriptor.name, ctx, variables, ["configId"], async () => {
       const configId = decodeVar(variables, "configId");
       const cursor = cursorFrom(decodeVar(variables, "cursor"));
       const result = await services.listSnapshotsPage({
@@ -172,14 +176,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 4b. Null-config partition (template) — on-demand + config-deleted snapshots.
   server.registerResource(
-    "snapshots-null-config",
+    snapshotsNullConfigDescriptor.name,
     new ResourceTemplate("markethub://snapshots/null-config{?cursor}", { list: undefined }),
     {
-      title: "Null-config snapshots",
-      description: "Newest-first bounded page of snapshots with no capture config: on-demand captures and snapshots retained after config deletion. Stored-data opaque cursor.",
+      title: snapshotsNullConfigDescriptor.title,
+      description: snapshotsNullConfigDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, variables, ctx) => record(services, transport, "snapshots-null-config", ctx, variables, [], async () => {
+    async (uri, variables, ctx) => record(services, transport, snapshotsNullConfigDescriptor.name, ctx, variables, [], async () => {
       const cursor = cursorFrom(decodeVar(variables, "cursor"));
       const result = await services.listSnapshotsPage({
         selector: { kind: "null-config" }, limit: 25,
@@ -192,14 +196,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 5. Live event feed (template) — runtime-scoped cursor, not restart-safe.
   server.registerResource(
-    "events-live",
+    eventsLiveDescriptor.name,
     new ResourceTemplate("markethub://events/live{?after,limit}", { list: undefined }),
     {
-      title: "Live event feed",
-      description: "Bounded replay page from the in-memory live event hub. Cursor is runtime-scoped and does not survive restart; snapshot-required is an explicit recovery result.",
+      title: eventsLiveDescriptor.title,
+      description: eventsLiveDescriptor.description,
       mimeType: "application/json"
     },
-    async (uri, variables, ctx) => record(services, transport, "events-live", ctx, variables, ["limit"], async () => {
+    async (uri, variables, ctx) => record(services, transport, eventsLiveDescriptor.name, ctx, variables, ["limit"], async () => {
       const after = cursorFrom(decodeVar(variables, "after"));
       const limit = parseLimit(decodeVar(variables, "limit"));
       const result = await services.readEventFeed({ limit, ...(after !== undefined ? { after } : {}) });
@@ -210,14 +214,14 @@ export function registerResources(server: McpServer, services: McpServices, tran
 
   // 6. Alerts feed (static) — contract-only, explicitly unavailable in M6.
   server.registerResource(
-    "events-alerts",
+    eventsAlertsDescriptor.name,
     "markethub://events/alerts",
     {
-      title: "Alert events (unavailable in M6)",
-      description: "Contract-only placeholder. Durable alert records are an M7 dependency; reads return an explicit unavailable error, never an empty feed.",
+      title: eventsAlertsDescriptor.title,
+      description: eventsAlertsDescriptor.description,
       mimeType: "application/json"
     },
-    async (_uri, ctx) => record(services, transport, "events-alerts", ctx, {}, [], async () =>
+    async (_uri, ctx) => record(services, transport, eventsAlertsDescriptor.name, ctx, {}, [], async () =>
       unavailable("unavailable in M6 — alert events are an M7 dependency"))
   );
 }

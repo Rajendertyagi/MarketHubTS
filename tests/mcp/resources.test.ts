@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, UriTemplate } from "@modelcontextprotocol/server";
-import { createMcpServer, type McpServices } from "../../packages/mcp-core/src/index";
+import { createMcpServer, RESOURCE_DESCRIPTORS, type McpServices } from "../../packages/mcp-core/src/index";
 import { healthStatusSchema } from "../../packages/contracts/src/index";
 
 const HEALTH = healthStatusSchema.parse({
@@ -95,6 +95,22 @@ describe("M6-B3 URI templates (installed SDK matcher)", () => {
 });
 
 describe("M6-B3 resources over MCP", () => {
+  test("resource descriptors match the union of resources/list and resources/templates/list", async () => {
+    const { client, handler } = await connect();
+    try {
+      const { resources } = await client.listResources();
+      const { resourceTemplates } = await client.listResourceTemplates();
+      const listed = [...resources, ...resourceTemplates];
+      expect(listed).toHaveLength(RESOURCE_DESCRIPTORS.length);
+      for (const descriptor of RESOURCE_DESCRIPTORS) {
+        const item = listed.find((r) => r.name === descriptor.name);
+        expect(item).toBeDefined();
+        expect(item!.description).toBe(descriptor.description);
+        expect(item!.title).toBe(descriptor.title);
+      }
+    } finally { await client.close(); await handler.close(); }
+  });
+
   test("static resources and templates are discovered in deterministic order", async () => {
     const { client, handler } = await connect();
     try {

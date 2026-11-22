@@ -71,5 +71,6 @@ export * from "./live-components";
 export * from "./historical";
 export * from "./snapshots";
 export * from "./mcp-activity";
+export * from "./mcp-operations";
 export * from "./sanitize";
 export * from "./market-dates";

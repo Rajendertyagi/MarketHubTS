@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler } from "@modelcontextprotocol/server";
-import { createMcpServer, type McpServices } from "../../packages/mcp-core/src/index";
+import { createMcpServer, PROMPT_DESCRIPTORS, type McpServices } from "../../packages/mcp-core/src/index";
 import { healthStatusSchema } from "../../packages/contracts/src/index";
 
 const HEALTH = healthStatusSchema.parse({
@@ -37,6 +37,20 @@ async function connect() {
 }
 
 describe("M6-B3 static prompts", () => {
+  test("prompt descriptors match the actual MCP prompts/list metadata", async () => {
+    const { client, handler } = await connect();
+    try {
+      const { prompts } = await client.listPrompts();
+      expect(prompts).toHaveLength(PROMPT_DESCRIPTORS.length);
+      for (const descriptor of PROMPT_DESCRIPTORS) {
+        const listed = prompts.find((p) => p.name === descriptor.name);
+        expect(listed).toBeDefined();
+        expect(listed!.description).toBe(descriptor.description);
+        expect(listed!.title).toBe(descriptor.title);
+      }
+    } finally { await client.close(); await handler.close(); }
+  });
+
   test("prompts are discovered in deterministic order", async () => {
     const { client, handler } = await connect();
     try {

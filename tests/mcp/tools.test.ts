@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler } from "@modelcontextprotocol/server";
-import { createMcpServer, type McpServices } from "../../packages/mcp-core/src/index";
+import { createMcpServer, TOOL_DESCRIPTORS, type McpServices } from "../../packages/mcp-core/src/index";
 import { healthStatusSchema } from "../../packages/contracts/src/index";
 
 const HEALTH = healthStatusSchema.parse({
@@ -51,6 +51,21 @@ async function connect() {
 }
 
 describe("M6-B2 shared tools", () => {
+  test("tool descriptors match the actual MCP tools/list metadata", async () => {
+    const { client, handler } = await connect();
+    try {
+      const { tools } = await client.listTools();
+      expect(tools).toHaveLength(TOOL_DESCRIPTORS.length);
+      for (const descriptor of TOOL_DESCRIPTORS) {
+        const listed = tools.find((t) => t.name === descriptor.name);
+        expect(listed).toBeDefined();
+        expect(listed!.description).toBe(descriptor.description);
+        // Tools carry no title today — no MCP-visible metadata was added.
+        expect((listed as Record<string, unknown>).title).toBeUndefined();
+      }
+    } finally { await client.close(); await handler.close(); }
+  });
+
   test("all nine tools are registered with correct annotations", async () => {
     const { client, handler } = await connect();
     const { tools } = await client.listTools();

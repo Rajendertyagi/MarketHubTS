@@ -2,6 +2,9 @@ import type { McpServer, ServerContext } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { withActivity, safeSummary, type ActivityTransport } from "./activity";
 import type { McpServices } from "./services";
+import {
+  explainMarketSnapshotDescriptor, interpretCoverageGapsDescriptor, howToCaptureSnapshotDescriptor
+} from "./operation-descriptors";
 
 /** Record one prompt callback. Guidance stays static; only recording uses services. */
 function record<T>(
@@ -21,11 +24,11 @@ function record<T>(
  * each callback for activity recording only.
  */
 export function registerPrompts(server: McpServer, services: McpServices, transport: ActivityTransport): void {
-  server.registerPrompt("explain_market_snapshot", {
-    title: "Explain a market snapshot",
-    description: "Guidance for reading the canonical live market snapshot resource.",
+  server.registerPrompt(explainMarketSnapshotDescriptor.name, {
+    title: explainMarketSnapshotDescriptor.title,
+    description: explainMarketSnapshotDescriptor.description,
     argsSchema: z.object({ canonicalId: z.string().min(1).optional() })
-  }, (args, ctx) => record(services, transport, "explain_market_snapshot", ctx, args as Record<string, unknown>, ["canonicalId"], async () => ({
+  }, (args, ctx) => record(services, transport, explainMarketSnapshotDescriptor.name, ctx, args as Record<string, unknown>, ["canonicalId"], async () => ({
     messages: [{
       role: "user" as const,
       content: {
@@ -40,16 +43,16 @@ export function registerPrompts(server: McpServer, services: McpServices, transp
     }]
   })));
 
-  server.registerPrompt("interpret_coverage_gaps", {
-    title: "Interpret coverage gaps",
-    description: "Guidance for interpreting historical candle coverage and gaps.",
+  server.registerPrompt(interpretCoverageGapsDescriptor.name, {
+    title: interpretCoverageGapsDescriptor.title,
+    description: interpretCoverageGapsDescriptor.description,
     argsSchema: z.object({
       canonicalId: z.string().min(1),
       interval: z.string().min(1),
       from: z.string().min(1),
       to: z.string().min(1)
     })
-  }, (args, ctx) => record(services, transport, "interpret_coverage_gaps", ctx, args as Record<string, unknown>, ["canonicalId", "interval", "from", "to"], async () => ({
+  }, (args, ctx) => record(services, transport, interpretCoverageGapsDescriptor.name, ctx, args as Record<string, unknown>, ["canonicalId", "interval", "from", "to"], async () => ({
     messages: [{
       role: "user" as const,
       content: {
@@ -63,11 +66,11 @@ export function registerPrompts(server: McpServer, services: McpServices, transp
     }]
   })));
 
-  server.registerPrompt("how_to_capture_snapshot", {
-    title: "How to capture an option-chain snapshot",
-    description: "Guidance for on-demand option-chain capture and its persistence semantics.",
+  server.registerPrompt(howToCaptureSnapshotDescriptor.name, {
+    title: howToCaptureSnapshotDescriptor.title,
+    description: howToCaptureSnapshotDescriptor.description,
     argsSchema: z.object({})
-  }, (_args, ctx) => record(services, transport, "how_to_capture_snapshot", ctx, {}, [], async () => ({
+  }, (_args, ctx) => record(services, transport, howToCaptureSnapshotDescriptor.name, ctx, {}, [], async () => ({
     messages: [{
       role: "user" as const,
       content: {

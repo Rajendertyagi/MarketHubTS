@@ -7,6 +7,11 @@ import {
   onDemandRetrievalInput, optionChainSnapshotInput, parseRange, providerStatusInput,
   unavailableToolInput
 } from "./schemas";
+import {
+  healthDescriptor, catalogSearchDescriptor, providerStatusDescriptor, marketSnapshotDescriptor,
+  historicalCandlesDescriptor, optionChainSnapshotDescriptor, onDemandRetrievalDescriptor,
+  futuresChainDescriptor, marketInformationDescriptor
+} from "./operation-descriptors";
 
 const UNAVAILABLE_MESSAGE = "unavailable in M6 — no shared service";
 
@@ -48,21 +53,21 @@ function record<T>(
  */
 export function registerTools(server: McpServer, services: McpServices, transport: ActivityTransport): void {
   // 1. markethub_health
-  server.registerTool("markethub_health", {
-    description: "Get MarketHubTS API and database health status via the local API.",
+  server.registerTool(healthDescriptor.name, {
+    description: healthDescriptor.description,
     inputSchema: healthInput,
     annotations: readOnly
-  }, async (_args, ctx) => record(services, transport, "markethub_health", ctx, {}, [], async () => {
+  }, async (_args, ctx) => record(services, transport, healthDescriptor.name, ctx, {}, [], async () => {
     const result = await services.getHealth();
     return result.ok ? success(result.value) : failure(result.error);
   }));
 
   // 2. catalog_search
-  server.registerTool("catalog_search", {
-    description: "Search the canonical instrument catalog by symbol, display name or identity key. Read-only, bounded, keyset-paginated.",
+  server.registerTool(catalogSearchDescriptor.name, {
+    description: catalogSearchDescriptor.description,
     inputSchema: catalogSearchInput,
     annotations: readOnly
-  }, async (args, ctx) => record(services, transport, "catalog_search", ctx, args as Record<string, unknown>, ["query", "limit"], async () => {
+  }, async (args, ctx) => record(services, transport, catalogSearchDescriptor.name, ctx, args as Record<string, unknown>, ["query", "limit"], async () => {
     const result = await services.searchCatalog({
       text: args.query,
       limit: args.limit,
@@ -72,21 +77,21 @@ export function registerTools(server: McpServer, services: McpServices, transpor
   }));
 
   // 3. provider_status
-  server.registerTool("provider_status", {
-    description: "Get composed UPSTOX and FYERS provider status, including runtime streaming state. Read-only.",
+  server.registerTool(providerStatusDescriptor.name, {
+    description: providerStatusDescriptor.description,
     inputSchema: providerStatusInput,
     annotations: readOnly
-  }, async (_args, ctx) => record(services, transport, "provider_status", ctx, {}, [], async () => {
+  }, async (_args, ctx) => record(services, transport, providerStatusDescriptor.name, ctx, {}, [], async () => {
     const result = await services.getProviderStatus();
     return result.ok ? success(result.value) : failure(result.error);
   }));
 
   // 4. market_snapshot
-  server.registerTool("market_snapshot", {
-    description: "Get the canonical live market snapshot. When canonicalId is supplied, only snapshot.items are filtered; revision, capturedAtMs and connections are preserved. Read-only.",
+  server.registerTool(marketSnapshotDescriptor.name, {
+    description: marketSnapshotDescriptor.description,
     inputSchema: marketSnapshotInput,
     annotations: readOnly
-  }, async (args, ctx) => record(services, transport, "market_snapshot", ctx, args as Record<string, unknown>, ["canonicalId"], async () => {
+  }, async (args, ctx) => record(services, transport, marketSnapshotDescriptor.name, ctx, args as Record<string, unknown>, ["canonicalId"], async () => {
     const result = await services.getLiveSnapshot();
     if (!result.ok) return failure(result.error);
     const snapshot = result.value;
@@ -98,11 +103,11 @@ export function registerTools(server: McpServer, services: McpServices, transpor
   }));
 
   // 5. historical_candles
-  server.registerTool("historical_candles", {
-    description: "Read cached candles or derived coverage for a canonical instrument and range. The onDemand mode may cache retrieved candles (a bounded persistence side effect); cached and coverage modes are read-only. Never changes saved sync configuration.",
+  server.registerTool(historicalCandlesDescriptor.name, {
+    description: historicalCandlesDescriptor.description,
     inputSchema: historicalCandlesInput,
     annotations: mayPersist
-  }, async (args, ctx) => record(services, transport, "historical_candles", ctx, args as Record<string, unknown>, ["canonicalId", "interval", "mode", "from", "to"], async () => {
+  }, async (args, ctx) => record(services, transport, historicalCandlesDescriptor.name, ctx, args as Record<string, unknown>, ["canonicalId", "interval", "mode", "from", "to"], async () => {
     const range = parseRange(args.from, args.to);
     if ("error" in range) return failure({ category: "validation", message: range.error });
     const request = { canonicalId: args.canonicalId, interval: args.interval, fromMs: range.fromMs, toMs: range.toMs };
@@ -119,11 +124,11 @@ export function registerTools(server: McpServer, services: McpServices, transpor
   }));
 
   // 6. option_chain_snapshot
-  server.registerTool("option_chain_snapshot", {
-    description: "List or get stored option-chain snapshots (read-only), or capture one on demand. Capture persists a snapshot with configId = null and does not read or modify saved capture configurations.",
+  server.registerTool(optionChainSnapshotDescriptor.name, {
+    description: optionChainSnapshotDescriptor.description,
     inputSchema: optionChainSnapshotInput,
     annotations: { ...mayPersist, idempotentHint: false }
-  }, async (args, ctx) => record(services, transport, "option_chain_snapshot", ctx, args as Record<string, unknown>, ["mode", "configId", "snapshotId", "underlyingCanonicalId", "expiryDate"], async () => {
+  }, async (args, ctx) => record(services, transport, optionChainSnapshotDescriptor.name, ctx, args as Record<string, unknown>, ["mode", "configId", "snapshotId", "underlyingCanonicalId", "expiryDate"], async () => {
     if (args.mode === "list") {
       if (args.fromMs !== undefined && args.toMs !== undefined && args.fromMs > args.toMs) {
         return failure({ category: "validation", message: "fromMs must not be after toMs" });
@@ -150,11 +155,11 @@ export function registerTools(server: McpServer, services: McpServices, transpor
   }));
 
   // 7. on_demand_retrieval
-  server.registerTool("on_demand_retrieval", {
-    description: "Thin dispatch for on-demand data: historical retrieval may cache candles; option-chain capture persists a snapshot with configId = null. Never changes saved operational configuration.",
+  server.registerTool(onDemandRetrievalDescriptor.name, {
+    description: onDemandRetrievalDescriptor.description,
     inputSchema: onDemandRetrievalInput,
     annotations: { ...mayPersist, idempotentHint: false }
-  }, async (args, ctx) => record(services, transport, "on_demand_retrieval", ctx, args as Record<string, unknown>, ["kind", "canonicalId", "interval", "from", "to", "expiryDate"], async () => {
+  }, async (args, ctx) => record(services, transport, onDemandRetrievalDescriptor.name, ctx, args as Record<string, unknown>, ["kind", "canonicalId", "interval", "from", "to", "expiryDate"], async () => {
     if (args.kind === "historical") {
       if (args.interval === undefined || args.from === undefined || args.to === undefined) {
         return failure({ category: "validation", message: "historical retrieval requires interval, from and to" });
@@ -191,18 +196,18 @@ export function registerTools(server: McpServer, services: McpServices, transpor
   }));
 
   // 8. futures_chain — unavailable in M6
-  server.registerTool("futures_chain", {
-    description: "Unavailable in M6 — no shared futures-chain service exists.",
+  server.registerTool(futuresChainDescriptor.name, {
+    description: futuresChainDescriptor.description,
     inputSchema: unavailableToolInput,
     annotations: readOnly
-  }, async (_args, ctx) => record(services, transport, "futures_chain", ctx, {}, [], async () =>
+  }, async (_args, ctx) => record(services, transport, futuresChainDescriptor.name, ctx, {}, [], async () =>
     failure({ category: "unavailable", message: UNAVAILABLE_MESSAGE })));
 
   // 9. market_information — unavailable in M6
-  server.registerTool("market_information", {
-    description: "Unavailable in M6 — no shared market-information service exists.",
+  server.registerTool(marketInformationDescriptor.name, {
+    description: marketInformationDescriptor.description,
     inputSchema: unavailableToolInput,
     annotations: readOnly
-  }, async (_args, ctx) => record(services, transport, "market_information", ctx, {}, [], async () =>
+  }, async (_args, ctx) => record(services, transport, marketInformationDescriptor.name, ctx, {}, [], async () =>
     failure({ category: "unavailable", message: UNAVAILABLE_MESSAGE })));
 }
