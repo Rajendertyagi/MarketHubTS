@@ -29,7 +29,7 @@ Phase 2 is therefore **not** the second implementation task. This assignment del
 
 | Area | Covered here | Deferred to |
 |---|---|---|
-| A — Provider identity | Canonical leaf schema and all `@markethub/contracts` module consumers | Phase 5 (enumerable provider status / extensibility, including WebUI `lib/status.ts` and `App.tsx` fixed-key access — see architecture doc §10.A) |
+| A — Provider identity | Canonical leaf schema, all `@markethub/contracts` module consumers, and the `ProviderStatusView.id` type in WebUI `lib/status.ts:34` (duplicate TypeScript union removed) | Phase 5 (full provider-status response validation, fixed-key rendering in `App.tsx:133–134`, provider enumeration and extensibility — see architecture doc §10.A) |
 | B — SSE event definitions | One contracts-owned event-name tuple and all producers/consumers | — |
 | C — Duplicated contract values | CE/PE, HTTP/STDIO transport, ActivityPanel transport/status filter options, historical intervals | Retention classes (lower priority, Phase 6) |
 | D — MCP operation discovery | Not in this phase | Phase 2 |
@@ -54,7 +54,7 @@ Phase 2 is therefore **not** the second implementation task. This assignment del
 14. REST/SSE/WebUI consumer impact: contract imports replace duplicated literals; wire behavior unchanged.
 15. Domain-data discovery impact: none — no catalog or domain API change.
 16. Configuration persistence impact: none — no config CRUD or storage change.
-17. Forward compatibility: a new provider value or interval reaches all consumers through the shared contract without a frontend edit.
+17. Forward compatibility: a new **interval** value reaches all consumers through the shared contract without a frontend edit. For **providers**, centralizing the identity schema removes the duplicate type but does **not** make adding another provider automatic — the status map, registry, adapters and application integration remain fixed to `UPSTOX`/`FYERS`; full provider addition still requires the Phase 5 contract, registry, status-map, adapter and API work.
 18. Dependency direction: leaf module with no value imports from `provider.ts`/`live.ts`/`market.ts`; no cycle introduced.
 
 ---
@@ -109,7 +109,7 @@ Do not add a synthetic `snapshot` payload schema merely to make event names look
 ### In scope
 
 - A small dependency-free provider identity module inside `packages/contracts`.
-- Reuse the canonical provider and option-type schemas in existing contracts.
+- Reuse the canonical provider and option-type schemas in existing contracts, and use the shared `ProviderId` type for the WebUI `ProviderStatusView.id` field (type only — no response validation or fixed-key rendering change).
 - Reuse the shared activity transport type.
 - Derive the Activity panel's transport and status filter options from the shared contracts (`mcpActivityTransportSchema`, `mcpActivityStatusSchema`) instead of hardcoded literals.
 - One shared, typed SSE event-name contract used by all current producers and consumers.
@@ -150,6 +150,7 @@ Then update consumers:
 | `packages/contracts/src/historical.ts` | Replace every repeated provider enum in candle, request, note and policy schemas with the leaf provider schema. Import the type from the leaf module. |
 | `packages/contracts/src/snapshots.ts` | Replace repeated provider enums in snapshot and capture schemas with the leaf provider schema. Import the type from the leaf module. |
 | `packages/contracts/src/index.ts` | Prefer preserving the existing barrel: it already exports `provider.ts`, which should re-export the leaf symbols. Avoid duplicate `export *` names unless the TypeScript barrel is deliberately reconciled and verified. |
+| `apps/web/src/lib/status.ts` | Replace the duplicate `id: "UPSTOX" \| "FYERS"` union in `ProviderStatusView` (`:34`) with the shared `ProviderId` type imported from `@markethub/contracts`. **Phase 1 scope is this type only** — do not validate the full provider-status response, change the `providers: Record<"UPSTOX" \| "FYERS", ...>` shape (`:46`), alter fixed-key rendering in `App.tsx:133–134`, or add provider enumeration. Those remain Phase 5. Preserve current API behavior. |
 
 **Compatibility requirements:**
 
@@ -207,9 +208,10 @@ Use the contract as follows:
 | `packages/realtime/src/hub.ts` | Use shared event constants for the initial `snapshot`, `snapshot-required` control events and `refresh`. Data events continue to use `event.type` from `LiveChangeEvent`. Queue coalescing comparisons must use the same shared constants. |
 | `apps/api/src/market-routes.ts` | Use the shared `snapshot-required` event constant when writing the invalid-cursor SSE response. |
 | `apps/web/src/lib/live-stream.ts` | Import the tuple from `@markethub/contracts`. Keep `SSE_EVENT_NAMES` as an alias to `LIVE_EVENT_NAMES` for compatibility with current imports/tests, rather than maintaining a second array. |
+| `apps/web/src/lib/live.ts` | Derive the control-event type from the shared constants: `type LiveControlEventName = typeof LIVE_EVENT.snapshotRequired \| typeof LIVE_EVENT.refresh;` and use it for the `control` field at `:55`. Replace the two literal return values in `parseSseMessage()` (`:73`, `:76`) with the shared constants. Preserve all existing parsing, classification and recovery behavior. |
 | Tests | Import the contract tuple/constants when enumerating events. Keep a deliberate wire-compatibility assertion for the exact six names and order. Ensure listeners, hub output and route output still match. |
 
-Do not change `parseSseMessage` semantics. It currently distinguishes full snapshot payloads, revisioned data events and control events by payload shape; preserve that design.
+Do not change `parseSseMessage` semantics. It currently distinguishes full snapshot payloads, revisioned data events and control events by payload shape; preserve that design. The `live.ts` change is type/constant substitution only — no parsing or recovery behavior changes.
 
 ### 4.5 Historical interval selector: derive options directly
 
@@ -241,7 +243,7 @@ This fulfils program-plan WP 1d and architecture doc §10.C. No API or contract 
 Keep this as one bounded implementation assignment, but complete and validate each stage before proceeding to the next.
 
 1. **Preflight and complete inventory.** Verify actual branch/HEAD, working-tree state and all existing modifications. Preserve them — including untracked documentation files such as `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` and any uncommitted plan/doc-map changes. Run repository-wide searches for provider literals, `CE`/`PE` unions, activity transport unions, SSE event-name literals and interval arrays. Reconcile any additional actual consumer before editing; do not blindly trust the list in this plan if the checkout differs.
-2. **Provider identity leaf and compatibility exports.** Introduce `provider-identity.ts`, update provider/market/live/live-components/historical/snapshots modules, then typecheck the contracts package and workspace.
+2. **Provider identity leaf and compatibility exports.** Introduce `provider-identity.ts`, update provider/market/live/live-components/historical/snapshots modules and the WebUI `ProviderStatusView.id` type, then typecheck the contracts package and workspace.
 3. **Option type and activity transport.** Reuse `optionTypeSchema` / `OptionType` and `McpActivityTransport`; check all public imports and type-only dependency direction.
 4. **Activity filter options.** Derive `ActivityPanel` transport/status options from the shared schemas; keep the empty-value defaults and local tone mapping.
 5. **SSE event-name contract.** Add the tuple and derived constants, narrow `OutboundEvent.event`, then update hub, API route, WebUI alias and tests. Verify wire names and order are unchanged.
@@ -260,6 +262,7 @@ Do not combine the instrument-picker or MCP Operation-selector work into this as
 - In the same file, assert `providerSchema` remains the same schema alias as `providerIdSchema`.
 - Exercise representative provider fields in market provenance, live observations, historical records/requests and snapshot payloads to ensure parsing behavior has not changed.
 - Keep `ProviderStatusMap` and provider registry tests intact; verify two fixed keys and current status behavior.
+- Verify WebUI `ProviderStatusView.id` uses the shared `ProviderId` type (typecheck-level assertion) and that no duplicate `"UPSTOX" | "FYERS"` union remains in `lib/status.ts:34`; confirm the `providers` response shape and `App.tsx` fixed-key rendering are unchanged.
 - Review the dependency graph and confirm `provider-identity.ts` imports no provider/live/market module and no runtime cycle was introduced.
 
 ### 6.2 Option type and transport
@@ -281,7 +284,7 @@ Do not combine the instrument-picker or MCP Operation-selector work into this as
 
 ### 6.4 Historical selector
 
-- Add a **new** render-based assertion to `tests/web/historical.test.ts` (that file currently tests pure functions only and does not render the component). Follow the existing `tests/web/activity-panel.test.tsx` pattern, which calls the pure view with `renderToStaticMarkup` from `react-dom/server`. Verify every `candleIntervalSchema.options` value is present as an option.
+- Add a **new** render-based assertion to `tests/web/historical.test.ts` (that file currently tests pure functions only and does not render the component). `HistoricalPanel` uses React hooks, so render it with `renderToStaticMarkup(createElement(HistoricalPanel, {}))` from `react-dom/server` — do **not** invoke `HistoricalPanel()` directly. Verify every `candleIntervalSchema.options` value is present as an option.
 - Verify `30m` appears; retain the existing `historicalFocusToForm` valid/invalid interval tests.
 - Verify the default remains `1D` and existing historical request/config shapes are unchanged.
 
@@ -310,7 +313,7 @@ Report actual command output and pass/fail totals. Do not claim tests were run i
 
 Phase 1 is accepted only when:
 
-- No production duplicate provider identity enum remains in the reviewed contract modules.
+- No production duplicate provider identity enum remains in the reviewed contract modules, and WebUI `ProviderStatusView.id` uses the shared `ProviderId` type with no duplicate union.
 - No duplicate CE/PE schema or market-core type union remains in the reviewed target modules.
 - `ActivityTransport` is an alias to the shared contract type.
 - ActivityPanel transport/status filter options are derived from `mcpActivityTransportSchema`/`mcpActivityStatusSchema`; no hardcoded **backend-value** option literals (HTTP/STDIO or status values) remain in the component. The empty-value "Any transport"/"Any status" defaults are presentation-only and are retained per §4.6.
