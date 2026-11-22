@@ -153,6 +153,14 @@ export const providerStatusMapSchema = z.object({
   FYERS: providerStatusSchema
 });
 
+/** Complete envelope returned by GET /api/providers/status. providers is null when no registry/auth map is available. */
+export const providerStatusesResponseSchema = z.object({
+  providers: providerStatusMapSchema.nullable(),
+  localManagement: z.boolean(),
+  note: z.string()
+});
+export type ProviderStatusesResponse = z.infer<typeof providerStatusesResponseSchema>;
+
 // --- Authentication flow results ---
 export interface AuthStartResult {
   authorizationUrl: string;

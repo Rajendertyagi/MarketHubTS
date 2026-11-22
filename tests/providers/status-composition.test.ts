@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../../packages/config/src/index";
 import { defaultMigrationsFolder, openDatabase, runMigrations } from "../../packages/database/src/index";
 import {
-  emptyProviderStatus, providerStatusMapSchema,
+  emptyProviderStatus, providerStatusMapSchema, providerStatusesResponseSchema,
   type CredentialStore, type ProviderAdapter, type ProviderConfig, type ProviderId, type ProviderStatus
 } from "../../packages/contracts/src/index";
 import { MarketDataService, ProviderRegistry } from "../../packages/market-core/src/index";
@@ -127,6 +127,61 @@ describe("GET /api/providers/status composition", () => {
       // Fake adapter returned NOT_STARTED; the route must report the canonical STREAMING.
       expect(json.streamingState).toBe("STREAMING");
       expect(json.authState).toBe("AUTHENTICATED");
+    } finally { h.cleanup(); }
+  });
+});
+
+describe("provider status response envelope", () => {
+  const note = "Credential management and authentication must be performed locally on the application host.";
+
+  test("accepts the current valid response with a populated provider map", () => {
+    const providers = providerStatusMapSchema.parse({
+      UPSTOX: emptyProviderStatus("UPSTOX", true),
+      FYERS: emptyProviderStatus("FYERS", true)
+    });
+    expect(providerStatusesResponseSchema.safeParse({ providers, localManagement: true, note }).success).toBe(true);
+  });
+
+  test("accepts providers: null", () => {
+    expect(providerStatusesResponseSchema.safeParse({ providers: null, localManagement: true, note }).success).toBe(true);
+  });
+
+  test("rejects malformed, missing and wrong-typed fields", () => {
+    const valid = { providers: null, localManagement: true, note };
+    expect(providerStatusesResponseSchema.safeParse({ ...valid, localManagement: "yes" }).success).toBe(false);
+    expect(providerStatusesResponseSchema.safeParse({ ...valid, note: 42 }).success).toBe(false);
+    expect(providerStatusesResponseSchema.safeParse({ providers: null, note }).success).toBe(false); // missing localManagement
+    expect(providerStatusesResponseSchema.safeParse({ providers: null, localManagement: true }).success).toBe(false); // missing note
+    expect(providerStatusesResponseSchema.safeParse({ ...valid, providers: {} }).success).toBe(false); // empty map
+    expect(providerStatusesResponseSchema.safeParse({ ...valid, providers: { UPSTOX: {} } }).success).toBe(false); // malformed status
+    expect(providerStatusesResponseSchema.safeParse({ ...valid, providers: "none" }).success).toBe(false); // wrong type
+  });
+
+  test("route response validates with the shared envelope and exposes only non-secret fields", async () => {
+    const h = makeDeps();
+    try {
+      const res = await h.app.request("/api/providers/status");
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(providerStatusesResponseSchema.safeParse(json).success).toBe(true);
+      expect(Object.keys(json).sort()).toEqual(["localManagement", "note", "providers"]);
+      const statusKeys = [
+        "authState", "capabilities", "enabled", "error", "expiryKnown", "expiresAt",
+        "id", "lastErrorAt", "limits", "restrictions", "streamingState", "validatedAt"
+      ].sort();
+      expect(Object.keys(json.providers.UPSTOX).sort()).toEqual(statusKeys);
+      expect(Object.keys(json.providers.FYERS).sort()).toEqual(statusKeys);
+    } finally { h.cleanup(); }
+  });
+
+  test("composition still reports both fixed providers", async () => {
+    const h = makeDeps();
+    try {
+      const json = await (await h.app.request("/api/providers/status")).json();
+      expect(Object.keys(json.providers).sort()).toEqual(["FYERS", "UPSTOX"]);
+      expect(json.providers.UPSTOX.id).toBe("UPSTOX");
+      expect(json.providers.FYERS.id).toBe("FYERS");
+      expect(json.providers.FYERS.authState).toBe("NOT_CONFIGURED");
     } finally { h.cleanup(); }
   });
 });

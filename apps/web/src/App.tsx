@@ -1,13 +1,19 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet } from "@tanstack/react-router";
-import { fetchProvidersStatus, fetchSystemStatus, formatUptime, type ProviderStatusView } from "./lib/status";
+import type { ProviderStatusesResponse } from "@markethub/contracts";
+import { fetchProvidersStatus, fetchSystemStatus, formatUptime } from "./lib/status";
 import { StatusBadge, toneForState } from "./components/StatusBadge";
 import { LivePanel } from "./components/LivePanel";
 import { SubscriptionPanel } from "./components/SubscriptionPanel";
 import { HistoricalPanel } from "./components/HistoricalPanel";
 import { SnapshotPanel } from "./components/SnapshotPanel";
 import { ActivityPanel } from "./components/ActivityPanel";
+
+// Derive the view types from the shared response contract so the WebUI never
+// maintains a second, hand-written provider status shape.
+type ProviderStatusMapView = NonNullable<ProviderStatusesResponse["providers"]>;
+type ProviderStatusView = ProviderStatusMapView[keyof ProviderStatusMapView];
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -34,6 +40,17 @@ function ProviderRow({ status }: { status: ProviderStatusView }) {
       {status.error && <p className="mt-2 text-xs text-rose-300">{status.error}</p>}
       {status.restrictions.length > 0 && <p className="mt-1 text-xs text-amber-300">{status.restrictions.join("; ")}</p>}
     </li>
+  );
+}
+
+/** Renders every entry in the validated provider map by its own id, with no hardcoded provider names. */
+export function ProviderList({ providers }: { providers: ProviderStatusMapView }) {
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2">
+      {Object.values(providers).map((status) => (
+        <ProviderRow key={status.id} status={status} />
+      ))}
+    </ul>
   );
 }
 
@@ -111,6 +128,32 @@ function ProviderControls({ onChanged }: { onChanged: () => void }) {
   );
 }
 
+/** Pure presentation of the provider status content, kept separate from the query so it can be rendered without a QueryClient. */
+export function ProviderStatusContent({
+  providers, note, isError, onChanged
+}: {
+  providers: ProviderStatusMapView | null | undefined;
+  note?: string | undefined;
+  isError: boolean;
+  onChanged: () => void;
+}) {
+  return (
+    <>
+      {isError && <p className="text-sm text-rose-300">Unable to read provider status.</p>}
+      {!providers && !isError && <p className="text-sm text-slate-400">Loading provider status...</p>}
+      {providers && (
+        <>
+          <ProviderList providers={providers} />
+          <p className="mt-3 text-xs text-slate-400">
+            {note} No credentials are shown here.
+          </p>
+          <ProviderControls onChanged={onChanged} />
+        </>
+      )}
+    </>
+  );
+}
+
 function ProviderPanel() {
   const query = useQuery({
     queryKey: ["provider-status"],
@@ -118,27 +161,18 @@ function ProviderPanel() {
     refetchInterval: 10000,
     retry: 1
   });
-  const providers = query.data?.providers;
   return (
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-base font-semibold">Providers</h3>
         <button type="button" onClick={() => void query.refetch()} className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800">Refresh</button>
       </div>
-      {query.isError && <p className="text-sm text-rose-300">Unable to read provider status.</p>}
-      {!providers && !query.isError && <p className="text-sm text-slate-400">Loading provider status...</p>}
-      {providers && (
-        <>
-          <ul className="grid gap-3 sm:grid-cols-2">
-            <ProviderRow status={providers.UPSTOX} />
-            <ProviderRow status={providers.FYERS} />
-          </ul>
-          <p className="mt-3 text-xs text-slate-400">
-            {query.data?.note} No credentials are shown here.
-          </p>
-          <ProviderControls onChanged={() => void query.refetch()} />
-        </>
-      )}
+      <ProviderStatusContent
+        providers={query.data?.providers}
+        note={query.data?.note}
+        isError={query.isError}
+        onChanged={() => void query.refetch()}
+      />
     </section>
   );
 }

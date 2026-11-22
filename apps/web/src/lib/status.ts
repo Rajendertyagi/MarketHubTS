@@ -1,4 +1,4 @@
-import { systemStatusSchema, type ProviderId, type SystemStatus } from "@markethub/contracts";
+import { providerStatusesResponseSchema, systemStatusSchema, type ProviderStatusesResponse, type SystemStatus } from "@markethub/contracts";
 
 function extractErrorMessage(payload: unknown, status: number): string {
   if (payload && typeof payload === "object" && "message" in payload) {
@@ -30,28 +30,15 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   return parsed.data;
 }
 
-export interface ProviderStatusView {
-  id: ProviderId;
-  enabled: boolean;
-  authState: string;
-  streamingState: string;
-  validatedAt: string | null;
-  expiresAt: string | null;
-  expiryKnown: boolean;
-  restrictions: string[];
-  error: string | null;
-}
-
-export interface ProvidersStatusResponse {
-  providers: Record<"UPSTOX" | "FYERS", ProviderStatusView> | null;
-  localManagement: boolean;
-  note: string;
-}
-
-export async function fetchProvidersStatus(): Promise<ProvidersStatusResponse> {
+export async function fetchProvidersStatus(): Promise<ProviderStatusesResponse> {
   const res = await fetch("/api/providers/status", { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Provider status request failed (${res.status})`);
-  return (await res.json()) as ProvidersStatusResponse;
+  const json: unknown = await res.json().catch(() => null);
+  const parsed = providerStatusesResponseSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error("Received invalid provider status response from backend");
+  }
+  return parsed.data;
 }
 
 export function formatUptime(ms: number): string {

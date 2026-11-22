@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import {
   apiErrorSchema,
+  providerStatusesResponseSchema,
   providerStatusMapSchema,
   type CredentialStore,
   type ProviderConfig,
@@ -47,11 +48,11 @@ export function composeProviderStatuses(deps: ProviderRouteDependencies) {
 /** Registers provider routes on the existing app. No separate listener or security framework. */
 export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencies): void {  // Read-only provider diagnostics. Safe for LAN clients; never includes credentials.
   app.get("/api/providers/status", (c) => {
-    return c.json({
+    return c.json(providerStatusesResponseSchema.parse({
       providers: composeProviderStatuses(deps),
       localManagement: true,
       note: "Credential management and authentication must be performed locally on the application host."
-    });
+    }));
   });
 
   // Credential-changing routes are local-owner only (single simple peer check).
