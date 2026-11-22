@@ -3,12 +3,16 @@ import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/serv
 import { afterEach, describe, expect, test } from "bun:test";
 import { subscriptionStateViewSchema, type SubscriptionStateView } from "../../packages/contracts/src/index";
 import { SubscriptionPanel } from "../../apps/web/src/components/SubscriptionPanel";
+import { useLiveStore } from "../../apps/web/src/store/live-store";
 import {
   fetchSubscriptions, replaceSubscriptions, SubscriptionHttpError
 } from "../../apps/web/src/lib/subscriptions";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  useLiveStore.getState().reset();
+});
 
 function view(generation: number, lastError: string | null = null): SubscriptionStateView {
   return {
@@ -18,6 +22,20 @@ function view(generation: number, lastError: string | null = null): Subscription
       generation, connectionState: "NOT_STARTED", resolutions: [], lastError
     }
   };
+}
+
+function renderPanelWith(subscriptionView: SubscriptionStateView): string {
+  // Zustand 5 uses getInitialState() as the useSyncExternalStore server
+  // snapshot, so static rendering reads the initial state rather than the
+  // live state. Seed it temporarily and restore it afterwards.
+  const initial = useLiveStore.getInitialState();
+  const previous = initial.subscriptions;
+  initial.subscriptions = subscriptionView;
+  try {
+    return renderToStaticMarkup(createElement(SubscriptionPanel, {}) as never);
+  } finally {
+    initial.subscriptions = previous;
+  }
 }
 
 function fakeFetch(handler: (url: string, init?: RequestInit) => { status: number; body: unknown }) {
@@ -131,5 +149,110 @@ describe("subscription client", () => {
 
   test("manual canonical-ID entry rejects empty IDs at the request schema", async () => {
     await expect(replaceSubscriptions([{ canonicalId: "", enabled: true }])).rejects.toBeDefined();
+  });
+});
+
+describe("subscription runtime presentation", () => {
+  test("a populated runtimes map renders each provider under its own key", () => {
+    const subscriptionView = view(1);
+    subscriptionView.runtimes = {
+      UPSTOX: {
+        generation: 1, connectionState: "STREAMING", resolutions: [], lastError: "upstream-a-error"
+      },
+      FYERS: {
+        generation: 1, connectionState: "DEGRADED", resolutions: [], lastError: "upstream-b-error"
+      }
+    };
+    const html = renderPanelWith(subscriptionView);
+    expect(html).toContain("UPSTOX");
+    expect(html).toContain("FYERS");
+    expect(html).toContain("upstream-a-error");
+    expect(html).toContain("upstream-b-error");
+    expect(html).toContain("STREAMING");
+    expect(html).toContain("DEGRADED");
+    expect(html.match(/Connection:/g)?.length).toBe(2);
+  });
+
+  test("a legacy payload without runtimes renders the runtime once", () => {
+    const html = renderPanelWith(view(1, "legacy-only-error"));
+    expect(html).toContain("legacy-only-error");
+    expect(html.match(/Connection:/g)?.length).toBe(1);
+  });
+
+  test("runtimes: {} falls back to the legacy runtime", () => {
+    const subscriptionView = view(1, "legacy-empty-error");
+    subscriptionView.runtimes = {};
+    const html = renderPanelWith(subscriptionView);
+    expect(html).toContain("legacy-empty-error");
+    expect(html.match(/Connection:/g)?.length).toBe(1);
+  });
+
+  test("a populated runtimes map does not render the legacy runtime alias again", () => {
+    const subscriptionView = view(1, "legacy-alias-error");
+    subscriptionView.runtimes = {
+      UPSTOX: {
+        generation: 1, connectionState: "STREAMING", resolutions: [], lastError: "runtime-upstox"
+      },
+      FYERS: {
+        generation: 1, connectionState: "STREAMING", resolutions: [], lastError: "runtime-fyers"
+      }
+    };
+    const html = renderPanelWith(subscriptionView);
+    expect(html).not.toContain("legacy-alias-error");
+    expect(html.match(/Connection:/g)?.length).toBe(2);
+  });
+
+  test("all four capability statuses render distinctly", () => {
+    const subscriptionView = view(1);
+    subscriptionView.runtime.capabilities = [
+      { component: "quote", provider: "UPSTOX", status: "SUPPORTED" },
+      { component: "depth", provider: "UPSTOX", status: "UNSUPPORTED" },
+      { component: "derivatives", provider: "UPSTOX", status: "LIMITED" },
+      { component: "quote", provider: "FYERS", status: "UNAVAILABLE" }
+    ];
+    const html = renderPanelWith(subscriptionView);
+    for (const status of ["SUPPORTED", "UNSUPPORTED", "LIMITED", "UNAVAILABLE"]) {
+      expect(html).toContain(status);
+    }
+    // Distinct tones: ok / error / warn / neutral.
+    expect(html).toContain("bg-emerald-500/15");
+    expect(html).toContain("bg-rose-500/15");
+    expect(html).toContain("bg-amber-500/15");
+    expect(html).toContain("bg-slate-500/15");
+  });
+
+  test("fields, levels, reason and entitlementUnverified render only when supplied", () => {
+    const withDetails = view(1);
+    withDetails.runtime.capabilities = [{
+      component: "quote", provider: "UPSTOX", status: "LIMITED",
+      fields: ["ltp", "oi"], levels: 5, reason: "plan limit", entitlementUnverified: true
+    }];
+    const detailed = renderPanelWith(withDetails);
+    expect(detailed).toContain("ltp");
+    expect(detailed).toContain("Levels: 5");
+    expect(detailed).toContain("plan limit");
+    expect(detailed).toContain("Entitlement not verified");
+
+    const withoutDetails = view(1);
+    withoutDetails.runtime.capabilities = [
+      { component: "quote", provider: "UPSTOX", status: "SUPPORTED" }
+    ];
+    const plain = renderPanelWith(withoutDetails);
+    expect(plain).not.toContain("Fields:");
+    expect(plain).not.toContain("Levels:");
+    expect(plain).not.toContain("Reason:");
+    expect(plain).not.toContain("Entitlement not verified");
+  });
+
+  test("absent or empty capabilities render a neutral no-report state", () => {
+    const absent = renderPanelWith(view(1));
+    expect(absent).toContain("No runtime capability report");
+    expect(absent).not.toContain("SUPPORTED");
+
+    const emptyView = view(1);
+    emptyView.runtime.capabilities = [];
+    const empty = renderPanelWith(emptyView);
+    expect(empty).toContain("No runtime capability report");
+    expect(empty).not.toContain("SUPPORTED");
   });
 });

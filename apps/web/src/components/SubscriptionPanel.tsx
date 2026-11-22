@@ -6,6 +6,7 @@ import {
 import { useLiveStore, type SubscriptionErrorState } from "../store/live-store";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
+import { SubscriptionRuntimeView } from "./SubscriptionRuntimeView";
 
 const ERROR_LABELS: Record<SubscriptionErrorKind | "runtime", string> = {
   forbidden: "Local-owner only — subscription changes must be made on the application host.",
@@ -39,6 +40,13 @@ export function SubscriptionPanel() {
   }, [setSubscriptions, setError]);
 
   const selections: SubscriptionSelection[] = view?.selections ?? [];
+
+  // Prefer the per-provider runtime map when it is populated. The legacy
+  // `runtime` field is the coordinator's first runtime, so rendering it in
+  // addition to a populated `runtimes` map would duplicate that entry.
+  const runtimeEntries = view?.runtimes && Object.keys(view.runtimes).length > 0
+    ? Object.entries(view.runtimes)
+    : null;
 
   const commit = async (next: SubscriptionSelection[]) => {
     setBusy(true);
@@ -131,8 +139,15 @@ export function SubscriptionPanel() {
           </div>
           <div>
             <h4 className="mb-2 text-sm font-semibold text-slate-200">Runtime</h4>
-            <p className="text-xs text-slate-400">Connection: {view.runtime.connectionState.replaceAll("_", " ")}</p>
-            {view.runtime.lastError && <p className="mt-1 text-xs text-amber-300">{view.runtime.lastError}</p>}
+            {runtimeEntries ? (
+              <div className="space-y-3">
+                {runtimeEntries.map(([providerKey, runtime]) => (
+                  <SubscriptionRuntimeView key={providerKey} runtime={runtime} providerKey={providerKey} />
+                ))}
+              </div>
+            ) : (
+              <SubscriptionRuntimeView runtime={view.runtime} />
+            )}
           </div>
         </div>
       )}
