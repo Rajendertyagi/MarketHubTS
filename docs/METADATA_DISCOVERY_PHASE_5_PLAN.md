@@ -1,9 +1,10 @@
 # Phase 5 — Provider and Capability Extensibility
 
-> **Status:** Proposed implementation plan only. No application code, tests, contracts, API, configuration, migration, or repository files were changed to create this plan. Implementation requires separate authorization under `docs/PROJECT_MANAGER_PROTOCOL.md`.
+> **Status:** Active implementation plan. WP 5A is complete and published; WP 5B, WP 5C.1 and WP 5C.2 are authorized for sequential autonomous completion. Implementation follows `docs/PROJECT_MANAGER_PROTOCOL.md`.
 >
 > **Repository:** `Rajendertyagi/MarketHubTS`
-> **Inspected baseline:** `develop` at `729723f09114e6a52c0e97cc4dafb7d675865ed5` (2026-11-23)
+> **Original inspected baseline:** `develop` at `729723f09114e6a52c0e97cc4dafb7d675865ed5` (2026-11-23)
+> **Current baseline:** `develop` at `2df616df5628e2b6405349c998947a95737548d4` (WP 5A complete)
 > **Governing requirement:** AD-025, `docs/METADATA_AND_CAPABILITY_DISCOVERY.md`
 > **Related roadmap:** `docs/METADATA_DISCOVERY_IMPLEMENTATION_PLAN.md` §7 and `docs/IMPLEMENTATION_ROADMAP.md` §4.1
 
@@ -135,7 +136,7 @@ export type ProviderStatusesResponse = z.infer<typeof providerStatusesResponseSc
 
 Export its inferred type from `provider.ts`; the existing `index.ts` barrel already re-exports `./provider`, so no extra export list edit is needed.
 
-The API route should validate the complete envelope before returning it. The WebUI client should parse the response with the same shared schema and reject malformed payloads with a stable, user-safe error. Remove the narrower duplicated `ProviderStatusView`/`ProvidersStatusResponse` interfaces once all consumers use the shared type. A `providers: null` response remains valid and is handled by the existing UI empty state — no behavior change.
+The API route should validate the complete envelope before returning it. The WebUI client should parse the response with the same shared schema and reject malformed payloads with a stable, user-safe error. Remove the narrower duplicated `ProviderStatusView`/`ProvidersStatusResponse` interfaces once all consumers use the shared type. A `providers: null` response remains valid and is rendered as an explicit "Provider status is currently unavailable." state (distinct from the `undefined` loading state) — implemented in WP 5A.
 
 Do not change the endpoint path, HTTP method, status-map keys or response field names.
 
@@ -181,7 +182,7 @@ Keep the explicit Upstox token and FYERS OAuth/config flows. Do not introduce a 
 
 Implementation order: **5A → 5B → 5C**. Each work package must remain bounded and pass its own tests before the next begins.
 
-### WP 5A — Validated, enumerable provider status
+### WP 5A — Validated, enumerable provider status — COMPLETE (published at `2df616d`)
 
 1. Add the provider-status response envelope schema/type to `packages/contracts/src/provider.ts`.
 2. Validate the complete response envelope in `apps/api/src/provider-routes.ts` while preserving the existing response shape and LAN/read-only behavior.
@@ -190,6 +191,8 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 5. Preserve the current provider status polling interval, manual refresh, loading/error behavior, and provider management controls.
 
 **WP 5A exit:** no frontend access to `providers.UPSTOX` or `providers.FYERS` for list rendering; API and WebUI validate the same response contract; endpoint JSON shape remains unchanged.
+
+**WP 5A completion evidence:** commits `f7b3dcf` (implementation), `dfd8029` (nit fixes + focused component extraction), `2df616d` (null-vs-undefined state fix). Files: `packages/contracts/src/provider.ts`, `apps/api/src/provider-routes.ts`, `apps/web/src/lib/status.ts`, `apps/web/src/App.tsx`, new `apps/web/src/components/ProviderStatus.tsx`, `tests/providers/status-composition.test.ts`, new `tests/web/provider-status.test.ts`. Focused tests 10 pass / 0 fail; full suite 872 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP (implementation), NEEDS FIX (encoding regression from a tooling edit), KEEP (after encoding fix), KEEP (after null-state fix). All acceptance criteria met; no remaining limitations.
 
 ### WP 5B — Provider-wide capabilities and limits
 
@@ -352,7 +355,7 @@ No package dependency is expected. `apps/web` already depends on `@markethub/con
 ### 9.2 Provider WebUI (`tests/web/provider-status.test.ts`)
 
 - Provider list renders all entries derived from the validated map; a regression test must fail if rendering goes back to named `UPSTOX`/`FYERS` property access.
-- `providers: null` renders the existing honest empty state without throwing.
+- `providers: null` renders the explicit "Provider status is currently unavailable." state (not loading); `undefined` still renders loading.
 - Capability rendering covers each existing state and source, optional notes/dates, empty arrays and a documentation-derived numeric limit with `UNKNOWN` state (source-honesty).
 - Authentication and streaming status continue to display independently.
 
