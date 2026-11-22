@@ -1,6 +1,6 @@
 # Phase 5 — Provider and Capability Extensibility
 
-> **Status:** Active implementation plan. WP 5A is complete and published; WP 5B, WP 5C.1 and WP 5C.2 are authorized for sequential autonomous completion. Implementation follows `docs/PROJECT_MANAGER_PROTOCOL.md`.
+> **Status:** IMPLEMENTED AND PUBLISHED on `develop`. All four work packages (WP 5A, WP 5B, WP 5C.1, WP 5C.2) are complete with independent audit KEEP verdicts and full verification evidence recorded in §4. Implementation followed `docs/PROJECT_MANAGER_PROTOCOL.md`.
 >
 > **Repository:** `Rajendertyagi/MarketHubTS`
 > **Original inspected baseline:** `develop` at `729723f09114e6a52c0e97cc4dafb7d675865ed5` (2026-11-23)
@@ -217,7 +217,7 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 
 **WP 5C.1 completion evidence:** commits `e19b4b8` (implementation), `16f2b88` (audit fixes). Files: `apps/web/src/components/SubscriptionPanel.tsx`, new `apps/web/src/components/SubscriptionRuntimeView.tsx`, `tests/web/subscriptions.test.ts`. Focused tests 17 pass / 0 fail; full suite 892 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: KEEP with 4 minor/nit findings → all fixed → KEEP with no outstanding findings. All acceptance criteria met; no remaining limitations.
 
-### WP 5C.2 — Add safe, bounded automatic refresh
+### WP 5C.2 — Add safe, bounded automatic refresh — COMPLETE (published at `0712cb8`)
 
 1. Add bounded 10-second refresh of the existing subscription-status GET route so terminal runtime capability changes can appear without a page reload or new subscription write (§3.5).
 2. Prefer existing TanStack Query functionality over a custom polling framework. If TanStack Query is used, its cache/update path must treat the PUT-returned view as authoritative and must not bypass the serialized write/generation guard in `lib/subscriptions.ts`.
@@ -225,6 +225,8 @@ Implementation order: **5A → 5B → 5C**. Each work package must remain bounde
 4. Extend `fetchSubscriptions()` with an optional `AbortSignal` (§3.5).
 
 **WP 5C.2 exit:** runtime capability changes appear without reload; polling never races with writes, never overwrites newer data, cancels on unmount, and degrades honestly on failure. This task is separately authorized and independently audited from 5C.1.
+
+**WP 5C.2 completion evidence:** commits `1dde388` (implementation), `0712cb8` (audit fixes). Files: `apps/web/src/components/SubscriptionPanel.tsx`, new `apps/web/src/lib/subscription-poller.ts`, `apps/web/src/lib/subscriptions.ts`, `tests/web/subscriptions.test.ts`. Focused tests 33 pass / 0 fail; full suite 908 pass / 0 fail; typecheck/build/diff-check clean. Independent audits on `opencode/iceman-free`: NEEDS FIX (2 majors: unguarded mount GET, missing resume-after-write tests; 2 minors; 1 nit) → all fixed → NEEDS FIX (1 minor liveness edge case) → fixed → KEEP with no outstanding findings. Mandatory race test (older GET resolving after successful PUT) and liveness test (never-settling aborted fetch) both present and passing. All acceptance criteria met; no remaining limitations.
 
 ---
 
