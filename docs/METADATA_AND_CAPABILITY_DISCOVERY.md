@@ -13,7 +13,7 @@ When a new MCP operation, provider, capability, indicator, enum value or support
 
 This applies to implemented features, current WebUI forms and selectors, and all future modules — MCP, REST/SSE, providers, market data, indicators, alerts, scanners and configuration. "Centralize ownership" does **not** mean centralize everything: presentation labels, styles, layout and interaction-only state remain frontend-owned (§2.E).
 
-This is an architecture rule, not a claim that discovery is implemented today. Section 6 records the verified current gaps; section 8 records future acceptance criteria.
+This is an architecture rule. Discovery **is implemented** for the delivered increments (Phases 1–3 and 5: shared-contract options, instrument picker, MCP operation descriptors, provider status/capability rendering); Section 6 records the remaining verified gaps and Section 8 records future acceptance criteria.
 
 ### 1.1 Implemented today vs proposed
 
@@ -110,9 +110,9 @@ Distinguish three things:
 
 ## 5. Dynamic WebUI components
 
-Supported reusable patterns for future implementation:
+Supported reusable patterns. The instrument, metadata-dropdown, MCP-operation and provider-status patterns below are **implemented** (Phases 1–3 and 5); schema-informed forms remain a future pattern.
 
-- **Searchable/autocomplete instrument selector** — backed by `/api/catalog/search`; replaces manual canonical-ID typing.
+- **Searchable/autocomplete instrument selector** — backed by `/api/catalog/search`; replaces manual canonical-ID typing (implemented in Phase 3 WP 3b–3c).
 - **Metadata-driven dropdown/select** — options derived from a shared Zod enum or a read-only metadata endpoint.
 - **Provider and capability selector** — when provider identity becomes dynamically extensible, iterate backend-provided provider descriptors rather than a hardcoded array. **Today** `ProviderId`/`ProviderStatusMap`/`getStatuses()` are fixed around `UPSTOX`/`FYERS` (§2.B), so a provider selector must reflect that fixed contract honestly; do not claim dynamic discovery until the contract and registry support it.
 - **MCP operation selector** — populated from the registration-derived descriptors for tools, resources and prompts (§4); operation type comes from the descriptor, not a second list.
@@ -171,13 +171,10 @@ This initiative does not change M6-C acceptance, M6-D/E/B4 ownership, or reopen 
 
 For each candidate: current definition → owner → duplicators/consumers → existing solution → new API/refactor needed → dependency risk → future-addition path. "Centralize" means one owning definition, not one universal registry.
 
-### A. Provider identity — high priority
-- **Current:** `providerIdSchema = z.enum(["UPSTOX","FYERS"])` at `packages/contracts/src/provider.ts:5`; `ProviderId` derived at `:6`. `ProviderStatusMap` has fixed keys (`provider.ts:113–116`, Zod mirror `:150–153`); `ProviderRegistry.getStatuses()` hardcodes both (`packages/market-core/src/provider.ts:38–71`).
-- **Duplicators:** `market.ts:32` (`providerSchema`, a second exported name), `live.ts:12` (private `liveProviderIdSchema`), `live-components.ts:191`, `historical.ts:53,78,136,175`, `snapshots.ts:83,110,124`. WebUI `status.ts:33–49` uses literal unions and casts without Zod validation; `App.tsx:133–134` renders `providers.UPSTOX`/`providers.FYERS` explicitly.
-- **Existing solution:** `providerIdSchema` is canonical but only `provider.ts:136` uses it as a runtime validator; no other contracts file imports it.
-- **Dependency risk:** `provider.ts:2` imports `providerConnectionStateSchema` from `live.ts` (value); `live.ts:2` imports `ProviderId` type-only and inlines its own enum specifically to keep the runtime graph acyclic (`live.ts:9–12`). Moving identity into `live.ts` would create a cycle; moving into `provider.ts` is safe only if consumers keep `import type`.
-- **Decision:** introduce a dependency-light **leaf identity module** in `@markethub/contracts` with the value schema and no value imports from `live.ts`/`market.ts`/`provider.ts`; re-export from `index.ts` preserving `providerIdSchema`/`ProviderId`/`providerSchema` names. Consumers import the value schema where validation is needed and `import type` elsewhere. Keep `live.ts:12` local only if the leaf module cannot be introduced without a cycle — document the exception.
-- **Provider status response:** plan a shared `ProviderStatusMap` response that the WebUI can **iterate** (array or validated record) instead of accessing fixed keys; validate with `providerStatusMapSchema` in `lib/status.ts` (currently a raw cast). Do **not** claim dynamic provider extensibility while `ProviderId`/`ProviderStatusMap`/`getStatuses()` remain fixed to UPSTOX/FYERS. Provider-specific auth workflows stay custom — no universal credential-form renderer.
+### A. Provider identity — resolved for Phases 1 and 5; extensibility remains out of scope
+- **Resolved (Phase 1):** `providerIdSchema` is owned by the dependency-light leaf module `packages/contracts/src/provider-identity.ts` and re-exported from `provider.ts`/`index.ts`; the duplicate WebUI `ProviderStatusView.id` union was removed in favor of the shared `ProviderId` type. The historical duplicators listed in the original inventory (`market.ts`, `live.ts`, `live-components.ts`, `historical.ts`, `snapshots.ts`) were migrated to the leaf schema; the `live.ts` local exception was retained only where needed to keep the runtime import graph acyclic. See the Phase 1 plan for the historical baseline.
+- **Resolved (Phase 5):** the WebUI no longer casts the provider-status response or renders `providers.UPSTOX`/`providers.FYERS` by fixed key. `fetchProvidersStatus()` validates the shared `providerStatusesResponseSchema` (which wraps `providerStatusMapSchema.nullable()`), and the Providers panel iterates the validated map by `status.id`. Provider-wide capabilities/limits and per-provider runtime capabilities are rendered from backend records with no frontend inventory. See the Phase 5 plan §4 for evidence.
+- **Remaining limitation (not implemented):** `providerIdSchema` is still `z.enum(["UPSTOX","FYERS"])`, `ProviderStatusMap` keeps fixed keys, and `ProviderRegistry.getStatuses()` returns that fixed two-key map. Provider registration is **not** dynamically extensible; adding a provider still requires an explicit contract, registry, adapter and application integration change. Do not claim dynamic provider discovery or live provider verification. Provider-specific auth workflows remain custom — no universal credential-form renderer.
 
 ### B. Shared SSE event definitions — high priority
 - **Current:** five `z.literal` payload types in `packages/contracts/src/live.ts:178–209` (`item-updated`, `item-removed`, `provider-connection-changed`, `snapshot-required`, `refresh`); **no payload schema for `snapshot`** (transport-only, validated by `liveSnapshotSchema` at `:170–175`).

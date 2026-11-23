@@ -29,7 +29,7 @@
 1. **First implementation milestone** — Phase 1 shared-contract consistency + Phase 3 WP 3a (historical interval selector from `candleIntervalSchema`).
 2. Phase 3 WP 3b–3c — reusable instrument picker using existing `GET /api/catalog/search` — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12).
 3. Phase 2 — MCP Activity Operation selector, after the descriptor-delivery decision (WP 2b) — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12).
-4. Phases 4–6 as their prerequisites clear; Phase 7 last.
+4. Phase 4 (blocked on catalog population) and Phase 6 as their prerequisites clear; Phase 7 last. Phase 5 is complete and published.
 
 ## 2. Phase 0 — Architecture & contract design
 
@@ -37,7 +37,7 @@
 
 **Status:** documentation/protocol and read-only inventory are **done** ([architecture doc](METADATA_AND_CAPABILITY_DISCOVERY.md) §6, §10). Remaining work is design validation only.
 
-**Work packages:**
+**Work packages (historical Phase 0 design decisions — the decisions below were made and implemented in Phases 1, 2 and 5; see §12 status):**
 - **0a — Provider identity leaf module.** Decide the dependency-light module in `@markethub/contracts` holding the value schema with no value imports from `live.ts`/`market.ts`/`provider.ts`; preserve `providerIdSchema`/`ProviderId`/`providerSchema` exports; document the `live.ts:12` cycle-avoidance exception if retained.
 - **0b — SSE event contract.** Decide one `as const` tuple (`LIVE_EVENT_NAMES`) including `snapshot` as transport-only; no Zod `.options`/`.shape` reflection; preserve wire behavior.
 - **0c — Provider-status response.** Decide an iterable, schema-validated response shape replacing fixed-key access and the WebUI raw cast.
