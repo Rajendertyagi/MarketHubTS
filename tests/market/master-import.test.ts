@@ -17,8 +17,8 @@ describe("WP4A provider master parsers", () => {
   test("Upstox BOD fixture: in-scope stock/index options and required underlyings only", () => {
     const { batch, reconciliation, report } = buildUpstoxImport(upstoxRows, OPTS);
     expect(report.rowsSeen).toBe(upstoxRows.length);
-    expect(report.inScopeUnderlyings).toBe(2);
-    expect(report.inScopeOptions).toBe(2);
+    expect(report.inScopeUnderlyings).toBe(4); // NSE EQ/INDEX + BSE EQ/INDEX
+    expect(report.inScopeOptions).toBe(4); // NSE CE/PE + BSE CE/PE
     expect(report.skippedOutOfScope).toBe(3); // FUTSTK, currency, commodity
     expect(report.unresolvedUnderlyings).toEqual([]);
     expect(batch.completeness).toBe("COMPLETE");
@@ -42,12 +42,27 @@ describe("WP4A provider master parsers", () => {
     expect(ceMap.status).toBe("ACTIVE");
     expect(reconciliation.activeNativeIdentifiers.has("NSE_FO|REL-CE-1")).toBe(true);
     expect(reconciliation.activeNativeIdentifiers.has("NSE_FO|REL-FUT-1")).toBe(false);
+
+    // BSE scopes are represented with the correct exchange, provider segment and category.
+    const bseStock = batch.instruments.find((i) => i.canonicalSymbol === "TCS" && i.derivative?.optionType === "CE")!;
+    expect(bseStock.exchange).toBe("BSE");
+    expect(bseStock.instrumentCategory).toBe("STOCK_OPTION");
+    expect(bseStock.derivative?.expiryDate).toBe("2026-12-29");
+    const bseIndex = batch.instruments.find((i) => i.canonicalSymbol === "SENSEX" && i.derivative?.optionType === "PE")!;
+    expect(bseIndex.exchange).toBe("BSE");
+    expect(bseIndex.instrumentCategory).toBe("INDEX_OPTION");
+    const bseStockMap = batch.mappings.find((m) => m.nativeIdentifier === "BSE_FO|TCS-CE-1")!;
+    expect(bseStockMap).toMatchObject({ provider: "UPSTOX", exchange: "BSE", segment: "BSE_FO", status: "ACTIVE" });
+    const bseUnderlyingMap = batch.mappings.find((m) => m.nativeIdentifier === "BSE_EQ|INE467B01029")!;
+    expect(bseUnderlyingMap).toMatchObject({ exchange: "BSE", segment: "BSE_EQ", status: "ACTIVE" });
+    expect(reconciliation.activeNativeIdentifiers.has("BSE_FO|TCS-CE-1")).toBe(true);
+    expect(reconciliation.coverage.some((t) => t.exchange === "BSE" && t.segment === "BSE_FO")).toBe(true);
   });
 
   test("FYERS fixture: symTicker native ID, fyToken metadata, epoch-seconds expiry, inactive status", () => {
     const { batch, reconciliation, report } = buildFyersImport(fyersFiles, OPTS);
-    expect(report.inScopeUnderlyings).toBe(2); // only referenced underlyings retained
-    expect(report.inScopeOptions).toBe(3); // CE, PE and one inactive PE
+    expect(report.inScopeUnderlyings).toBe(4); // NSE + BSE referenced underlyings only
+    expect(report.inScopeOptions).toBe(5); // NSE CE/PE + inactive PE + BSE CE/PE
     expect(report.skippedOutOfScope).toBeGreaterThan(0); // unused CM row + FO future
 
     const ce = batch.instruments.find((i) => i.canonicalSymbol === "RELIANCE" && i.derivative?.optionType === "CE")!;
@@ -67,6 +82,20 @@ describe("WP4A provider master parsers", () => {
     expect(inactive.status).toBe("INACTIVE");
     expect(reconciliation.activeNativeIdentifiers.has("NSE:RELIANCE26DEC3100PE")).toBe(false);
     expect(reconciliation.activeNativeIdentifiers.has("NSE:RELIANCE26DEC3000CE")).toBe(true);
+
+    // BSE CM/FO scopes parse with the correct exchange, segment and category.
+    const bseStock = batch.instruments.find((i) => i.canonicalSymbol === "TCS" && i.derivative?.optionType === "CE")!;
+    expect(bseStock.exchange).toBe("BSE");
+    expect(bseStock.instrumentCategory).toBe("STOCK_OPTION");
+    const bseIndex = batch.instruments.find((i) => i.canonicalSymbol === "SENSEX" && i.derivative?.optionType === "PE")!;
+    expect(bseIndex.exchange).toBe("BSE");
+    expect(bseIndex.instrumentCategory).toBe("INDEX_OPTION");
+    const bseMap = batch.mappings.find((m) => m.nativeIdentifier === "BSE:TCS26DEC4000CE")!;
+    expect(bseMap).toMatchObject({ provider: "FYERS", exchange: "BSE", segment: "BSE_FO", status: "ACTIVE" });
+    expect(bseMap.nativeIdentifier).not.toContain("1011270223158600"); // symTicker, not fyToken
+    expect(bseMap.sourceMeta?.fyToken).toBe("1011270223158600");
+    expect(reconciliation.activeNativeIdentifiers.has("BSE:TCS26DEC4000CE")).toBe(true);
+    expect(reconciliation.coverage.some((t) => t.exchange === "BSE" && t.segment === "BSE_CM")).toBe(true);
   });
 
   test("FYERS unresolved underFyTok is reported and never guessed from underSym", () => {
@@ -115,8 +144,8 @@ describe("WP4A provider master parsers", () => {
   test("dry-run reports counts and issues without DB writes", () => {
     const up = dryRunUpstoxMaster(upstoxRows, OPTS);
     const fy = dryRunFyersMaster(fyersFiles, OPTS);
-    expect(up.inScopeOptions).toBe(2);
-    expect(fy.inScopeOptions).toBe(3);
+    expect(up.inScopeOptions).toBe(4);
+    expect(fy.inScopeOptions).toBe(5);
     expect(up.unresolvedUnderlyings).toEqual([]);
     expect(fy.duplicateIdentities).toEqual([]);
     expect(fy.mappingConflicts).toEqual([]);

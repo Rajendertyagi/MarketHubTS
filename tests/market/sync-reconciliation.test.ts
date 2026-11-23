@@ -27,8 +27,18 @@ function clone<T>(value: T): T {
 }
 
 function fyersWithLotSize(lotSize: number) {
+  return fyersWithField("lotSize", lotSize);
+}
+
+/** Mutate the raw FYERS option row that drives a given shared derivative field. */
+function fyersWithField(field: string, value: unknown) {
   const files = clone(fyersFiles) as any;
-  files.NSE_FO["NSE:RELIANCE26DEC3000CE"].minLotSize = lotSize;
+  const row = files.NSE_FO["NSE:RELIANCE26DEC3000CE"];
+  if (field === "lotSize") row.minLotSize = value;
+  else if (field === "tickSize") row.tickSize = value;
+  else if (field === "quantityFreeze") row.qtyFreeze = String(value);
+  else if (field === "contractObservedAt") row.lastUpdate = value; // YYYY-MM-DD
+  // contractSource is provider-owned (FYERS_SYMBOL_MASTER); no raw field to mutate.
   return files;
 }
 
@@ -138,6 +148,63 @@ describe("WP4A shared-field conflicts and status", () => {
   });
 });
 
+describe("WP4A shared-field coverage (all plan-enumerated fields)", () => {
+  const cases = [
+    { field: "lotSize", raw: 260, providerValue: 260, canonicalValue: 250 },
+    { field: "tickSize", raw: 0.1, providerValue: 0.1, canonicalValue: 0.05 },
+    { field: "quantityFreeze", raw: 12000, providerValue: 12000, canonicalValue: 10000 },
+    { field: "contractSource", raw: undefined, providerValue: "FYERS_SYMBOL_MASTER", canonicalValue: "UPSTOX_BOD_MASTER" },
+    { field: "contractObservedAt", raw: "2026-11-22", providerValue: "2026-11-22T00:00:00.000Z", canonicalValue: "2026-11-24T06:00:00.000Z" }
+  ] as const;
+
+  for (const c of cases) {
+    test(`${c.field}: canonical preserved, deterministic WARNING, provider-only sourceMeta, no repeat`, async () => {
+      const { dir, handle, repo, sync } = setup();
+      try {
+        const up = buildUpstoxImport(upstoxRows, OPTS);
+        const fy = buildFyersImport(fyersWithField(c.field, c.raw), OPTS);
+        expect((await sync.applyBatch(up.batch)).status).toBe("COMPLETED");
+
+        const first = await sync.applyBatch(fy.batch);
+        const warnings = first.conflicts.filter(
+          (x) => x.type === DERIVATIVE_SHARED_FIELD_CONFLICT &&
+            (x.details as any)?.field === c.field &&
+            x.nativeIdentifier === "NSE:RELIANCE26DEC3000CE"
+        );
+        expect(warnings.length).toBe(1);
+        const warning = warnings[0]!;
+        expect(warning.severity).toBe("WARNING");
+        expect(warning.provider).toBe("FYERS");
+        expect(warning.nativeIdentifier).toBe("NSE:RELIANCE26DEC3000CE");
+        expect((warning.details as any).canonicalValue).toBe(c.canonicalValue);
+        expect((warning.details as any).providerValue).toBe(c.providerValue);
+        expect((warning.details as any).source).toBe("FYERS_SYMBOL_MASTER");
+        expect(warning.message).toBe(`Shared derivative field ${c.field} differs from canonical value`);
+
+        const target = up.batch.instruments.find((i) => i.canonicalSymbol === "RELIANCE" && i.derivative?.optionType === "CE")!;
+        expect((await repo.getInstrumentByCanonicalId(target.canonicalId))?.derivative?.[c.field]).toBe(c.canonicalValue);
+
+        const fyMap = await repo.getMapping("FYERS", "NSE:RELIANCE26DEC3000CE");
+        expect((fyMap?.sourceMeta?.[DERIVATIVE_ATTRIBUTES_META_KEY] as any)[c.field]).toBe(c.providerValue);
+        const upMap = await repo.getMapping("UPSTOX", "NSE_FO|REL-CE-1");
+        expect((upMap?.sourceMeta?.[DERIVATIVE_ATTRIBUTES_META_KEY] as any)[c.field]).toBe(c.canonicalValue);
+
+        const second = await sync.applyBatch(fy.batch);
+        expect(second.conflicts.filter(
+          (x) => x.type === DERIVATIVE_SHARED_FIELD_CONFLICT &&
+            (x.details as any)?.field === c.field &&
+            x.nativeIdentifier === "NSE:RELIANCE26DEC3000CE"
+        ).length).toBe(0);
+        expect(second.status).toBe("COMPLETED");
+        expect((await repo.getSyncRun(second.runId))?.status).toBe("COMPLETED");
+      } finally {
+        closeDatabaseHandle(handle);
+        removeTempDir(dir);
+      }
+    });
+  }
+});
+
 describe("WP4A complete-snapshot reconciliation", () => {
   test("only absent ACTIVE mappings in exact coverage become REMOVED; provenance merged", async () => {
     const { dir, handle, repo, sync } = setup();
@@ -196,6 +263,51 @@ describe("WP4A complete-snapshot reconciliation", () => {
       expect((await repo.getMapping("UPSTOX", "NSE_CD|OUT-OF-SCOPE"))?.status).toBe("ACTIVE");
       expect((await repo.getMapping("UPSTOX", "AMBIGUOUS-SCOPE"))?.status).toBe("ACTIVE");
       expect((await repo.getInstrumentByCanonicalId(target.canonicalId))).not.toBeNull();
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
+
+  test("NSE FO-only coverage cannot remove BSE FO or NSE/BSE CM mappings; other provider untouched", async () => {
+    const { dir, handle, repo, sync } = setup();
+    try {
+      const up = buildUpstoxImport(upstoxRows, OPTS);
+      const fy = buildFyersImport(fyersFiles, OPTS);
+      await sync.applyBatch(fy.batch); // seed FYERS NSE + BSE mappings
+      await sync.applyBatch(up.batch); // seed UPSTOX NSE + BSE mappings
+
+      // Declare only the NSE FO option tuple; every BSE and CM tuple is omitted.
+      const nseOnlyCoverage = [{
+        exchange: "NSE" as const,
+        segment: "NSE_FO",
+        instrumentCategories: ["STOCK_OPTION" as const, "INDEX_OPTION" as const]
+      }];
+      const result = await sync.applyCompleteProviderSnapshot(up.batch, {
+        ...up.reconciliation,
+        coverage: nseOnlyCoverage,
+        activeNativeIdentifiers: new Set<string>() // would remove every in-declared-tuple mapping
+      });
+      expect(result.status).toBe("COMPLETED");
+
+      // In-declared-tuple NSE FO mappings become REMOVED.
+      expect((await repo.getMapping("UPSTOX", "NSE_FO|REL-CE-1"))?.status).toBe("REMOVED");
+      expect((await repo.getMapping("UPSTOX", "NSE_FO|NIFTY-PE-1"))?.status).toBe("REMOVED");
+
+      // BSE FO and all CM/underlying mappings are outside the declared tuples.
+      expect((await repo.getMapping("UPSTOX", "BSE_FO|TCS-CE-1"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("UPSTOX", "BSE_FO|SENSEX-PE-1"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("UPSTOX", "NSE_EQ|INE002A01018"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("UPSTOX", "NSE_INDEX|Nifty 50"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("UPSTOX", "BSE_EQ|INE467B01029"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("UPSTOX", "BSE_INDEX|SENSEX"))?.status).toBe("ACTIVE");
+
+      // The other provider is never affected, in either exchange.
+      expect((await repo.getMapping("FYERS", "NSE:RELIANCE26DEC3000CE"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("FYERS", "BSE:TCS26DEC4000CE"))?.status).toBe("ACTIVE");
+
+      // Canonical rows are retained.
+      expect((await repo.listInstruments()).length).toBeGreaterThan(0);
     } finally {
       closeDatabaseHandle(handle);
       removeTempDir(dir);

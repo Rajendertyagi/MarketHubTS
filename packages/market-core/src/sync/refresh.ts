@@ -6,10 +6,12 @@ import { buildUpstoxImport, UPSTOX_MASTER_URL, UPSTOX_SOURCE } from "./upstox-ma
 
 const FETCH_TIMEOUT_MS = 20_000;
 const PROVIDERS: ProviderId[] = ["UPSTOX", "FYERS"];
+/** Small app-owned daily trigger: 30 minutes, well inside the 15–60 min range. */
+const DEFAULT_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
 export interface CatalogRefreshEvent {
   provider: ProviderId;
-  outcome: "SKIPPED" | "REFRESHED" | "FAILED";
+  outcome: "SKIPPED" | "REFRESHED" | "FAILED" | "DIAGNOSTIC";
   reason?: string;
   status?: string;
   counts?: Record<string, number>;
@@ -23,6 +25,8 @@ export interface CatalogMasterRefreshOptions {
   now?: (() => Date) | undefined;
   fetch?: MasterFetch | undefined;
   onEvent?: ((event: CatalogRefreshEvent) => void) | undefined;
+  /** Interval for the in-process daily trigger. Defaults to 30 minutes. */
+  refreshIntervalMs?: number | undefined;
 }
 
 /**
@@ -36,7 +40,9 @@ export class CatalogMasterRefresh {
   private readonly now: () => Date;
   private readonly fetchFn: MasterFetch;
   private readonly onEvent: ((event: CatalogRefreshEvent) => void) | undefined;
+  private readonly refreshIntervalMs: number;
   private readonly inFlight = new Map<ProviderId, Promise<void>>();
+  private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
   constructor(options: CatalogMasterRefreshOptions) {
@@ -45,16 +51,36 @@ export class CatalogMasterRefresh {
     this.now = options.now ?? (() => new Date());
     this.fetchFn = options.fetch ?? ((input, init) => fetch(input, init));
     this.onEvent = options.onEvent;
+    this.refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
   }
 
-  /** Non-blocking: starts any needed refresh and returns immediately. */
+  /**
+   * Non-blocking: starts the single app-owned daily trigger (once) and fires
+   * an immediate refresh attempt for each provider.
+   */
   startIfNeeded(): void {
     if (this.stopped) return;
+    this.ensureTimer();
     for (const provider of PROVIDERS) void this.refreshProvider(provider);
   }
 
   stop(): void {
     this.stopped = true;
+    if (this.timer !== null) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  /** One small in-process timer; every tick reuses the same single-flight path. */
+  private ensureTimer(): void {
+    if (this.stopped || this.timer !== null) return;
+    this.timer = setInterval(() => {
+      if (this.stopped) return;
+      for (const provider of PROVIDERS) void this.refreshProvider(provider);
+    }, this.refreshIntervalMs);
+    // Do not keep the process alive solely for this diagnostic refresh.
+    (this.timer as { unref?: () => void } | null)?.unref?.();
   }
 
   private async refreshProvider(provider: ProviderId): Promise<void> {
@@ -77,9 +103,9 @@ export class CatalogMasterRefresh {
         }
       }
     } catch (e) {
-      // A freshness lookup failure must not block a refresh attempt.
-      this.emit({ provider, outcome: "SKIPPED", reason: "FRESHNESS_LOOKUP_FAILED" });
-      return;
+      // A freshness lookup failure is diagnostic only: it is not positive
+      // evidence of a successful refresh today, so still attempt the refresh.
+      this.emit({ provider, outcome: "DIAGNOSTIC", reason: "FRESHNESS_LOOKUP_FAILED" });
     }
 
     const nowIso = this.now().toISOString();

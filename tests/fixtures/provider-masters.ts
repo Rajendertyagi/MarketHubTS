@@ -28,6 +28,30 @@ export const upstoxRows = [
     expiry: "2026-12-29T15:00:00+05:30", strike_price: 25000, lot_size: 75, tick_size: 0.05,
     freeze_quantity: 5000, trading_symbol: "NIFTY26DEC25000PE", exchange_token: "222"
   },
+  // BSE scopes: cash equity/index underlyings and their FO option contracts.
+  {
+    segment: "BSE_EQ", name: "TATA CONSULTANCY SERVICES LTD", exchange: "BSE", isin: "INE467B01029",
+    instrument_type: "EQ", instrument_key: "BSE_EQ|INE467B01029", lot_size: 1,
+    freeze_quantity: 100000, exchange_token: "500325", tick_size: 0.05,
+    trading_symbol: "TCS", short_name: "TCS"
+  },
+  {
+    segment: "BSE_INDEX", name: "SENSEX", exchange: "BSE", instrument_type: "INDEX",
+    instrument_key: "BSE_INDEX|SENSEX", exchange_token: "9998", tick_size: 0.05,
+    trading_symbol: "SENSEX", short_name: "SENSEX"
+  },
+  {
+    segment: "BSE_FO", name: "TCS", exchange: "BSE", instrument_type: "OPTSTK", option_type: "CE",
+    instrument_key: "BSE_FO|TCS-CE-1", underlying_key: "BSE_EQ|INE467B01029", underlying_type: "EQ",
+    expiry: "2026-12-29T15:00:00+05:30", strike_price: 4000, lot_size: 100, tick_size: 0.05,
+    freeze_quantity: 5000, trading_symbol: "TCS26DEC4000CE", exchange_token: "333"
+  },
+  {
+    segment: "BSE_FO", name: "SENSEX", exchange: "BSE", instrument_type: "OPTIDX", option_type: "PE",
+    instrument_key: "BSE_FO|SENSEX-PE-1", underlying_key: "BSE_INDEX|SENSEX", underlying_type: "INDEX",
+    expiry: "2026-12-29T15:00:00+05:30", strike_price: 80000, lot_size: 15, tick_size: 0.05,
+    freeze_quantity: 3000, trading_symbol: "SENSEX26DEC80000PE", exchange_token: "444"
+  },
   // Out-of-scope rows: futures, currency, commodity, unrelated exchange.
   {
     segment: "NSE_FO", name: "RELIANCE", exchange: "NSE", instrument_type: "FUTSTK",
@@ -92,6 +116,34 @@ export const fyersFiles = {
       underSym: "RELIANCE", underFyTok: "101000000015982", expiryDate: "1798539000",
       strikePrice: -1, minLotSize: 250, tickSize: 0.05, qtyFreeze: "10000",
       tradeStatus: 1, lastUpdate: "2026-11-23"
+    }
+  },
+  BSE_CM: {
+    "BSE:TCS-EQ": {
+      fyToken: "101000000020001", exToken: 20001, exSymbol: "TCS", exSeries: "EQ",
+      symTicker: "BSE:TCS-EQ", exchangeName: "BSE", optType: "XX", isin: "INE467B01029",
+      tradeStatus: 1, lastUpdate: "2026-11-23", symDetails: "Tata Consultancy Services Ltd"
+    },
+    "BSE:SENSEX-INDEX": {
+      fyToken: "101000000020002", exToken: 20002, exSymbol: "SENSEX", exSeries: "XX",
+      symTicker: "BSE:SENSEX-INDEX", exchangeName: "BSE", optType: "XX", isin: "",
+      tradeStatus: 1, lastUpdate: "2026-11-23", symDetails: "SENSEX"
+    }
+  },
+  BSE_FO: {
+    "BSE:TCS26DEC4000CE": {
+      fyToken: "1011270223158600", exToken: 158600, exSymbol: "TCS",
+      symTicker: "BSE:TCS26DEC4000CE", exchangeName: "BSE", optType: "CE",
+      underSym: "TCS", underFyTok: "101000000020001", expiryDate: "1798539000",
+      strikePrice: 4000, minLotSize: 100, tickSize: 0.05, qtyFreeze: "5000",
+      tradeStatus: 1, lastUpdate: "2026-11-23", symDetails: "29 Dec 26 4000 CE"
+    },
+    "BSE:SENSEX26DEC80000PE": {
+      fyToken: "1011270223158601", exToken: 158601, exSymbol: "SENSEX",
+      symTicker: "BSE:SENSEX26DEC80000PE", exchangeName: "BSE", optType: "PE",
+      underSym: "SENSEX", underFyTok: "101000000020002", expiryDate: "1798539000",
+      strikePrice: 80000, minLotSize: 15, tickSize: 0.05, qtyFreeze: "3000",
+      tradeStatus: 1, lastUpdate: "2026-11-23", symDetails: "29 Dec 26 80000 PE"
     }
   }
 } as const;
