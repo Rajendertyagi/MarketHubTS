@@ -60,6 +60,19 @@ export function parseRetentionDraft(draft: RetentionDraft): {
   return { settings: parsed.data, errors: {} };
 }
 
+/**
+ * Pure save decision. The only path that may call the save API is the `save`
+ * branch, so "invalid input blocks save" is directly testable without a DOM.
+ */
+export type RetentionSaveDecision =
+  | { kind: "save"; settings: RetentionSettings }
+  | { kind: "block"; errors: RetentionDraftErrors };
+
+export function retentionSaveDecision(draft: RetentionDraft): RetentionSaveDecision {
+  const { settings, errors } = parseRetentionDraft(draft);
+  return settings ? { kind: "save", settings } : { kind: "block", errors };
+}
+
 /** Map a persisted settings view to raw draft text. Invalid/missing views yield three blanks. */
 export function draftFromView(view: RetentionSettingsView): RetentionDraft {
   if (!view.valid || !view.settings) {

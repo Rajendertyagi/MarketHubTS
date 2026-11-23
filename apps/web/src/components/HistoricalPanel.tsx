@@ -8,7 +8,7 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../lib/historical";
-import { draftFromView, parseRetentionDraft, type RetentionDraft, type RetentionDraftErrors } from "../lib/retention-form";
+import { draftFromView, retentionSaveDecision, type RetentionDraft, type RetentionDraftErrors } from "../lib/retention-form";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
@@ -47,6 +47,64 @@ export function historicalFocusToForm(focus: HistoricalFocus): {
     from: istDateString(focus.fromMs),
     to: istDateString(focus.toMs)
   };
+}
+
+const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
+const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
+
+const RETENTION_FIELDS: { dataClass: RetentionDataClass; label: string; ariaLabel: string }[] = [
+  { dataClass: "CANDLE", label: "Candle max age (days)", ariaLabel: "Candle max age days" },
+  { dataClass: "SNAPSHOT", label: "Snapshot max age (days)", ariaLabel: "Snapshot max age days" },
+  { dataClass: "ACTIVITY", label: "Activity max age (days)", ariaLabel: "Activity max age days" }
+];
+
+export interface RetentionFieldsViewProps {
+  draft: RetentionDraft;
+  errors: RetentionDraftErrors;
+  status: string;
+  onChange: (dataClass: RetentionDataClass, raw: string) => void;
+  onSave: () => void;
+  onCleanup: () => void;
+}
+
+/**
+ * Pure presentational view for the retention form. Kept separate from the
+ * data-loading container so rendering can be verified with react-dom/server
+ * without a DOM test library. Raw draft text is rendered verbatim so invalid
+ * input stays visible; field errors and aria-invalid are driven by `errors`.
+ */
+export function RetentionFieldsView({ draft, errors, status, onChange, onSave, onCleanup }: RetentionFieldsViewProps) {
+  return (
+    <div className="mt-5 border-t border-slate-800 pt-4">
+      <h4 className="text-sm font-semibold text-slate-200">Retention</h4>
+      <p className="mt-1 text-xs text-slate-400" role="status">{status}</p>
+      <p className="mt-1 text-xs text-slate-400">
+        Edits are not saved until you select Save retention. Run cleanup uses the saved settings, not this unsaved draft.
+        Valid settings with no limits delete nothing.
+      </p>
+      <div className="mt-2 flex flex-wrap items-end gap-3">
+        {RETENTION_FIELDS.map(({ dataClass, label, ariaLabel }) => (
+          <label key={dataClass} className="text-xs text-slate-300">
+            {label}
+            <input
+              aria-label={ariaLabel}
+              type="text"
+              inputMode="numeric"
+              className={`${input} mt-1 w-32`}
+              value={draft[dataClass]}
+              aria-invalid={errors[dataClass] !== undefined}
+              onChange={(e) => onChange(dataClass, e.target.value)}
+            />
+            {errors[dataClass] && (
+              <span className="mt-1 block text-xs text-amber-300" role="alert">{errors[dataClass]}</span>
+            )}
+          </label>
+        ))}
+        <button type="button" className={button} onClick={onSave}>Save retention</button>
+        <button type="button" className={button} onClick={onCleanup}>Run cleanup</button>
+      </div>
+    </div>
+  );
 }
 
 export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
@@ -153,16 +211,16 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   };
 
   const saveRetentionSettings = async () => {
-    const { settings, errors } = parseRetentionDraft(retentionDraft);
-    if (!settings) {
-      // Keep the raw text exactly as typed and block the save call.
-      setRetentionErrors(errors);
+    const decision = retentionSaveDecision(retentionDraft);
+    if (decision.kind === "block") {
+      // Keep the raw text exactly as typed; the block branch never calls saveRetention.
+      setRetentionErrors(decision.errors);
       setMessage(null);
       return;
     }
     setRetentionErrors({});
     try {
-      await saveRetention(settings);
+      await saveRetention(decision.settings);
       setMessage("Retention settings saved.");
       loadRetention();
     } catch (cause) { setError(toError(cause)); }
@@ -187,15 +245,6 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
     : hasSavedLimits
       ? "Saved retention limits apply only to the configured data classes."
       : "Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.";
-
-  const retentionFields: { dataClass: RetentionDataClass; label: string; ariaLabel: string }[] = [
-    { dataClass: "CANDLE", label: "Candle max age (days)", ariaLabel: "Candle max age days" },
-    { dataClass: "SNAPSHOT", label: "Snapshot max age (days)", ariaLabel: "Snapshot max age days" },
-    { dataClass: "ACTIVITY", label: "Activity max age (days)", ariaLabel: "Activity max age days" }
-  ];
-
-  const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
-  const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
 
   return (
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -289,45 +338,23 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
         </ul>
       </div>
 
-      <div className="mt-5 border-t border-slate-800 pt-4">
-        <h4 className="text-sm font-semibold text-slate-200">Retention</h4>
-        <p className="mt-1 text-xs text-slate-400" role="status">{retentionStatus}</p>
-        <p className="mt-1 text-xs text-slate-400">
-          Edits are not saved until you select Save retention. Run cleanup uses the saved settings, not this unsaved draft.
-          Valid settings with no limits delete nothing.
-        </p>
-        <div className="mt-2 flex flex-wrap items-end gap-3">
-          {retentionFields.map(({ dataClass, label, ariaLabel }) => (
-            <label key={dataClass} className="text-xs text-slate-300">
-              {label}
-              <input
-                aria-label={ariaLabel}
-                type="text"
-                inputMode="numeric"
-                className={`${input} mt-1 w-32`}
-                value={retentionDraft[dataClass]}
-                aria-invalid={retentionErrors[dataClass] !== undefined}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setRetentionDraft((prev) => ({ ...prev, [dataClass]: raw }));
-                  if (retentionErrors[dataClass] !== undefined) {
-                    setRetentionErrors((prev) => {
-                      const next = { ...prev };
-                      delete next[dataClass];
-                      return next;
-                    });
-                  }
-                }}
-              />
-              {retentionErrors[dataClass] && (
-                <span className="mt-1 block text-xs text-amber-300" role="alert">{retentionErrors[dataClass]}</span>
-              )}
-            </label>
-          ))}
-          <button type="button" className={button} onClick={() => void saveRetentionSettings()}>Save retention</button>
-          <button type="button" className={button} onClick={() => void cleanup()}>Run cleanup</button>
-        </div>
-      </div>
+      <RetentionFieldsView
+        draft={retentionDraft}
+        errors={retentionErrors}
+        status={retentionStatus}
+        onChange={(dataClass, raw) => {
+          setRetentionDraft((prev) => ({ ...prev, [dataClass]: raw }));
+          if (retentionErrors[dataClass] !== undefined) {
+            setRetentionErrors((prev) => {
+              const next = { ...prev };
+              delete next[dataClass];
+              return next;
+            });
+          }
+        }}
+        onSave={() => void saveRetentionSettings()}
+        onCleanup={() => void cleanup()}
+      />
     </section>
   );
 }

@@ -14,8 +14,8 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../../apps/web/src/lib/historical";
-import { draftFromView, parseRetentionDraft, type RetentionDraft } from "../../apps/web/src/lib/retention-form";
-import { HistoricalPanel, historicalFocusToForm } from "../../apps/web/src/components/HistoricalPanel";
+import { draftFromView, parseRetentionDraft, retentionSaveDecision, type RetentionDraft } from "../../apps/web/src/lib/retention-form";
+import { HistoricalPanel, historicalFocusToForm, RetentionFieldsView } from "../../apps/web/src/components/HistoricalPanel";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -414,5 +414,80 @@ describe("WP6A — retention panel static rendering", () => {
     expect(source).toContain("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
     expect(source).toContain("Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.");
     expect(source).toContain("Saved retention limits apply only to the configured data classes.");
+  });
+});
+
+describe("WP6A — retention save decision (component wiring seam)", () => {
+  test("invalid draft blocks save with field-specific errors and no settings", () => {
+    const decision = retentionSaveDecision({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "1.5" });
+    expect(decision.kind).toBe("block");
+    if (decision.kind === "block") {
+      expect(decision.errors.ACTIVITY).toBeDefined();
+      expect(decision.errors.CANDLE).toBeUndefined();
+      expect(decision.errors.SNAPSHOT).toBeUndefined();
+      expect("settings" in decision).toBe(false);
+    }
+  });
+
+  test("valid draft returns a schema-valid settings object for save", () => {
+    const decision = retentionSaveDecision({ CANDLE: "30", SNAPSHOT: "01", ACTIVITY: "9" });
+    expect(decision.kind).toBe("save");
+    if (decision.kind === "save") {
+      expect(retentionSettingsSchema.safeParse(decision.settings).success).toBe(true);
+      expect(decision.settings).toEqual({
+        version: 1,
+        classes: { CANDLE: { maxAgeDays: 30 }, SNAPSHOT: { maxAgeDays: 1 }, ACTIVITY: { maxAgeDays: 9 } }
+      });
+    }
+  });
+
+  test("blank draft saves a valid empty settings object", () => {
+    const decision = retentionSaveDecision({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "" });
+    expect(decision.kind).toBe("save");
+    if (decision.kind === "save") {
+      expect(decision.settings).toEqual({ version: 1, classes: {} });
+      expect(retentionSettingsSchema.safeParse(decision.settings).success).toBe(true);
+    }
+  });
+
+  test("component routes save through the decision seam with a single save call", () => {
+    const source = readFileSync(new URL("../../apps/web/src/components/HistoricalPanel.tsx", import.meta.url), "utf8");
+    expect(source).toContain("retentionSaveDecision(retentionDraft)");
+    expect(source).toContain("saveRetention(decision.settings)");
+    expect(source.match(/saveRetention\(/g)?.length).toBe(1);
+  });
+});
+
+describe("WP6A — retention fields view static rendering", () => {
+  test("retains invalid raw text, shows field error and aria-invalid without a DOM", () => {
+    const status = "No valid saved retention settings. Cleanup is disabled and deletes nothing.";
+    const html = renderToStaticMarkup(createElement(RetentionFieldsView, {
+      draft: { CANDLE: "", SNAPSHOT: "", ACTIVITY: "1.5" },
+      errors: { ACTIVITY: "Enter a positive whole number of days." },
+      status,
+      onChange: () => {},
+      onSave: () => {},
+      onCleanup: () => {}
+    }));
+
+    // Raw invalid text is retained verbatim in the controlled input.
+    expect(html).toContain('aria-label="Activity max age days"');
+    expect(html).toMatch(/aria-label="Activity max age days"[^>]*value="1\.5"/);
+    expect(html.match(/aria-invalid="true"/g)?.length).toBe(1);
+    expect(html.match(/aria-invalid="false"/g)?.length).toBe(2);
+    expect(html).toContain("Enter a positive whole number of days.");
+    expect(html).toContain('role="alert"');
+
+    // Three text/numeric inputs, no number input.
+    expect(html.match(/type="text"/g)?.length).toBe(3);
+    expect(html.toLowerCase().match(/inputmode="numeric"/g)?.length).toBe(3);
+    expect(html).not.toContain('type="number"');
+
+    // Status, saved-vs-unsaved copy and both actions.
+    expect(html).toContain(status);
+    expect(html).toContain("Edits are not saved until you select Save retention.");
+    expect(html).toContain("Run cleanup uses the saved settings, not this unsaved draft.");
+    expect(html).toContain("Save retention");
+    expect(html).toContain("Run cleanup");
   });
 });
