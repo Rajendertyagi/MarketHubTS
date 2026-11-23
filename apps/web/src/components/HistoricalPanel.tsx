@@ -8,7 +8,10 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../lib/historical";
-import { draftFromView, retentionSaveDecision, type RetentionDraft, type RetentionDraftErrors } from "../lib/retention-form";
+import {
+  draftFromView, retentionSaveDecision, retentionStatusInfo,
+  type RetentionDraft, type RetentionDraftErrors, type RetentionLoadState
+} from "../lib/retention-form";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
@@ -62,6 +65,7 @@ export interface RetentionFieldsViewProps {
   draft: RetentionDraft;
   errors: RetentionDraftErrors;
   status: string;
+  saveDisabled: boolean;
   onChange: (dataClass: RetentionDataClass, raw: string) => void;
   onSave: () => void;
   onCleanup: () => void;
@@ -73,7 +77,7 @@ export interface RetentionFieldsViewProps {
  * without a DOM test library. Raw draft text is rendered verbatim so invalid
  * input stays visible; field errors and aria-invalid are driven by `errors`.
  */
-export function RetentionFieldsView({ draft, errors, status, onChange, onSave, onCleanup }: RetentionFieldsViewProps) {
+export function RetentionFieldsView({ draft, errors, status, saveDisabled, onChange, onSave, onCleanup }: RetentionFieldsViewProps) {
   return (
     <div className="mt-5 border-t border-slate-800 pt-4">
       <h4 className="text-sm font-semibold text-slate-200">Retention</h4>
@@ -100,7 +104,7 @@ export function RetentionFieldsView({ draft, errors, status, onChange, onSave, o
             )}
           </label>
         ))}
-        <button type="button" className={button} onClick={onSave}>Save retention</button>
+        <button type="button" className={button} onClick={onSave} disabled={saveDisabled}>Save retention</button>
         <button type="button" className={button} onClick={onCleanup}>Run cleanup</button>
       </div>
     </div>
@@ -118,6 +122,7 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   const [configs, setConfigs] = useState<HistoricalSyncConfig[]>([]);
   const [retentionDraft, setRetentionDraft] = useState<RetentionDraft>({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "" });
   const [retentionView, setRetentionView] = useState<RetentionSettingsView | null>(null);
+  const [retentionLoadState, setRetentionLoadState] = useState<RetentionLoadState>("loading");
   const [retentionErrors, setRetentionErrors] = useState<RetentionDraftErrors>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,13 +132,18 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
     void fetchSyncConfigs().then(setConfigs).catch((cause) => setError(toError(cause)));
   };
   const loadRetention = () => {
+    setRetentionLoadState("loading");
     void fetchRetention().then((view) => {
       // The persisted view owns the draft on load/reload. An invalid or missing
       // view yields three blank fields; no default retention period is invented.
       setRetentionView(view);
       setRetentionDraft(draftFromView(view));
       setRetentionErrors({});
-    }).catch((cause) => setError(toError(cause)));
+      setRetentionLoadState("loaded");
+    }).catch((cause) => {
+      setRetentionLoadState("failed");
+      setError(toError(cause));
+    });
   };
 
   useEffect(() => { loadConfigs(); loadRetention(); }, []);
@@ -211,6 +221,9 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   };
 
   const saveRetentionSettings = async () => {
+    // Belt-and-suspenders: the Save button is disabled until the initial read
+    // succeeds, so a blank draft can never overwrite configured limits.
+    if (retentionLoadState !== "loaded") return;
     const decision = retentionSaveDecision(retentionDraft);
     if (decision.kind === "block") {
       // Keep the raw text exactly as typed; the block branch never calls saveRetention.
@@ -235,16 +248,7 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
     } catch (cause) { setError(toError(cause)); }
   };
 
-  const validRetentionView = retentionView?.valid ? retentionView : null;
-  const savedClasses = validRetentionView?.settings.classes;
-  const hasSavedLimits = savedClasses?.CANDLE !== undefined
-    || savedClasses?.SNAPSHOT !== undefined
-    || savedClasses?.ACTIVITY !== undefined;
-  const retentionStatus = !validRetentionView
-    ? "No valid saved retention settings. Cleanup is disabled and deletes nothing."
-    : hasSavedLimits
-      ? "Saved retention limits apply only to the configured data classes."
-      : "Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.";
+  const statusInfo = retentionStatusInfo(retentionLoadState, retentionView);
 
   return (
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -341,7 +345,8 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
       <RetentionFieldsView
         draft={retentionDraft}
         errors={retentionErrors}
-        status={retentionStatus}
+        status={statusInfo.text}
+        saveDisabled={!statusInfo.canSave}
         onChange={(dataClass, raw) => {
           setRetentionDraft((prev) => ({ ...prev, [dataClass]: raw }));
           if (retentionErrors[dataClass] !== undefined) {

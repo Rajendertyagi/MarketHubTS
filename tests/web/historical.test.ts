@@ -14,7 +14,10 @@ import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../../apps/web/src/lib/historical";
-import { draftFromView, parseRetentionDraft, retentionSaveDecision, type RetentionDraft } from "../../apps/web/src/lib/retention-form";
+import {
+  draftFromView, parseRetentionDraft, retentionSaveDecision, retentionStatusInfo,
+  type RetentionDraft, type RetentionLoadState
+} from "../../apps/web/src/lib/retention-form";
 import { HistoricalPanel, historicalFocusToForm, RetentionFieldsView } from "../../apps/web/src/components/HistoricalPanel";
 
 const originalFetch = globalThis.fetch;
@@ -403,14 +406,17 @@ describe("WP6A — retention panel static rendering", () => {
     expect(html.match(/type="text"/g)?.length).toBe(3);
     expect(html.toLowerCase().match(/inputmode="numeric"/g)?.length).toBe(3);
     expect(html).not.toContain('type="number"');
-    expect(html).toContain("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
+    // Initial render is the loading state: Save is disabled until the read succeeds.
+    expect(html).toContain("Loading saved retention settings…");
+    const saveButton = html.match(/<button[^>]*>Save retention<\/button>/)?.[0] ?? "";
+    expect(saveButton).toContain('disabled=""');
     expect(html).toContain("Edits are not saved until you select Save retention.");
     expect(html).toContain("Run cleanup uses the saved settings, not this unsaved draft.");
     expect(html).toContain("Valid settings with no limits delete nothing.");
   });
 
-  test("component source pins all three distinct persisted-state messages", () => {
-    const source = readFileSync(new URL("../../apps/web/src/components/HistoricalPanel.tsx", import.meta.url), "utf8");
+  test("shared status helper pins all three distinct persisted-state messages", () => {
+    const source = readFileSync(new URL("../../apps/web/src/lib/retention-form.ts", import.meta.url), "utf8");
     expect(source).toContain("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
     expect(source).toContain("Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.");
     expect(source).toContain("Saved retention limits apply only to the configured data classes.");
@@ -465,6 +471,7 @@ describe("WP6A — retention fields view static rendering", () => {
       draft: { CANDLE: "", SNAPSHOT: "", ACTIVITY: "1.5" },
       errors: { ACTIVITY: "Enter a positive whole number of days." },
       status,
+      saveDisabled: false,
       onChange: () => {},
       onSave: () => {},
       onCleanup: () => {}
@@ -489,5 +496,81 @@ describe("WP6A — retention fields view static rendering", () => {
     expect(html).toContain("Run cleanup uses the saved settings, not this unsaved draft.");
     expect(html).toContain("Save retention");
     expect(html).toContain("Run cleanup");
+  });
+});
+
+describe("WP6A — retention load state gating", () => {
+  test("loading blocks save with a loading message", () => {
+    const loadState: RetentionLoadState = "loading";
+    const info = retentionStatusInfo(loadState, null);
+    expect(info.canSave).toBe(false);
+    expect(info.text).toContain("Loading saved retention settings");
+  });
+
+  test("failed load blocks save and asks for a reload", () => {
+    const info = retentionStatusInfo("failed", null);
+    expect(info.canSave).toBe(false);
+    expect(info.text).toContain("Could not load saved retention settings");
+  });
+
+  test("loaded invalid view allows a deliberate empty save", () => {
+    const view: RetentionSettingsView = { settings: null, valid: false, error: "retention settings not configured" };
+    const info = retentionStatusInfo("loaded", view);
+    expect(info.canSave).toBe(true);
+    expect(info.text).toBe("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
+  });
+
+  test("loaded valid empty view allows save with the valid-empty message", () => {
+    const view: RetentionSettingsView = { settings: { version: 1, classes: {} }, valid: true, error: null };
+    const info = retentionStatusInfo("loaded", view);
+    expect(info.canSave).toBe(true);
+    expect(info.text).toBe("Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.");
+  });
+
+  test("loaded valid view with a CANDLE limit allows save with the limits message", () => {
+    const view: RetentionSettingsView = {
+      settings: { version: 1, classes: { CANDLE: { maxAgeDays: 30 } } }, valid: true, error: null
+    };
+    const info = retentionStatusInfo("loaded", view);
+    expect(info.canSave).toBe(true);
+    expect(info.text).toBe("Saved retention limits apply only to the configured data classes.");
+  });
+
+  test("component wires load state into status, saveDisabled and the handler guard", () => {
+    const source = readFileSync(new URL("../../apps/web/src/components/HistoricalPanel.tsx", import.meta.url), "utf8");
+    expect(source).toContain("retentionStatusInfo(retentionLoadState, retentionView)");
+    expect(source).toContain("saveDisabled={!statusInfo.canSave}");
+    expect(source).toContain('if (retentionLoadState !== "loaded") return;');
+    // Existing single-save-call assertion remains intact.
+    expect(source).toContain("saveRetention(decision.settings)");
+    expect(source.match(/saveRetention\(/g)?.length).toBe(1);
+  });
+});
+
+describe("WP6A — retention save button disabled state", () => {
+  function render(saveDisabled: boolean): string {
+    return renderToStaticMarkup(createElement(RetentionFieldsView, {
+      draft: { CANDLE: "", SNAPSHOT: "", ACTIVITY: "" },
+      errors: {},
+      status: "Loading saved retention settings…",
+      saveDisabled,
+      onChange: () => {},
+      onSave: () => {},
+      onCleanup: () => {}
+    }));
+  }
+
+  test("saveDisabled true renders a disabled Save button but leaves cleanup enabled", () => {
+    const html = render(true);
+    const saveButton = html.match(/<button[^>]*>Save retention<\/button>/)?.[0] ?? "";
+    expect(saveButton).toContain('disabled=""');
+    const cleanupButton = html.match(/<button[^>]*>Run cleanup<\/button>/)?.[0] ?? "";
+    expect(cleanupButton).not.toContain('disabled=""');
+  });
+
+  test("saveDisabled false renders an enabled Save button", () => {
+    const html = render(false);
+    const saveButton = html.match(/<button[^>]*>Save retention<\/button>/)?.[0] ?? "";
+    expect(saveButton).not.toContain('disabled=""');
   });
 });

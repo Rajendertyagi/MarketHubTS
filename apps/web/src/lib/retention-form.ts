@@ -85,3 +85,39 @@ export function draftFromView(view: RetentionSettingsView): RetentionDraft {
     ACTIVITY: classes.ACTIVITY?.maxAgeDays?.toString() ?? ""
   };
 }
+
+/** Whether the initial saved-settings read is pending, confirmed, or failed. */
+export type RetentionLoadState = "loading" | "loaded" | "failed";
+
+export interface RetentionStatusInfo {
+  text: string;
+  canSave: boolean;
+}
+
+/**
+ * Pure status/save-gating decision. Save is blocked until the initial read
+ * succeeds, so an unsaved blank draft cannot overwrite configured limits.
+ * A confirmed missing/invalid state deliberately allows saving an empty config.
+ */
+export function retentionStatusInfo(
+  loadState: RetentionLoadState,
+  view: RetentionSettingsView | null
+): RetentionStatusInfo {
+  if (loadState === "loading") {
+    return { text: "Loading saved retention settings…", canSave: false };
+  }
+  if (loadState === "failed") {
+    return { text: "Could not load saved retention settings. Save is disabled until settings load successfully; reload the page to retry.", canSave: false };
+  }
+  if (!view?.valid) {
+    return { text: "No valid saved retention settings. Cleanup is disabled and deletes nothing.", canSave: true };
+  }
+  const classes = view.settings.classes;
+  const hasLimits = classes.CANDLE !== undefined || classes.SNAPSHOT !== undefined || classes.ACTIVITY !== undefined;
+  return {
+    text: hasLimits
+      ? "Saved retention limits apply only to the configured data classes."
+      : "Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.",
+    canSave: true
+  };
+}
