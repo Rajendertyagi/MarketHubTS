@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { istDateString } from "../../packages/contracts/src/index";
 import type { CatalogRepository, CatalogSyncRunRecord, CatalogSyncService, MasterFetch } from "../../packages/market-core/src/index";
 import { CatalogMasterRefresh } from "../../packages/market-core/src/index";
 import { fyersFiles, upstoxRows } from "../fixtures/provider-masters";
@@ -21,13 +22,28 @@ function makeCatalog(runs: CatalogSyncRunRecord[] = []) {
 
 function makeSync() {
   const applied: Array<{ provider: string; status: string }> = [];
+  const batches: Array<{ provider?: string; sourceObservedAt?: string }> = [];
   const sync = {
-    applyCompleteProviderSnapshot: async (batch: { provider?: string }) => {
+    applyCompleteProviderSnapshot: async (batch: { provider?: string; sourceObservedAt?: string }) => {
       applied.push({ provider: batch.provider ?? "unknown", status: "COMPLETED" });
+      batches.push({ provider: batch.provider, sourceObservedAt: batch.sourceObservedAt });
       return { status: "COMPLETED", counts: {} } as any;
     }
   };
-  return { sync: sync as unknown as CatalogSyncService, applied };
+  return { sync: sync as unknown as CatalogSyncService, applied, batches };
+}
+
+/** Faithful mirror of WP4B's classifyFreshness (read-only; WP4B itself is untouched). */
+function wp4bFreshness(sourceObservedAt: string | undefined, finishedAt: string, todayIst: string) {
+  if (!finishedAt) return "UNKNOWN";
+  if (!sourceObservedAt) return "STALE";
+  const ms = Date.parse(sourceObservedAt);
+  if (!Number.isFinite(ms)) return "STALE";
+  return istDateString(ms) === todayIst ? "FRESH" : "STALE";
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /** Sync fake that also records a COMPLETED run, so freshness checks are realistic. */
@@ -230,5 +246,96 @@ describe("WP4A app-owned refresh owner", () => {
     expect(fyersCompleted[0]!.runId).toBe(priorFyers.runId); // last-known-good retained
     expect(catalog.runs.some((r) => r.provider === "FYERS" && r.status === "FAILED")).toBe(true);
     expect(catalog.runs.some((r) => r.provider === "UPSTOX" && r.status === "COMPLETED")).toBe(true);
+  });
+
+  test("FYERS source date is the oldest of each required file's newest in-scope lastUpdate", async () => {
+    const files = clone(fyersFiles) as any;
+    // NSE_FO: two in-scope dates; the newest (2026-11-23) must win.
+    files.NSE_FO["NSE:RELIANCE26DEC3000CE"].lastUpdate = "2026-11-23";
+    files.NSE_FO["NSE:NIFTY26DEC25000PE"].lastUpdate = "2026-11-22";
+    // BSE_FO: newest 2026-11-24.
+    files.BSE_FO["BSE:TCS26DEC4000CE"].lastUpdate = "2026-11-24";
+    files.BSE_FO["BSE:SENSEX26DEC80000PE"].lastUpdate = "2026-11-23";
+    // NSE_CM: referenced rows 2026-11-22; an unrelated row is much older and must be ignored.
+    files.NSE_CM["NSE:RELIANCE-EQ"].lastUpdate = "2026-11-22";
+    files.NSE_CM["NSE:NIFTY50-INDEX"].lastUpdate = "2026-11-22";
+    files.NSE_CM["NSE:UNUSED-EQ"].lastUpdate = "2026-11-01";
+    // BSE_CM: 2026-11-23.
+    files.BSE_CM["BSE:TCS-EQ"].lastUpdate = "2026-11-23";
+    files.BSE_CM["BSE:SENSEX-INDEX"].lastUpdate = "2026-11-23";
+
+    const fetchFn: MasterFetch = async (url) => {
+      if (url.includes("NSE_FO")) return Response.json(files.NSE_FO);
+      if (url.includes("BSE_FO")) return Response.json(files.BSE_FO);
+      if (url.includes("NSE_CM")) return Response.json(files.NSE_CM);
+      if (url.includes("BSE_CM")) return Response.json(files.BSE_CM);
+      throw new Error("unexpected url");
+    };
+    const { sync, batches } = makeSync();
+    const refresh = new CatalogMasterRefresh({ catalog: makeCatalog(), sync, now: () => CLOCK, fetch: fetchFn });
+    await (refresh as any).refreshProvider("FYERS");
+
+    expect(batches.length).toBe(1);
+    // per-file newest: NSE_FO 23, BSE_FO 24, NSE_CM 22, BSE_CM 23 -> oldest 22.
+    expect(batches[0]!.sourceObservedAt).toBe("2026-11-22T00:00:00.000Z");
+    expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-22")).toBe("FRESH");
+  });
+
+  test("FYERS required file without a valid in-scope lastUpdate leaves source date unknown (STALE)", async () => {
+    const files = clone(fyersFiles) as any;
+    for (const key of Object.keys(files.BSE_FO)) delete files.BSE_FO[key].lastUpdate;
+    const fetchFn: MasterFetch = async (url) => {
+      if (url.includes("NSE_FO")) return Response.json(files.NSE_FO);
+      if (url.includes("BSE_FO")) return Response.json(files.BSE_FO);
+      if (url.includes("NSE_CM")) return Response.json(files.NSE_CM);
+      if (url.includes("BSE_CM")) return Response.json(files.BSE_CM);
+      throw new Error("unexpected url");
+    };
+    const { sync, batches } = makeSync();
+    const refresh = new CatalogMasterRefresh({ catalog: makeCatalog(), sync, now: () => CLOCK, fetch: fetchFn });
+    await (refresh as any).refreshProvider("FYERS");
+
+    expect(batches.length).toBe(1);
+    expect(batches[0]!.sourceObservedAt).toBeUndefined();
+    expect(batches[0]!.sourceObservedAt).not.toBe(CLOCK.toISOString()); // never fetch time
+    expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-24")).toBe("STALE");
+  });
+
+  test("Upstox without a reliable source date leaves sourceObservedAt unknown (STALE), not fetch time", async () => {
+    const { sync, batches } = makeSync();
+    const { fetchFn } = makeFetch(); // Response.json has no Last-Modified header
+    const refresh = new CatalogMasterRefresh({ catalog: makeCatalog(), sync, now: () => CLOCK, fetch: fetchFn });
+    await (refresh as any).refreshProvider("UPSTOX");
+
+    expect(batches.length).toBe(1);
+    expect(batches[0]!.sourceObservedAt).toBeUndefined();
+    expect(batches[0]!.sourceObservedAt).not.toBe(CLOCK.toISOString());
+    expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-24")).toBe("STALE");
+  });
+
+  test("Upstox uses a valid Last-Modified header as the source date", async () => {
+    const header = "Tue, 24 Nov 2026 05:00:00 GMT";
+    const expected = new Date(header).toISOString();
+    const fetchFn: MasterFetch = async () =>
+      new Response(JSON.stringify(upstoxRows), { headers: { "Last-Modified": header } });
+    const { sync, batches } = makeSync();
+    const refresh = new CatalogMasterRefresh({ catalog: makeCatalog(), sync, now: () => CLOCK, fetch: fetchFn });
+    await (refresh as any).refreshProvider("UPSTOX");
+
+    expect(batches.length).toBe(1);
+    expect(batches[0]!.sourceObservedAt).toBe(expected);
+    expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-24")).toBe("FRESH");
+  });
+
+  test("Upstox ignores an unparseable Last-Modified header", async () => {
+    const fetchFn: MasterFetch = async () =>
+      new Response(JSON.stringify(upstoxRows), { headers: { "Last-Modified": "not-a-date" } });
+    const { sync, batches } = makeSync();
+    const refresh = new CatalogMasterRefresh({ catalog: makeCatalog(), sync, now: () => CLOCK, fetch: fetchFn });
+    await (refresh as any).refreshProvider("UPSTOX");
+
+    expect(batches.length).toBe(1);
+    expect(batches[0]!.sourceObservedAt).toBeUndefined();
+    expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-24")).toBe("STALE");
   });
 });

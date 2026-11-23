@@ -33,6 +33,10 @@ export const FYERS_COVERAGE: ProviderCoverageTuple[] = [
 export interface FyersImportOptions {
   now: string;
   sourceVersion?: string;
+  /**
+   * Ignored. The FYERS source data date is derived from in-scope `lastUpdate`
+   * values; a local fetch time must never be substituted for a source date.
+   */
   sourceObservedAt?: string;
 }
 
@@ -92,7 +96,15 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
   const activeNativeIdentifiers = new Set<string>();
   const identityOwners = new Map<string, string>();
   const nativeOwners = new Map<string, string>();
-  const observedAt = isoOrUndefined(options.sourceObservedAt);
+  // Per-file source dates are collected only from rows actually imported.
+  const lastUpdateBySegment = new Map<FyersMasterSegment, string[]>();
+  const recordSourceDate = (segment: FyersMasterSegment, row: Row): void => {
+    const observed = observedAtFrom(row);
+    if (!observed) return;
+    const dates = lastUpdateBySegment.get(segment) ?? [];
+    dates.push(observed);
+    lastUpdateBySegment.set(segment, dates);
+  };
 
   const tagged: Array<{ segment: FyersMasterSegment; row: Row }> = [];
   for (const segment of Object.keys(FYERS_MASTER_URLS) as FyersMasterSegment[]) {
@@ -172,9 +184,10 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
       tradingStatus: isActive(row) ? "ACTIVE" : "INACTIVE",
       lifecycleStatus: "ACTIVE",
       sourceMeta: { fyToken, symTicker, provider_segment: segment },
-      provenance: { source: FYERS_SOURCE, provider: "FYERS", ...(observedAt ? { sourceObservedAt: observedAt } : {}) }
+      provenance: { source: FYERS_SOURCE, provider: "FYERS" }
     };
     addInstrument(inst, symTicker);
+    recordSourceDate(segment, row);
     underlyingIdByFyToken.set(fyToken, inst.canonicalId);
     mappings.push({
       provider: "FYERS",
@@ -215,7 +228,8 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     const underlying = instruments.find((i) => i.canonicalId === underlyingCanonicalId);
     const canonicalSymbol = underlying?.canonicalSymbol ?? str(row.exSymbol) ?? "OPTION";
     const category: InstrumentCategory = underlying?.instrumentCategory === "INDEX" ? "INDEX_OPTION" : "STOCK_OPTION";
-    const contractObservedAt = observedAtFrom(row) ?? observedAt;
+    // Per-record source observation only; never fall back to a local fetch time.
+    const contractObservedAt = observedAtFrom(row);
 
     const identityKey = computeIdentityKey({
       exchange,
@@ -249,9 +263,10 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
         ...(contractObservedAt ? { contractObservedAt } : {})
       },
       sourceMeta: { fyToken: str(row.fyToken) ?? null, symTicker, provider_segment: segment },
-      provenance: { source: FYERS_SOURCE, provider: "FYERS", ...(observedAt ? { sourceObservedAt: observedAt } : {}) }
+      provenance: { source: FYERS_SOURCE, provider: "FYERS" }
     };
     addInstrument(inst, symTicker);
+    recordSourceDate(segment, row);
     const exchangeSecurityId = str(row.exToken) !== undefined ? String(row.exToken) : undefined;
     mappings.push({
       provider: "FYERS",
@@ -274,6 +289,34 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     });
     if (isActive(row)) activeNativeIdentifiers.add(symTicker);
     report.inScopeOptions++;
+  }
+
+  // Source data date = oldest of the per-file newest in-scope lastUpdate dates.
+  // A required file with no valid in-scope date leaves the snapshot date
+  // unverified (undefined) — never substitute the local fetch time.
+  const requiredSegments = Object.keys(FYERS_MASTER_URLS) as FyersMasterSegment[];
+  const perFileNewest: string[] = [];
+  for (const segment of requiredSegments) {
+    const dates = lastUpdateBySegment.get(segment) ?? [];
+    if (dates.length === 0) {
+      perFileNewest.length = 0;
+      break;
+    }
+    perFileNewest.push(dates.reduce((a, b) => (a > b ? a : b)));
+  }
+  const derivedDate = perFileNewest.length === requiredSegments.length
+    ? perFileNewest.reduce((a, b) => (a < b ? a : b))
+    : undefined;
+  const observedAt = isoOrUndefined(derivedDate);
+  if (observedAt) {
+    for (const inst of instruments) {
+      inst.provenance = {
+        source: FYERS_SOURCE,
+        provider: "FYERS",
+        ...(inst.provenance ?? {}),
+        sourceObservedAt: observedAt
+      };
+    }
   }
 
   const batch: CatalogSyncBatch = {

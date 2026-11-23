@@ -98,6 +98,23 @@ describe("WP4A provider master parsers", () => {
     expect(reconciliation.coverage.some((t) => t.exchange === "BSE" && t.segment === "BSE_CM")).toBe(true);
   });
 
+  test("FYERS source date derives from in-scope lastUpdate, never from the fetch-time option", () => {
+    const { batch } = buildFyersImport(fyersFiles, {
+      ...OPTS,
+      sourceObservedAt: "2026-11-24T10:00:00.000Z" // deliberately misleading fetch time
+    });
+    // All fixture rows carry lastUpdate 2026-11-23; the fetch-time option is ignored.
+    expect(batch.sourceObservedAt).toBe("2026-11-23T00:00:00.000Z");
+
+    const files = JSON.parse(JSON.stringify(fyersFiles)) as any;
+    delete files.NSE_FO["NSE:RELIANCE26DEC3000CE"].lastUpdate;
+    const noRowDate = buildFyersImport(files, { ...OPTS, sourceObservedAt: "2026-11-24T10:00:00.000Z" });
+    const opt = noRowDate.batch.instruments.find(
+      (i) => i.canonicalSymbol === "RELIANCE" && i.derivative?.optionType === "CE"
+    )!;
+    expect(opt.derivative?.contractObservedAt).toBeUndefined(); // no fetch-time fallback
+  });
+
   test("FYERS unresolved underFyTok is reported and never guessed from underSym", () => {
     const broken = {
       NSE_FO: {

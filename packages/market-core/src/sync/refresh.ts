@@ -111,27 +111,29 @@ export class CatalogMasterRefresh {
     const nowIso = this.now().toISOString();
     try {
       if (provider === "UPSTOX") {
-        const text = await this.download(UPSTOX_MASTER_URL);
+        const { text, lastModified } = await this.download(UPSTOX_MASTER_URL);
         const rows = JSON.parse(text) as unknown;
+        // The BOD schema has no per-row source date. Only a parseable
+        // Last-Modified header is reliable; otherwise leave it unknown (STALE).
         const { batch, reconciliation } = buildUpstoxImport(rows, {
           now: nowIso,
           sourceVersion: await sha256(text),
-          sourceObservedAt: nowIso
+          ...(lastModified ? { sourceObservedAt: lastModified } : {})
         });
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
       } else {
         const entries = await Promise.all(
           (Object.keys(FYERS_MASTER_URLS) as FyersMasterSegment[]).map(async (segment) => {
-            const text = await this.download(FYERS_MASTER_URLS[segment]);
+            const { text } = await this.download(FYERS_MASTER_URLS[segment]);
             return [segment, JSON.parse(text) as unknown] as const;
           })
         );
         const files = Object.fromEntries(entries) as Record<FyersMasterSegment, unknown>;
+        // FYERS derives its source data date from in-scope lastUpdate values.
         const { batch, reconciliation } = buildFyersImport(files, {
           now: nowIso,
-          sourceVersion: await sha256(JSON.stringify(files)),
-          sourceObservedAt: nowIso
+          sourceVersion: await sha256(JSON.stringify(files))
         });
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
@@ -160,21 +162,33 @@ export class CatalogMasterRefresh {
     }
   }
 
-  private async download(url: string): Promise<string> {
+  private async download(url: string): Promise<{ text: string; lastModified?: string }> {
     const response = await this.fetchFn(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`Master download failed: HTTP ${response.status}`);
+    const lastModified = sourceDateFromHeader(response.headers.get("last-modified"));
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length === 0) throw new Error("Master download was empty");
+    let text: string;
     if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
       const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-      return await new Response(stream).text();
+      text = await new Response(stream).text();
+    } else {
+      text = new TextDecoder().decode(bytes);
     }
-    return new TextDecoder().decode(bytes);
+    return { text, ...(lastModified ? { lastModified } : {}) };
   }
 
   private emit(event: CatalogRefreshEvent): void {
     try { this.onEvent?.(event); } catch { /* diagnostics must not affect refresh */ }
   }
+}
+
+/** Only a parseable Last-Modified header is a reliable source date; never use local fetch time. */
+function sourceDateFromHeader(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return undefined;
+  return new Date(ms).toISOString();
 }
 
 async function sha256(text: string): Promise<string> {
