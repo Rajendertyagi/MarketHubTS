@@ -1,6 +1,6 @@
 # Backend-Driven Metadata & Capability Discovery — Detailed Implementation Plan
 
-> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a, Phase 3 WP 3b–3c, Phase 2 WP 2a–2c and Phase 5 WP 5A/5B/5C.1/5C.2 have been implemented, tested and published on `develop` (close-outs in the respective Phase 2/3/5 plan §12); Phases 4, 6 and 7 remain planned.
+> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a, Phase 3 WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and Phase 6 WP6A/WP6B have been implemented, tested and published on `develop` (close-outs in the respective Phase 2/3/5 plan §12; WP6A/WP6B independently audited KEEP); Phase 6 WP6C is pending separate authorization, and Phases 4 and 7 remain planned.
 > **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025, source-verified inventory §10), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (phase table), [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) (bounded first slice), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment).
 > **Last updated:** 2026-11-22.
 
@@ -8,7 +8,7 @@
 
 - **Phase numbers are architectural groupings, not implementation order.** The canonical increment order is defined in §1 and matches the roadmap and first-slice plan. Phase 2 is **not** the second implementation task.
 - **Architecture areas A–J** are the source-verified centralization inventory in [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) §10. The coverage matrix in §10 of this plan maps every area to a phase.
-- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c and Phase 5 WP 5A/5B/5C.1/5C.2 are now implemented and published on `develop`; the descriptor module, read-only metadata endpoint and provider/capability rendering exist. No universal registry or metadata database exists.
+- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and Phase 6 WP6A/WP6B are now implemented and published on `develop`; the descriptor module, read-only metadata endpoint, provider/capability rendering, retention consistency and explicit snapshot provider selection exist. Phase 6 WP6C remains pending. No universal registry or metadata database exists.
 - **Endpoint decision resolved.** Phase 2 WP 2b selected a dedicated read-only `GET /api/mcp/operations` endpoint (the WebUI cannot import server-side `mcp-core`); no HTTP endpoint is a prerequisite for shared contract values, which remain direct contract imports.
 - **Boundaries:** no M6-C/M6-D/E/B4 ownership change, no physical LAN testing, no universal registry/metadata database/microservice/generic form framework, no dynamic provider claim before contract/registry support, no hardcoded expiry or computed contracts.
 
@@ -29,7 +29,7 @@
 1. **First implementation milestone** — Phase 1 shared-contract consistency + Phase 3 WP 3a (historical interval selector from `candleIntervalSchema`).
 2. Phase 3 WP 3b–3c — reusable instrument picker using existing `GET /api/catalog/search` — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12).
 3. Phase 2 — MCP Activity Operation selector, after the descriptor-delivery decision (WP 2b) — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12).
-4. Phase 4 (blocked on catalog population) and Phase 6 as their prerequisites clear; Phase 7 last. Phase 5 is complete and published.
+4. Phase 4 (blocked on catalog population) as its prerequisites clear; Phase 6 WP6A/WP6B are implemented and published on `develop` (WP6C pending separate authorization); Phase 7 last. Phase 5 is complete and published.
 
 ## 2. Phase 0 — Architecture & contract design
 
@@ -154,9 +154,11 @@
 
 **Prerequisites:** Phases 1–3. **Implementation order:** later.
 
+**Status (2026-11-23):** WP6A (retention controls) and WP6B (snapshot provider semantics) are implemented, independently audited to KEEP and published on `develop` (WP6A: `f25d514`/`128e44a`/`2866bae`; WP6B: `d132894`). WP6C (Overview status text) is not authorized or started; Phase 6 is not complete. The explicit-vs-automatic provider decision is resolved in favor of explicit-only selection with no "Automatic" option.
+
 **Work packages:**
-- **6a — Retention controls (area H).** Preserve `retentionDataClassSchema` validation and fail-closed cleanup; keep small presentation mapping.
-- **6b — Snapshot provider semantics (area I).** Resolve automatic vs explicit preference: explicit = exclusive filter no fallback (`snapshots/service.ts:139–141`); omitted = try configured providers in order (`:143–167`). Decide whether UI offers "automatic/default". Do not silently change service ordering or invent fallback.
+- **6a — Retention controls (area H).** **IMPLEMENTED and published (`f25d514`/`128e44a`/`2866bae`; independent audit KEEP).** Preserve `retentionDataClassSchema` validation and fail-closed cleanup; keep small presentation mapping.
+- **6b — Snapshot provider semantics (area I).** **IMPLEMENTED and published (`d132894`; independent audit KEEP).** Decision resolved: explicit-only selection, no "Automatic"/default option, no FYERS default, options derived from `providerIdSchema`; explicit = exclusive filter no fallback (`snapshots/service.ts:139–141`), omitted = try configured providers in order (`:143–167`). Snapshot service ordering and fallback were not changed.
 - **6c — Overview status text (area J).** Correct four stale statements in `App.tsx:211,219,281,282` distinguishing implemented foundation, implemented-but-locked, unavailable provider-backed/live, and genuinely planned.
 
 **Expected files:** `HistoricalPanel.tsx`, `SnapshotPanel.tsx`, `App.tsx`, related contracts/routes, tests.
@@ -165,7 +167,7 @@
 
 **Acceptance:** no silent service-order change; no invented fallback; honest status messaging.
 
-**Risks:** explicit vs omitted semantics unresolved; presentation-only mapping boundary.
+**Risks:** explicit vs omitted provider semantics resolved in WP6B (explicit-only, no Automatic option); presentation-only mapping boundary remains for WP6C.
 
 ## 9. Phase 7 — Cross-system acceptance
 
@@ -224,7 +226,7 @@ An audit was performed against the governing documents and actual source. Result
 | Catalog search bounded | **Pass** — WP 3b uses existing bounded API; no full-catalogue download |
 | Derivative expiry blocked | **Pass** — Phase 4 explicitly deferred on populated data + bounded query |
 | M6 scope / LAN untouched | **Pass** — no M6 ownership change; no physical LAN testing |
-| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c and Phase 5 WP 5A/5B/5C.1/5C.2 are marked implemented/published; Phases 4, 6 and 7 remain planned |
+| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and Phase 6 WP6A/WP6B are marked implemented/published; Phase 6 WP6C is pending, and Phases 4 and 7 remain planned |
 | Area coverage A–J | **Pass** — §10 matrix covers all ten areas |
 | Dependencies acyclic | **Pass** — §1 graph has no cycles; Phase 4 blocked, not looping |
 | File paths plausible | **Pass** — all paths match source verified in architecture doc §10 |
@@ -232,7 +234,7 @@ An audit was performed against the governing documents and actual source. Result
 **Findings requiring attention during implementation (not plan defects):**
 1. Phase 4 cannot start until a catalog population path and bounded query exist — treat as a hard gate, not a scheduling preference.
 2. Phase 2 WP 2b recorded its evidence and selected a dedicated read-only endpoint; it is now implemented and published.
-3. Phase 6 WP 6b needs a product decision on automatic vs explicit provider preference before code changes.
+3. Phase 6 WP 6b's product decision on automatic vs explicit provider preference is **resolved**: explicit-only selection, no "Automatic" option, no FYERS default, options derived from `providerIdSchema`. Implemented and published in WP6B (`d132894`).
 4. No-DOM test approach for debounce/cancellation must be validated in Phase 3 (pure helpers + `renderToStaticMarkup` pattern already used in `tests/web/`).
 
 **Audit verdict:** the plan is internally consistent, covers all architecture areas, respects all documented boundaries, and is ready for per-phase authorization. No contradictions found.

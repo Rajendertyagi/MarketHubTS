@@ -1,7 +1,8 @@
 # MarketHubTS — Metadata Discovery Phase 6 Implementation Plan
 
 > **Document type:** Technical implementation plan and bounded execution specification  
-> **Status:** WP6A implemented, independently reviewed and published. WP6B and WP6C remain pending separate authorization.  
+> **Status:** WP6A and WP6B implemented, independently reviewed and published. WP6C remains pending separate authorization.
+>
 > **Repository:** `Rajendertyagi/MarketHubTS`  
 > **GitHub branch reviewed:** `develop`  
 > **Reviewed HEAD:** `a1df3d1964dac209af20bd9f797bc25d99efb278`  
@@ -82,7 +83,7 @@ At the reviewed baseline:
 
 - Metadata discovery Phases 1, 2, 3 and 5 are recorded as implemented and published on `develop`.
 - Phase 4 derivative expiry discovery remains blocked on a real catalog population path and a bounded query. It is not part of Phase 6.
-- Phase 6 is planned and not implemented.
+- Phase 6 WP6A (retention consistency) and WP6B (snapshot provider selection) are implemented, independently audited to KEEP and published on `develop`; WP6C (Overview accuracy) remains pending separate authorization. Phase 6 is therefore not yet complete.
 - Phase 7 is the final cross-system acceptance phase and depends on previous phases.
 - M6-D/E source and tests are present on `develop`, but neither phase is accepted or complete. M6-B4 remains separately owned and not accepted.
 - Production market-data drivers remain locked. There is no verified live provider socket/feed, and no provider-backed historical or option-chain retrieval is active.
@@ -708,6 +709,8 @@ Phase 6 is complete only when all of the following are true:
 - Final diff contains no unrelated refactoring or protected-area changes.
 - Local test evidence is distinguished from CI evidence.
 - Current status and any remaining unverified behavior are reported honestly.
+
+**Current status (2026-11-23):** WP6A and WP6B have KEEP / no findings from independent review and are published on `develop` (WP6A: `f25d514` implementation, `128e44a` audit fix, `2866bae` technical-lead loading-state race fix; WP6B: `d132894`). WP6C has not been authorized or started, so its gate criterion above is not met and Phase 6 is not yet complete.
 
 Phase 6 completion does not complete Phase 4, Phase 7, M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates.
 
