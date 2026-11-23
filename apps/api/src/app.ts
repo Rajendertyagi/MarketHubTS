@@ -28,6 +28,7 @@ import type { LiveEventHub } from "@markethub/realtime";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 import { registerMcpRoute } from "./mcp-routes";
 import { registerCatalogRoutes } from "./catalog-routes";
+import { registerDerivativeRoutes } from "./derivative-routes";
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
@@ -180,6 +181,10 @@ export function createApp(deps: AppDependencies) {
   // M6-B1: read-only bounded catalog search over the same catalog repository.
   const catalogRepo = deps.catalogRepo ?? new SqliteCatalogRepository(deps.db.db, deps.db.sqlite);
   registerCatalogRoutes(app, { catalog: catalogRepo });
+
+  // WP4B: bounded, provider-aware expiry discovery over the same catalogue
+  // repository. Read-only and LAN-safe like the catalog search route.
+  registerDerivativeRoutes(app, { catalog: catalogRepo });
 
   // WP4A: the single app-owned refresh trigger. Non-blocking and injectable so
   // tests never make network calls; production composition supplies the owner.

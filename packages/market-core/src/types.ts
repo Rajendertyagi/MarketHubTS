@@ -8,6 +8,7 @@ import type {
   InstrumentIdentifier,
   ProviderId,
   ProviderInstrumentMapping,
+  SyncCompleteness,
   SyncConflict,
   SyncRunStatus
 } from "@markethub/contracts";
@@ -54,6 +55,32 @@ export interface CatalogRepository {
   getDerivativeContract(canonicalId: string): Promise<DerivativeContractRecord | null>;
   findDerivativeContracts(query: { underlyingCanonicalId?: string; expiryDate?: string; derivativeClass?: string }): Promise<DerivativeContractRecord[]>;
   getSyncRun(runId: string): Promise<CatalogSyncRunRecord | null>;
+  /**
+   * Bounded, provider-aware expiry discovery. Returns distinct `YYYY-MM-DD`
+   * expiry dates in ascending order for ACTIVE option mappings of the given
+   * provider and underlying with `expiryDate >= today`. The hard limit is
+   * applied in the database; callers must not use the unbounded
+   * `findDerivativeContracts` path for this read model.
+   */
+  listDerivativeExpiries(query: {
+    underlyingCanonicalId: string;
+    provider: ProviderId;
+    today: string;
+    limit: number;
+  }): Promise<string[]>;
+  /**
+   * Latest sync run for one exact provider/source/scope/status(/completeness)
+   * tuple. `scopeJson` must be byte-for-byte equal to the value produced by
+   * `serializeProviderCoverageScope` on the write path; no JSON parsing in SQL.
+   * Ordered `finishedAt DESC, startedAt DESC, runId DESC` with `LIMIT 1`.
+   */
+  getLatestProviderSync(
+    provider: ProviderId,
+    source: string,
+    scopeJson: string,
+    statuses: SyncRunStatus[],
+    completeness?: SyncCompleteness | SyncCompleteness[]
+  ): Promise<CatalogSyncRunRecord | null>;
   /** Bounded, newest-first sync-run history used by the app-owned refresh owner. */
   listSyncRuns(query?: { provider?: string; status?: string; limit?: number }): Promise<CatalogSyncRunRecord[]>;
   /** Best-effort persistence outside a catalog transaction (e.g. failed run after rollback). Optional. */

@@ -1,11 +1,14 @@
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   CanonicalInstrument,
   InstrumentAlias,
   InstrumentCategory,
   InstrumentIdentifier,
-  ProviderInstrumentMapping
+  ProviderId,
+  ProviderInstrumentMapping,
+  SyncCompleteness,
+  SyncRunStatus
 } from "@markethub/contracts";
 import { normalizeAliasValue, normalizeScope } from "@markethub/market-core";
 import type {
@@ -382,6 +385,81 @@ export class SqliteCatalogRepository implements CatalogRepository {
     const rows = conds.length ? q.where(and(...conds)).all() : q.all();
     return rows.map(rowToDerivativeContract);
   }
+
+  /**
+   * WP4B bounded expiry read model. The provider mapping join, required
+   * filters, DISTINCT, ordering and LIMIT all execute in SQLite; no derivative
+   * rows are loaded into JavaScript for filtering.
+   */
+  async listDerivativeExpiries(query: {
+    underlyingCanonicalId: string;
+    provider: ProviderId;
+    today: string;
+    limit: number;
+  }): Promise<string[]> {
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit)));
+    const rows = this.db
+      .selectDistinct({ expiryDate: derivativeContracts.expiryDate })
+      .from(derivativeContracts)
+      .innerJoin(
+        providerInstrumentMappings,
+        and(
+          eq(providerInstrumentMappings.canonicalId, derivativeContracts.canonicalId),
+          eq(providerInstrumentMappings.provider, query.provider)
+        )
+      )
+      .where(and(
+        inArray(derivativeContracts.derivativeClass, ["STOCK_OPTION", "INDEX_OPTION"]),
+        eq(providerInstrumentMappings.status, "ACTIVE"),
+        eq(derivativeContracts.underlyingCanonicalId, query.underlyingCanonicalId),
+        sql`${derivativeContracts.expiryDate} >= ${query.today}`
+      ))
+      .orderBy(asc(derivativeContracts.expiryDate))
+      .limit(limit)
+      .all();
+    return rows.map((r) => r.expiryDate);
+  }
+
+  /**
+   * WP4B latest-successful-sync lookup. Exact scopeJson equality (no SQL JSON
+   * parsing), parameterized filters, deterministic ordering and LIMIT 1.
+   */
+  async getLatestProviderSync(
+    provider: ProviderId,
+    source: string,
+    scopeJson: string,
+    statuses: SyncRunStatus[],
+    completeness?: SyncCompleteness | SyncCompleteness[]
+  ): Promise<CatalogSyncRunRecord | null> {
+    if (statuses.length === 0) return null;
+    const completenessValues = completeness === undefined
+      ? null
+      : (Array.isArray(completeness) ? completeness : [completeness]);
+    if (completenessValues !== null && completenessValues.length === 0) return null;
+
+    const conds: SQL[] = [
+      eq(catalogSyncRuns.provider, provider),
+      eq(catalogSyncRuns.source, source),
+      eq(catalogSyncRuns.scopeJson, scopeJson),
+      inArray(catalogSyncRuns.status, statuses)
+    ];
+    if (completenessValues !== null) {
+      conds.push(inArray(catalogSyncRuns.completeness, completenessValues));
+    }
+    const row = this.db
+      .select()
+      .from(catalogSyncRuns)
+      .where(and(...conds))
+      .orderBy(
+        desc(catalogSyncRuns.finishedAt),
+        desc(catalogSyncRuns.startedAt),
+        desc(catalogSyncRuns.runId)
+      )
+      .limit(1)
+      .get();
+    return row ? rowToSyncRun(row) : null;
+  }
+
   async getSyncRun(runId: string): Promise<CatalogSyncRunRecord | null> {
     const row = this.db.select().from(catalogSyncRuns).where(eq(catalogSyncRuns.runId, runId)).get();
     return row ? rowToSyncRun(row) : null;

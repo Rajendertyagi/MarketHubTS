@@ -308,3 +308,35 @@ export const catalogSyncResultSchema = z.object({
   error: z.string().optional()
 });
 export type CatalogSyncResult = z.infer<typeof catalogSyncResultSchema>;
+
+// --- Provider-aware derivative expiry discovery (WP4B) ---
+/**
+ * Query parameters for the bounded, read-only expiry endpoint. `provider` is
+ * the existing fixed provider enum; `underlyingCanonicalId` is a canonical
+ * catalogue ID (never a provider-native identifier).
+ */
+export const derivativeExpiriesQuerySchema = z.object({
+  underlyingCanonicalId: z.string().trim().min(1),
+  provider: providerSchema
+});
+export type DerivativeExpiriesQuery = z.infer<typeof derivativeExpiriesQuerySchema>;
+
+/**
+ * Freshness of the last successful complete provider master snapshot.
+ * `lastSuccessfulSyncAt` is the selected run's `finishedAt`, never a download
+ * time or a later failed attempt.
+ */
+export const derivativeExpiryFreshnessSchema = z.object({
+  state: z.enum(["FRESH", "STALE", "UNKNOWN"]),
+  lastSuccessfulSyncAt: z.string().datetime().nullable()
+});
+export type DerivativeExpiryFreshness = z.infer<typeof derivativeExpiryFreshnessSchema>;
+
+/** Bounded, provider-isolated expiry response consumed by the Snapshot Panel. */
+export const derivativeExpiriesResponseSchema = z.object({
+  underlyingCanonicalId: z.string().min(1),
+  provider: providerSchema,
+  expiries: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
+  freshness: derivativeExpiryFreshnessSchema
+});
+export type DerivativeExpiriesResponse = z.infer<typeof derivativeExpiriesResponseSchema>;
