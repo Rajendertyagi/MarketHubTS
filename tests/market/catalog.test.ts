@@ -275,14 +275,17 @@ describe("M2 corrected catalog foundation", () => {
     const { sync, repo, handle } = setup();
     const und = equity({ exchange: "NSE", segment: "CASH", canonicalSymbol: "TCS", displayName: "TCS", isin: "INE467B01029" });
     const fut = derivative({ exchange: "NSE", segment: "FO", instrumentCategory: "STOCK_FUTURE", canonicalSymbol: "TCS", displayName: "TCS FUT", underlyingCanonicalId: und.canonicalId, derivative: { underlyingCanonicalId: und.canonicalId, expiryDate: "2026-12-29", lotSize: 100, tickSize: 0.05, quantityFreeze: 10000 } });
-    await sync.applyBatch({ source: "s1", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [und, fut], mappings: [{ provider: "UPSTOX", nativeIdentifier: "NSE_FO|1", canonicalId: fut.canonicalId, status: "ACTIVE" }], aliases: [] });
+    await sync.applyBatch({ source: "s1", provider: "UPSTOX", scope: { source: "s1" }, completeness: "COMPLETE", instruments: [und, fut], mappings: [{ provider: "UPSTOX", nativeIdentifier: "NSE_FO|1", canonicalId: fut.canonicalId, status: "ACTIVE" }], aliases: [] });
     const updated = derivative({ ...fut, derivative: { ...fut.derivative!, lotSize: 125, tickSize: 0.1, quantityFreeze: 12500 } });
-    const res = await sync.applyBatch({ source: "s2", scope: { source: "s2" }, completeness: "PARTIAL", instruments: [updated], mappings: [{ provider: "UPSTOX", nativeIdentifier: "NSE_FO|1", canonicalId: fut.canonicalId, status: "ACTIVE", sourceMeta: { changed: true } }], aliases: [] });
+    const res = await sync.applyBatch({ source: "s2", provider: "UPSTOX", scope: { source: "s2" }, completeness: "PARTIAL", instruments: [updated], mappings: [{ provider: "UPSTOX", nativeIdentifier: "NSE_FO|1", canonicalId: fut.canonicalId, status: "ACTIVE", sourceMeta: { changed: true } }], aliases: [] });
+    // WP4A: a populated shared derivative field is preserved on disagreement;
+    // the provider-reported value is recorded as a WARNING, not last-wins.
     expect(res.status).toBe("COMPLETED");
+    expect(res.conflicts.some((c) => c.type === "DERIVATIVE_SHARED_FIELD_CONFLICT" && (c.details as any)?.field === "lotSize")).toBe(true);
     const stored = await repo.getInstrumentByCanonicalId(fut.canonicalId);
     expect(stored?.canonicalId).toBe(fut.canonicalId);
     expect(stored?.identityKey).toBe(fut.identityKey);
-    expect(stored?.derivative?.lotSize).toBe(125);
+    expect(stored?.derivative?.lotSize).toBe(100);
     handle.close();
   });
 

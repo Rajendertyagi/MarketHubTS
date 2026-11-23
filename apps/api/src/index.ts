@@ -6,7 +6,7 @@ import {
 } from "@markethub/database";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createMcpServer } from "@markethub/mcp-core";
-import { MarketDataService, ProviderRegistry, HistoricalCandleService, OptionChainSnapshotService } from "@markethub/market-core";
+import { MarketDataService, ProviderRegistry, HistoricalCandleService, OptionChainSnapshotService, CatalogSyncService, CatalogMasterRefresh } from "@markethub/market-core";
 import { LiveEventHub } from "@markethub/realtime";
 import { UpstoxAdapter } from "@markethub/broker-upstox";
 import { FyersAdapter } from "@markethub/broker-fyers";
@@ -94,6 +94,17 @@ async function main() {
   hub.start();
 
   const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
+  // WP4A: one app-owned refresh owner for the public provider master files.
+  // No credentials, no live market-data calls, no generic scheduler.
+  const catalogRefresh = new CatalogMasterRefresh({
+    catalog,
+    sync: new CatalogSyncService(catalog),
+    now: () => new Date(),
+    onEvent: (event) => {
+      if (event.outcome === "FAILED") logger.warn("catalog_master_refresh_failed", { provider: event.provider, reason: event.reason ?? event.status ?? "unknown" });
+      else logger.info("catalog_master_refresh", { provider: event.provider, outcome: event.outcome, status: event.status });
+    }
+  });
   const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
   // AD-024 production boundary: one shared coordinator owns desired state; each
   // configured provider has an independent runtime with its own locked driver.
@@ -166,7 +177,7 @@ async function main() {
   const app = createApp({
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
-    service, hub, coordinator, mcpHandler, catalogRepo: catalog,
+    service, hub, coordinator, mcpHandler, catalogRepo: catalog, catalogRefresh,
     appSettings, candleRepo, snapshotRepo, historicalService, snapshotService, activityRepo
   });
 
@@ -191,6 +202,7 @@ async function main() {
     shuttingDown = true;
     shutdownPromise = (async () => {
       logger.info("shutdown_start", { signal });
+      try { catalogRefresh.stop(); } catch {}
       // 1) stop accepting subscription/config work; 2) stop/cancel the shared
       // coordinator and its provider runtimes (locked drivers own no resources).
       try { coordinator?.stop(); } catch (error) {

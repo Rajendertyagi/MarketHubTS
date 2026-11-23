@@ -22,7 +22,7 @@ import type { AppConfig } from "@markethub/config";
 import type { CredentialStore, ProviderConfig, ProviderId } from "@markethub/contracts";
 import {
   HistoricalCandleService, OptionChainSnapshotService,
-  type CatalogRepository, type MarketDataService, type ProviderRegistry
+  type CatalogMasterRefresh, type CatalogRepository, type MarketDataService, type ProviderRegistry
 } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
@@ -62,6 +62,8 @@ export interface AppDependencies {
   catalogRepo?: CatalogRepository;
   /** M6-C: durable activity repository; defaults to a repo over deps.db. */
   activityRepo?: McpActivityRepository;
+  /** WP4A: app-owned provider-master refresh owner. When supplied, started non-blocking. */
+  catalogRefresh?: CatalogMasterRefresh;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -178,6 +180,10 @@ export function createApp(deps: AppDependencies) {
   // M6-B1: read-only bounded catalog search over the same catalog repository.
   const catalogRepo = deps.catalogRepo ?? new SqliteCatalogRepository(deps.db.db, deps.db.sqlite);
   registerCatalogRoutes(app, { catalog: catalogRepo });
+
+  // WP4A: the single app-owned refresh trigger. Non-blocking and injectable so
+  // tests never make network calls; production composition supplies the owner.
+  deps.catalogRefresh?.startIfNeeded();
 
   // M5 canonical historical/snapshot services. No live providers are wired in
   // M5 (Phase 4B/Stage G); empty provider lists keep on-demand operations

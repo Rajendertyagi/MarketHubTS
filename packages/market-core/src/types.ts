@@ -2,8 +2,11 @@ import type {
   CanonicalInstrument,
   CatalogSyncBatch,
   CatalogSyncResult,
+  Exchange,
   InstrumentAlias,
+  InstrumentCategory,
   InstrumentIdentifier,
+  ProviderId,
   ProviderInstrumentMapping,
   SyncConflict,
   SyncRunStatus
@@ -51,9 +54,36 @@ export interface CatalogRepository {
   getDerivativeContract(canonicalId: string): Promise<DerivativeContractRecord | null>;
   findDerivativeContracts(query: { underlyingCanonicalId?: string; expiryDate?: string; derivativeClass?: string }): Promise<DerivativeContractRecord[]>;
   getSyncRun(runId: string): Promise<CatalogSyncRunRecord | null>;
+  /** Bounded, newest-first sync-run history used by the app-owned refresh owner. */
+  listSyncRuns(query?: { provider?: string; status?: string; limit?: number }): Promise<CatalogSyncRunRecord[]>;
   /** Best-effort persistence outside a catalog transaction (e.g. failed run after rollback). Optional. */
   recordSyncRun?(run: CatalogSyncRunRecord): Promise<void>;
 }
+
+/** One exact provider scope tuple. `segment` is the provider's own segment value. */
+export interface ProviderCoverageTuple {
+  exchange: Exchange;
+  segment: string;
+  instrumentCategories: InstrumentCategory[];
+}
+
+/** Input for a complete-provider-snapshot reconciliation. */
+export interface ProviderMappingReconciliationInput {
+  provider: ProviderId;
+  coverage: ProviderCoverageTuple[];
+  activeNativeIdentifiers: ReadonlySet<string>;
+  sourceVersion?: string;
+  sourceObservedAt?: string;
+  now: string;
+}
+
+export interface ProviderMappingReconciliationResult {
+  examined: number;
+  removedNativeIdentifiers: string[];
+}
+
+/** Public descriptor for `CatalogSyncService.applyCompleteProviderSnapshot`. */
+export interface ProviderReconciliationDescriptor extends ProviderMappingReconciliationInput {}
 
 export interface CatalogRepositoryTx {
   getInstrumentByCanonicalId(canonicalId: string): Promise<CanonicalInstrument | null>;
@@ -68,6 +98,8 @@ export interface CatalogRepositoryTx {
   findIdentifiers(query: { identifierType?: string; identifierNamespace?: string; identifierNormalized?: string; exchangeScope?: string; segmentScope?: string; status?: string }): Promise<InstrumentIdentifier[]>;
   createSyncRun(run: CatalogSyncRunRecord): Promise<void>;
   updateSyncRun(runId: string, patch: Partial<CatalogSyncRunRecord>): Promise<void>;
+  /** Transaction-scoped complete-snapshot reconciliation. Never a standalone cleanup action. */
+  reconcileProviderMappings(input: ProviderMappingReconciliationInput): Promise<ProviderMappingReconciliationResult>;
 }
 
 export interface CatalogSyncRunRecord {
@@ -89,6 +121,7 @@ export interface CatalogSyncRunRecord {
 
 export interface SyncService {
   applyBatch(batch: CatalogSyncBatch): Promise<CatalogSyncResult>;
+  applyCompleteProviderSnapshot(batch: CatalogSyncBatch, reconciliation: ProviderReconciliationDescriptor): Promise<CatalogSyncResult>;
 }
 
 export type { SyncConflict };

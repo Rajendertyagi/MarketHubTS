@@ -1,8 +1,9 @@
-import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   CanonicalInstrument,
   InstrumentAlias,
+  InstrumentCategory,
   InstrumentIdentifier,
   ProviderInstrumentMapping
 } from "@markethub/contracts";
@@ -11,7 +12,9 @@ import type {
   CatalogRepository,
   CatalogRepositoryTx,
   CatalogSyncRunRecord,
-  DerivativeContractRecord
+  DerivativeContractRecord,
+  ProviderMappingReconciliationInput,
+  ProviderMappingReconciliationResult
 } from "@markethub/market-core";
 import type { MarketHubDb } from "../index";
 import {
@@ -25,7 +28,7 @@ import {
 import {
   aliasToRow, identifierToRow, instrumentToDerivativeRow, instrumentToRow,
   mappingToRow, rowToAlias, rowToDerivativeContract, rowToIdentifier,
-  rowToInstrument, rowToMapping, rowToSyncRun, syncRunToRow
+  rowToInstrument, rowToMapping, rowToSyncRun, syncRunToRow, toJson
 } from "./catalog-mappers";
 class TxRepo implements CatalogRepositoryTx {
   constructor(private readonly db: MarketHubDb) {}
@@ -189,6 +192,72 @@ class TxRepo implements CatalogRepositoryTx {
     const merged: CatalogSyncRunRecord = { ...rowToSyncRun(existing), ...patch };
     this.db.update(catalogSyncRuns).set(syncRunToRow(merged)).where(eq(catalogSyncRuns.runId, runId)).run();
   }
+
+  /**
+   * Transaction-scoped complete-snapshot reconciliation. Only currently ACTIVE
+   * mappings in an exact declared coverage tuple whose native ID is absent from
+   * the validated active set become REMOVED. Ambiguous/missing scope is left
+   * untouched; canonical rows are never deleted.
+   */
+  async reconcileProviderMappings(input: ProviderMappingReconciliationInput): Promise<ProviderMappingReconciliationResult> {
+    const removedNativeIdentifiers: string[] = [];
+    let examined = 0;
+    const rows = this.db
+      .select()
+      .from(providerInstrumentMappings)
+      .where(and(
+        eq(providerInstrumentMappings.provider, input.provider),
+        eq(providerInstrumentMappings.status, "ACTIVE")
+      ))
+      .all();
+
+    for (const row of rows) {
+      if (!row.exchange || !row.segment) continue; // ambiguous scope: never infer
+      const inst = this.db
+        .select()
+        .from(canonicalInstruments)
+        .where(eq(canonicalInstruments.canonicalId, row.canonicalId))
+        .get();
+      if (!inst) continue; // ambiguous scope: never infer
+      const covered = input.coverage.some((tuple) =>
+        tuple.exchange === row.exchange &&
+        tuple.segment === row.segment &&
+        tuple.instrumentCategories.includes(inst.instrumentCategory as InstrumentCategory)
+      );
+      if (!covered) continue;
+      examined++;
+      if (input.activeNativeIdentifiers.has(row.nativeIdentifier)) continue;
+
+      const mapping = rowToMapping(row);
+      const provenance: Record<string, unknown> = { ...(mapping.provenance ?? {}) };
+      if (input.sourceVersion !== undefined) provenance.sourceVersion = input.sourceVersion;
+      if (input.sourceObservedAt !== undefined) provenance.sourceObservedAt = input.sourceObservedAt;
+      provenance.syncedAt = input.now;
+
+      const sourceMeta: Record<string, unknown> = { ...(mapping.sourceMeta ?? {}) };
+      const reconciliation: Record<string, unknown> = {
+        ...((sourceMeta.reconciliation as Record<string, unknown> | undefined) ?? {})
+      };
+      reconciliation.syncedAt = input.now;
+      if (input.sourceVersion !== undefined) reconciliation.sourceVersion = input.sourceVersion;
+      if (input.sourceObservedAt !== undefined) reconciliation.sourceObservedAt = input.sourceObservedAt;
+      sourceMeta.reconciliation = reconciliation;
+
+      this.db
+        .update(providerInstrumentMappings)
+        .set({
+          status: "REMOVED",
+          validTo: input.now,
+          updatedAt: input.now,
+          provenanceJson: toJson(provenance),
+          sourceMetaJson: toJson(sourceMeta)
+        })
+        .where(eq(providerInstrumentMappings.id, row.id))
+        .run();
+      removedNativeIdentifiers.push(row.nativeIdentifier);
+    }
+    return { examined, removedNativeIdentifiers };
+  }
 }
 
 export class SqliteCatalogRepository implements CatalogRepository {
@@ -316,6 +385,15 @@ export class SqliteCatalogRepository implements CatalogRepository {
   async getSyncRun(runId: string): Promise<CatalogSyncRunRecord | null> {
     const row = this.db.select().from(catalogSyncRuns).where(eq(catalogSyncRuns.runId, runId)).get();
     return row ? rowToSyncRun(row) : null;
+  }
+
+  async listSyncRuns(query: { provider?: string; status?: string; limit?: number } = {}): Promise<CatalogSyncRunRecord[]> {
+    const conds: SQL[] = [];
+    if (query.provider) conds.push(eq(catalogSyncRuns.provider, query.provider));
+    if (query.status) conds.push(eq(catalogSyncRuns.status, query.status));
+    const q = this.db.select().from(catalogSyncRuns).orderBy(desc(catalogSyncRuns.startedAt));
+    const rows = (conds.length ? q.where(and(...conds)) : q).limit(Math.max(1, query.limit ?? 100)).all();
+    return rows.map(rowToSyncRun);
   }
 
   async recordSyncRun(run: CatalogSyncRunRecord): Promise<void> {
