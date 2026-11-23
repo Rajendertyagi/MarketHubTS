@@ -1,7 +1,7 @@
 # MarketHubTS — Metadata Discovery Phase 6 Implementation Plan
 
 > **Document type:** Technical implementation plan and bounded execution specification  
-> **Status:** Researched and architecturally decided; implementation has not started  
+> **Status:** WP6A implemented, independently reviewed and published. WP6B and WP6C remain pending separate authorization.  
 > **Repository:** `Rajendertyagi/MarketHubTS`  
 > **GitHub branch reviewed:** `develop`  
 > **Reviewed HEAD:** `a1df3d1964dac209af20bd9f797bc25d99efb278`  
