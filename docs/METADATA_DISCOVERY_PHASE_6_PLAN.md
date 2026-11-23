@@ -386,7 +386,7 @@ It must validate non-empty values with the shared `providerIdSchema.safeParse()`
 - `apps/web/src/lib/snapshot-form.ts` (new pure provider-selection helper)
 - `tests/market/snapshots.test.ts`
 - `tests/web/snapshots.test.ts`
-- `tests/market/historical-routes.test.ts` only if a small API passthrough assertion is required to prove omitted provider remains omitted.
+- `tests/market/snapshot-routes.test.ts` (new) only if a small API passthrough assertion is required to prove omitted provider remains omitted. The route under test is `apps/api/src/snapshot-routes.ts`, not the historical-routes file; no dedicated snapshot-route test file exists today.
 
 Do not change the snapshot service or route implementation unless the new tests demonstrate that current behavior differs from the verified behavior described above. If source behavior differs on the agent's local checkout, stop and report rather than silently changing it.
 
@@ -603,7 +603,13 @@ bun test tests/market/retention.test.ts
 **WP6B**
 
 ```bash
-bun test tests/market/snapshots.test.ts tests/web/snapshots.test.ts tests/market/historical-routes.test.ts
+bun test tests/market/snapshots.test.ts tests/web/snapshots.test.ts
+```
+
+If the optional `tests/market/snapshot-routes.test.ts` is added under §5.5:
+
+```bash
+bun test tests/market/snapshot-routes.test.ts
 ```
 
 **WP6C**
