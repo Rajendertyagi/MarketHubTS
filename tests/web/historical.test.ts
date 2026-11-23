@@ -1,16 +1,20 @@
 // react is a workspace dependency of @markethub/web, not the repo root.
+import { readFileSync } from "node:fs";
 import { createElement } from "../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   candleIntervalSchema,
   istCalendarParts, istDateString, istDayStartMs, istMonthStartMs, nextIstMonthStartMs,
-  parseIstDateOnly, parseIstDateRange, type HistoricalCandle, type HistoricalSyncConfig
+  parseIstDateOnly, parseIstDateRange, retentionCleanupResultSchema, retentionSettingsSchema,
+  retentionSettingsViewSchema, type HistoricalCandle, type HistoricalSyncConfig,
+  type RetentionDataClass, type RetentionSettingsView
 } from "../../packages/contracts/src/index";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../../apps/web/src/lib/historical";
+import { draftFromView, parseRetentionDraft, type RetentionDraft } from "../../apps/web/src/lib/retention-form";
 import { HistoricalPanel, historicalFocusToForm } from "../../apps/web/src/components/HistoricalPanel";
 
 const originalFetch = globalThis.fetch;
@@ -244,9 +248,171 @@ describe("historical web client", () => {
     expect(saved.valid).toBe(true);
     expect(saved.settings?.classes.CANDLE?.maxAgeDays).toBe(30);
 
-    fakeFetch(() => ({ status: 200, body: { ran: false, reason: "invalid", candlesDeleted: 0, snapshotsDeleted: 0 } }));
+    fakeFetch(() => ({ status: 200, body: { ran: false, reason: "invalid", candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 } }));
     const cleanup = await runRetentionCleanup();
     expect(cleanup.ran).toBe(false);
     expect(cleanup.candlesDeleted).toBe(0);
+  });
+});
+
+describe("WP6A — retention client validates complete envelopes", () => {
+  test("fetchRetention rejects malformed full response envelopes", async () => {
+    const malformed: unknown[] = [
+      { settings: { version: 1, classes: {} }, valid: true, error: "unexpected error" },
+      { settings: null, valid: false, error: "" },
+      { settings: null, valid: true, error: null },
+      { settings: { version: 1, classes: {} }, valid: "yes", error: null },
+      { settings: { version: 99, classes: {} }, valid: true, error: null },
+      { valid: false, error: "missing settings" },
+      null
+    ];
+    for (const body of malformed) {
+      fakeFetch(() => ({ status: 200, body }));
+      await expect(fetchRetention()).rejects.toBeDefined();
+    }
+  });
+
+  test("runRetentionCleanup rejects malformed or incomplete payloads instead of zero-defaulting", async () => {
+    const ok = { ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2, activitiesDeleted: 3 };
+    const malformed: unknown[] = [
+      { ...ok, activitiesDeleted: undefined },
+      { ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2 },
+      { ...ok, candlesDeleted: 1.5 },
+      { ...ok, candlesDeleted: -1 },
+      { ...ok, candlesDeleted: "1" },
+      { ...ok, reason: 5 },
+      { ...ok, ran: "true" },
+      null
+    ];
+    for (const body of malformed) {
+      fakeFetch(() => ({ status: 200, body }));
+      await expect(runRetentionCleanup()).rejects.toBeDefined();
+    }
+  });
+
+  test("all three classes round-trip through the client and shared schemas", async () => {
+    const settings = {
+      version: 1 as const,
+      classes: { CANDLE: { maxAgeDays: 5 }, SNAPSHOT: { maxAgeDays: 7 }, ACTIVITY: { maxAgeDays: 9 } }
+    };
+    fakeFetch(() => ({ status: 200, body: { settings, valid: true, error: null } }));
+    const fetched = await fetchRetention();
+    expect(retentionSettingsViewSchema.safeParse(fetched).success).toBe(true);
+    expect(fetched.settings?.classes.CANDLE?.maxAgeDays).toBe(5);
+    expect(fetched.settings?.classes.SNAPSHOT?.maxAgeDays).toBe(7);
+    expect(fetched.settings?.classes.ACTIVITY?.maxAgeDays).toBe(9);
+
+    fakeFetch(() => ({ status: 200, body: { settings, valid: true, error: null } }));
+    const saved = await saveRetention(settings);
+    expect(saved.valid).toBe(true);
+    expect(saved.settings?.classes.ACTIVITY?.maxAgeDays).toBe(9);
+
+    const cleanup = { ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2, activitiesDeleted: 3 };
+    fakeFetch(() => ({ status: 200, body: cleanup }));
+    const result = await runRetentionCleanup();
+    expect(retentionCleanupResultSchema.safeParse(result).success).toBe(true);
+    expect(result).toEqual(cleanup);
+  });
+});
+
+describe("WP6A — retention form helpers", () => {
+  const classes: RetentionDataClass[] = ["CANDLE", "SNAPSHOT", "ACTIVITY"];
+  const cases: Array<{ raw: string; ok: boolean; value?: number }> = [
+    { raw: "", ok: true },
+    { raw: "   ", ok: true },
+    { raw: "30", ok: true, value: 30 },
+    { raw: "01", ok: true, value: 1 },
+    { raw: "0", ok: false },
+    { raw: "-1", ok: false },
+    { raw: "1.5", ok: false },
+    { raw: "1e2", ok: false },
+    { raw: "1.0", ok: false },
+    { raw: "1,000", ok: false },
+    { raw: "+1", ok: false },
+    { raw: "abc", ok: false },
+    { raw: "9007199254740992", ok: false }
+  ];
+
+  test("parseRetentionDraft table-driven cases for every class", () => {
+    for (const dataClass of classes) {
+      for (const c of cases) {
+        const draft: RetentionDraft = { CANDLE: "", SNAPSHOT: "", ACTIVITY: "", [dataClass]: c.raw };
+        const { settings, errors } = parseRetentionDraft(draft);
+        if (c.ok) {
+          expect(settings).not.toBeNull();
+          expect(Object.keys(errors)).toHaveLength(0);
+          expect(settings!.classes[dataClass]?.maxAgeDays).toBe(c.value);
+        } else {
+          expect(settings).toBeNull();
+          expect(typeof errors[dataClass]).toBe("string");
+          expect(errors[dataClass]!.length).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
+  test("parseRetentionDraft does not mutate the supplied draft", () => {
+    const draft: RetentionDraft = { CANDLE: " 30 ", SNAPSHOT: "abc", ACTIVITY: "" };
+    const before = JSON.stringify(draft);
+    parseRetentionDraft(draft);
+    expect(JSON.stringify(draft)).toBe(before);
+  });
+
+  test("parseRetentionDraft returns field-specific errors for multiple invalid fields", () => {
+    const { settings, errors } = parseRetentionDraft({ CANDLE: "-1", SNAPSHOT: "1.5", ACTIVITY: "30" });
+    expect(settings).toBeNull();
+    expect(typeof errors.CANDLE).toBe("string");
+    expect(typeof errors.SNAPSHOT).toBe("string");
+    expect(errors.ACTIVITY).toBeUndefined();
+  });
+
+  test("parseRetentionDraft returns a schema-valid settings object when all fields are valid", () => {
+    const { settings, errors } = parseRetentionDraft({ CANDLE: "30", SNAPSHOT: "01", ACTIVITY: "9" });
+    expect(errors).toEqual({});
+    expect(settings).toEqual({
+      version: 1,
+      classes: { CANDLE: { maxAgeDays: 30 }, SNAPSHOT: { maxAgeDays: 1 }, ACTIVITY: { maxAgeDays: 9 } }
+    });
+    expect(retentionSettingsSchema.safeParse(settings).success).toBe(true);
+  });
+
+  test("draftFromView maps valid views to digit strings and invalid/missing views to blanks", () => {
+    const validView: RetentionSettingsView = {
+      settings: { version: 1, classes: { CANDLE: { maxAgeDays: 30 }, ACTIVITY: { maxAgeDays: 9 } } },
+      valid: true,
+      error: null
+    };
+    expect(draftFromView(validView)).toEqual({ CANDLE: "30", SNAPSHOT: "", ACTIVITY: "9" });
+
+    const emptyView: RetentionSettingsView = { settings: { version: 1, classes: {} }, valid: true, error: null };
+    expect(draftFromView(emptyView)).toEqual({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "" });
+
+    const invalidView: RetentionSettingsView = { settings: null, valid: false, error: "not configured" };
+    expect(draftFromView(invalidView)).toEqual({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "" });
+  });
+});
+
+describe("WP6A — retention panel static rendering", () => {
+  test("renders three text/numeric inputs, no number inputs, and honest status copy", () => {
+    const html = renderToStaticMarkup(createElement(HistoricalPanel, {}));
+    const labels = ["Candle max age days", "Snapshot max age days", "Activity max age days"];
+    for (const label of labels) {
+      expect(html).toContain(`aria-label="${label}"`);
+      expect(html).toMatch(new RegExp(`aria-label="${label}"[^>]*value=""`));
+    }
+    expect(html.match(/type="text"/g)?.length).toBe(3);
+    expect(html.toLowerCase().match(/inputmode="numeric"/g)?.length).toBe(3);
+    expect(html).not.toContain('type="number"');
+    expect(html).toContain("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
+    expect(html).toContain("Edits are not saved until you select Save retention.");
+    expect(html).toContain("Run cleanup uses the saved settings, not this unsaved draft.");
+    expect(html).toContain("Valid settings with no limits delete nothing.");
+  });
+
+  test("component source pins all three distinct persisted-state messages", () => {
+    const source = readFileSync(new URL("../../apps/web/src/components/HistoricalPanel.tsx", import.meta.url), "utf8");
+    expect(source).toContain("No valid saved retention settings. Cleanup is disabled and deletes nothing.");
+    expect(source).toContain("Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.");
+    expect(source).toContain("Saved retention limits apply only to the configured data classes.");
   });
 });

@@ -6,8 +6,11 @@ import {
   candleRangeRequestSchema,
   historicalCandleSchema,
   historicalSyncConfigSchema,
+  retentionCleanupResultSchema,
   retentionSettingsSchema,
-  type CandleRangeRequest
+  retentionSettingsViewSchema,
+  type CandleRangeRequest,
+  type RetentionCleanupResult as RetentionCleanupResultContract
 } from "@markethub/contracts";
 import type { HistoricalCandleService } from "@markethub/market-core";
 import type { AppSettings, CandleRepository, SnapshotRepository, McpActivityRepository } from "@markethub/database";
@@ -21,13 +24,8 @@ export interface HistoricalRouteDependencies {
   activities?: McpActivityRepository;
 }
 
-export interface RetentionCleanupResult {
-  ran: boolean;
-  reason: string | null;
-  candlesDeleted: number;
-  snapshotsDeleted: number;
-  activitiesDeleted: number;
-}
+/** Kept as a public alias so existing consumers do not break; the shape is contract-owned. */
+export type RetentionCleanupResult = RetentionCleanupResultContract;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -137,7 +135,7 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
   // --- Retention (validated app_meta, covers both CANDLE and SNAPSHOT classes) ---
   app.get("/api/retention", (c) => {
     const read = deps.settings.getRetention();
-    return c.json({ settings: read.settings, valid: read.valid, error: read.error });
+    return c.json(retentionSettingsViewSchema.parse({ settings: read.settings, valid: read.valid, error: read.error }));
   });
 
   app.put("/api/retention", async (c) => {
@@ -147,13 +145,13 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     const parsed = retentionSettingsSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid retention settings" }), 400);
     deps.settings.setRetention(parsed.data);
-    return c.json({ settings: parsed.data, valid: true, error: null });
+    return c.json(retentionSettingsViewSchema.parse({ settings: parsed.data, valid: true, error: null }));
   });
 
   app.post("/api/retention/cleanup", (c) => {
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Retention cleanup is local-owner only" }), 403);
     }
-    return c.json(applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots, deps.activities));
+    return c.json(retentionCleanupResultSchema.parse(applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots, deps.activities)));
   });
 }

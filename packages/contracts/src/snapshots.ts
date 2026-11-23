@@ -149,3 +149,33 @@ export const retentionSettingsSchema = z.object({
   })
 });
 export type RetentionSettings = z.infer<typeof retentionSettingsSchema>;
+
+/**
+ * Shared wire shape for a retention settings read. The two branches are
+ * mutually exclusive: a valid persisted state (including a valid empty
+ * `classes: {}`) carries settings and a null error; a missing, malformed or
+ * schema-invalid state carries null settings and a non-empty error.
+ */
+export const retentionSettingsViewSchema = z.discriminatedUnion("valid", [
+  z.object({
+    settings: retentionSettingsSchema,
+    valid: z.literal(true),
+    error: z.null()
+  }),
+  z.object({
+    settings: z.null(),
+    valid: z.literal(false),
+    error: z.string().min(1)
+  })
+]);
+export type RetentionSettingsView = z.infer<typeof retentionSettingsViewSchema>;
+
+/** Shared wire shape for a retention cleanup result. Zero is a real result, never a default. */
+export const retentionCleanupResultSchema = z.object({
+  ran: z.boolean(),
+  reason: z.string().nullable(),
+  candlesDeleted: z.number().int().nonnegative(),
+  snapshotsDeleted: z.number().int().nonnegative(),
+  activitiesDeleted: z.number().int().nonnegative()
+});
+export type RetentionCleanupResult = z.infer<typeof retentionCleanupResultSchema>;

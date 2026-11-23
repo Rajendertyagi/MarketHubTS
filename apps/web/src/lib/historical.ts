@@ -3,13 +3,17 @@ import {
   candleRangeNoteSchema,
   historicalCandleSchema,
   historicalSyncConfigSchema,
+  retentionCleanupResultSchema,
   retentionSettingsSchema,
+  retentionSettingsViewSchema,
   type CandleGap,
   type CandleRangeNote,
   type CandleRangeRequest,
   type HistoricalCandle,
   type HistoricalSyncConfig,
-  type RetentionSettings
+  type RetentionCleanupResult,
+  type RetentionSettings,
+  type RetentionSettingsView
 } from "@markethub/contracts";
 
 export type HistoricalErrorKind = "forbidden" | "validation" | "unavailable" | "internal";
@@ -114,25 +118,14 @@ export async function deleteSyncConfig(id: string): Promise<void> {
   }
 }
 
-export interface RetentionView {
-  settings: RetentionSettings | null;
-  valid: boolean;
-  error: string | null;
-}
-
-export async function fetchRetention(): Promise<RetentionView> {
+export async function fetchRetention(): Promise<RetentionSettingsView> {
   const response = await fetch("/api/retention", { headers: { Accept: "application/json" } });
   const payload = await readPayload(response);
   if (!response.ok) throw new HistoricalHttpError(classify(response.status), messageOf(payload, response.status));
-  const p = payload as { settings?: unknown; valid?: unknown; error?: unknown };
-  return {
-    settings: p.settings ? retentionSettingsSchema.parse(p.settings) : null,
-    valid: p.valid === true,
-    error: typeof p.error === "string" ? p.error : null
-  };
+  return retentionSettingsViewSchema.parse(payload);
 }
 
-export async function saveRetention(settings: RetentionSettings): Promise<RetentionView> {
+export async function saveRetention(settings: RetentionSettings): Promise<RetentionSettingsView> {
   const response = await fetch("/api/retention", {
     method: "PUT",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -140,22 +133,12 @@ export async function saveRetention(settings: RetentionSettings): Promise<Retent
   });
   const payload = await readPayload(response);
   if (!response.ok) throw new HistoricalHttpError(classify(response.status), messageOf(payload, response.status));
-  const p = payload as { settings?: unknown };
-  return { settings: retentionSettingsSchema.parse(p.settings), valid: true, error: null };
-}
-
-export interface RetentionCleanupResult {
-  ran: boolean;
-  reason: string | null;
-  candlesDeleted: number;
-  snapshotsDeleted: number;
-  activitiesDeleted: number;
+  return retentionSettingsViewSchema.parse(payload);
 }
 
 export async function runRetentionCleanup(): Promise<RetentionCleanupResult> {
   const response = await fetch("/api/retention/cleanup", { method: "POST", headers: { Accept: "application/json" } });
   const payload = await readPayload(response);
   if (!response.ok) throw new HistoricalHttpError(classify(response.status), messageOf(payload, response.status));
-  const p = payload as RetentionCleanupResult;
-  return { ran: p.ran === true, reason: p.reason ?? null, candlesDeleted: p.candlesDeleted ?? 0, snapshotsDeleted: p.snapshotsDeleted ?? 0, activitiesDeleted: p.activitiesDeleted ?? 0 };
+  return retentionCleanupResultSchema.parse(payload);
 }

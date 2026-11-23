@@ -1,22 +1,18 @@
 import { eq } from "drizzle-orm";
-import { retentionSettingsSchema, type RetentionSettings } from "@markethub/contracts";
+import { retentionSettingsSchema, type RetentionSettings, type RetentionSettingsView } from "@markethub/contracts";
 import { appMeta } from "./schema";
 import type { MarketHubDb } from "./index";
 
 /** Durable user-configurable retention lives in validated app_meta, not provider_settings. */
 export const RETENTION_SETTINGS_KEY = "retention_settings";
 
-export interface RetentionReadResult {
-  settings: RetentionSettings | null;
-  /** False for missing, malformed or schema-invalid values — cleanup must be disabled. */
-  valid: boolean;
-  error: string | null;
-}
+/** Kept as a public alias so existing consumers do not break; the shape is contract-owned. */
+export type RetentionReadResult = RetentionSettingsView;
 
 export class AppSettings {
   constructor(private readonly db: MarketHubDb) {}
 
-  getRetention(): RetentionReadResult {
+  getRetention(): RetentionSettingsView {
     const row = this.db.select().from(appMeta).where(eq(appMeta.key, RETENTION_SETTINGS_KEY)).get();
     if (!row) return { settings: null, valid: false, error: "retention settings not configured" };
     let parsed: unknown;

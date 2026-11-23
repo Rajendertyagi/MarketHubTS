@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { candleIntervalSchema, istDateString, parseIstDateRange } from "@markethub/contracts";
 import type {
-  CandleGap, CandleInterval, CandleRangeNote, HistoricalCandle, HistoricalSyncConfig, RetentionSettings
+  CandleGap, CandleInterval, CandleRangeNote, HistoricalCandle, HistoricalSyncConfig,
+  RetentionDataClass, RetentionSettingsView
 } from "@markethub/contracts";
 import {
   deleteSyncConfig, fetchCachedCandles, fetchCoverage, fetchRetention, fetchSyncConfigs,
   HistoricalHttpError, runRetentionCleanup, saveRetention, saveSyncConfig
 } from "../lib/historical";
+import { draftFromView, parseRetentionDraft, type RetentionDraft, type RetentionDraftErrors } from "../lib/retention-form";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
@@ -56,8 +58,9 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   const [gaps, setGaps] = useState<CandleGap[]>([]);
   const [unavailableNotes, setUnavailableNotes] = useState<CandleRangeNote[]>([]);
   const [configs, setConfigs] = useState<HistoricalSyncConfig[]>([]);
-  const [retention, setRetention] = useState<RetentionSettings | null>(null);
-  const [retentionValid, setRetentionValid] = useState(false);
+  const [retentionDraft, setRetentionDraft] = useState<RetentionDraft>({ CANDLE: "", SNAPSHOT: "", ACTIVITY: "" });
+  const [retentionView, setRetentionView] = useState<RetentionSettingsView | null>(null);
+  const [retentionErrors, setRetentionErrors] = useState<RetentionDraftErrors>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -67,10 +70,11 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   };
   const loadRetention = () => {
     void fetchRetention().then((view) => {
-      // Always keep an editable draft: from an invalid/missing state the
-      // operator can still save a schema-valid "no limits" configuration.
-      setRetention(view.settings ?? { version: 1, classes: {} });
-      setRetentionValid(view.valid);
+      // The persisted view owns the draft on load/reload. An invalid or missing
+      // view yields three blank fields; no default retention period is invented.
+      setRetentionView(view);
+      setRetentionDraft(draftFromView(view));
+      setRetentionErrors({});
     }).catch((cause) => setError(toError(cause)));
   };
 
@@ -149,9 +153,16 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
   };
 
   const saveRetentionSettings = async () => {
-    const draft = retention ?? { version: 1, classes: {} };
+    const { settings, errors } = parseRetentionDraft(retentionDraft);
+    if (!settings) {
+      // Keep the raw text exactly as typed and block the save call.
+      setRetentionErrors(errors);
+      setMessage(null);
+      return;
+    }
+    setRetentionErrors({});
     try {
-      await saveRetention(draft);
+      await saveRetention(settings);
       setMessage("Retention settings saved.");
       loadRetention();
     } catch (cause) { setError(toError(cause)); }
@@ -165,6 +176,23 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
         : `Cleanup disabled: ${result.reason ?? "invalid settings"}. Nothing deleted.`);
     } catch (cause) { setError(toError(cause)); }
   };
+
+  const validRetentionView = retentionView?.valid ? retentionView : null;
+  const savedClasses = validRetentionView?.settings.classes;
+  const hasSavedLimits = savedClasses?.CANDLE !== undefined
+    || savedClasses?.SNAPSHOT !== undefined
+    || savedClasses?.ACTIVITY !== undefined;
+  const retentionStatus = !validRetentionView
+    ? "No valid saved retention settings. Cleanup is disabled and deletes nothing."
+    : hasSavedLimits
+      ? "Saved retention limits apply only to the configured data classes."
+      : "Saved settings are valid, but no retention limits are configured. Cleanup will delete nothing.";
+
+  const retentionFields: { dataClass: RetentionDataClass; label: string; ariaLabel: string }[] = [
+    { dataClass: "CANDLE", label: "Candle max age (days)", ariaLabel: "Candle max age days" },
+    { dataClass: "SNAPSHOT", label: "Snapshot max age (days)", ariaLabel: "Snapshot max age days" },
+    { dataClass: "ACTIVITY", label: "Activity max age (days)", ariaLabel: "Activity max age days" }
+  ];
 
   const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
   const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
@@ -263,55 +291,39 @@ export function HistoricalPanel({ focus }: { focus?: HistoricalFocus | null }) {
 
       <div className="mt-5 border-t border-slate-800 pt-4">
         <h4 className="text-sm font-semibold text-slate-200">Retention</h4>
+        <p className="mt-1 text-xs text-slate-400" role="status">{retentionStatus}</p>
         <p className="mt-1 text-xs text-slate-400">
-          {retentionValid ? "Valid settings active." : "No valid settings — cleanup is disabled and deletes nothing."}
+          Edits are not saved until you select Save retention. Run cleanup uses the saved settings, not this unsaved draft.
+          Valid settings with no limits delete nothing.
         </p>
         <div className="mt-2 flex flex-wrap items-end gap-3">
-          <label className="text-xs text-slate-300">
-            Candle max age (days)
-            <input aria-label="Candle max age days" type="number" min="1" className={`${input} mt-1 w-32`}
-              value={retention?.classes.CANDLE?.maxAgeDays ?? ""}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const days = Number(raw);
-                setRetention((prev) => {
-                  const classes = { ...(prev?.classes ?? {}) };
-                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.CANDLE = { maxAgeDays: days };
-                  else delete classes.CANDLE; // clearing the input removes the limit
-                  return { version: 1, classes };
-                });
-              }} />
-          </label>
-          <label className="text-xs text-slate-300">
-            Snapshot max age (days)
-            <input aria-label="Snapshot max age days" type="number" min="1" className={`${input} mt-1 w-32`}
-              value={retention?.classes.SNAPSHOT?.maxAgeDays ?? ""}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const days = Number(raw);
-                setRetention((prev) => {
-                  const classes = { ...(prev?.classes ?? {}) };
-                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.SNAPSHOT = { maxAgeDays: days };
-                  else delete classes.SNAPSHOT; // clearing the input removes the limit
-                  return { version: 1, classes };
-                });
-              }} />
-          </label>
-          <label className="text-xs text-slate-300">
-            Activity max age (days)
-            <input aria-label="Activity max age days" type="number" min="1" className={`${input} mt-1 w-32`}
-              value={retention?.classes.ACTIVITY?.maxAgeDays ?? ""}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const days = Number(raw);
-                setRetention((prev) => {
-                  const classes = { ...(prev?.classes ?? {}) };
-                  if (raw !== "" && Number.isInteger(days) && days > 0) classes.ACTIVITY = { maxAgeDays: days };
-                  else delete classes.ACTIVITY; // clearing the input removes the limit
-                  return { version: 1, classes };
-                });
-              }} />
-          </label>
+          {retentionFields.map(({ dataClass, label, ariaLabel }) => (
+            <label key={dataClass} className="text-xs text-slate-300">
+              {label}
+              <input
+                aria-label={ariaLabel}
+                type="text"
+                inputMode="numeric"
+                className={`${input} mt-1 w-32`}
+                value={retentionDraft[dataClass]}
+                aria-invalid={retentionErrors[dataClass] !== undefined}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setRetentionDraft((prev) => ({ ...prev, [dataClass]: raw }));
+                  if (retentionErrors[dataClass] !== undefined) {
+                    setRetentionErrors((prev) => {
+                      const next = { ...prev };
+                      delete next[dataClass];
+                      return next;
+                    });
+                  }
+                }}
+              />
+              {retentionErrors[dataClass] && (
+                <span className="mt-1 block text-xs text-amber-300" role="alert">{retentionErrors[dataClass]}</span>
+              )}
+            </label>
+          ))}
           <button type="button" className={button} onClick={() => void saveRetentionSettings()}>Save retention</button>
           <button type="button" className={button} onClick={() => void cleanup()}>Run cleanup</button>
         </div>

@@ -4,10 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, resetConfigCache } from "../../packages/config/src/index";
 import {
-  AppSettings, CandleRepository, SnapshotRepository, defaultMigrationsFolder, openDatabase, runMigrations
+  AppSettings, CandleRepository, SnapshotRepository, defaultMigrationsFolder, openDatabase, runMigrations,
+  RETENTION_SETTINGS_KEY
 } from "../../packages/database/src/index";
-import type { HistoricalCandle, HistoricalSyncConfig, OptionChainCaptureConfig, OptionChainSnapshot } from "../../packages/contracts/src/index";
+import type { McpActivityRepository } from "../../packages/database/src/index";
+import { appMeta } from "../../packages/database/src/schema";
+import {
+  retentionCleanupResultSchema, retentionSettingsViewSchema,
+  type HistoricalCandle, type HistoricalSyncConfig, type OptionChainCaptureConfig,
+  type OptionChainSnapshot, type RetentionSettings
+} from "../../packages/contracts/src/index";
 import { createApp } from "../../apps/api/src/app";
+import { applyRetentionCleanup } from "../../apps/api/src/historical-routes";
 import { createLogger } from "../../apps/api/src/lib/logger";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 
@@ -29,7 +37,33 @@ function harness() {
   const snapshots = new SnapshotRepository(db.db, db.sqlite);
   const settings = new AppSettings(db.db);
   const cleanup = () => { closeDatabaseHandle(db); removeTempDir(dir); };
-  return { app, localEnv, remoteEnv, candles, snapshots, settings, cleanup };
+  return { app, localEnv, remoteEnv, db, candles, snapshots, settings, cleanup };
+}
+
+type Harness = ReturnType<typeof harness>;
+
+function writeRawRetention(h: Harness, value: string): void {
+  const now = new Date();
+  h.db.db.insert(appMeta).values({ key: RETENTION_SETTINGS_KEY, value, updatedAt: now })
+    .onConflictDoUpdate({ target: appMeta.key, set: { value, updatedAt: now } })
+    .run();
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const FIXED_NOW = Date.parse("2026-06-01T00:00:00Z");
+
+function fakeRepositories() {
+  const calls: string[] = [];
+  const candles = {
+    cleanupCandles(cutoffMs: number) { calls.push(`candles:${cutoffMs}`); return 1; }
+  } as unknown as CandleRepository;
+  const snapshots = {
+    cleanupSnapshots(cutoffMs: number) { calls.push(`snapshots:${cutoffMs}`); return 2; }
+  } as unknown as SnapshotRepository;
+  const activities = {
+    cleanupActivities(cutoffMs: number) { calls.push(`activities:${cutoffMs}`); return 3; }
+  } as unknown as McpActivityRepository;
+  return { candles, snapshots, activities, calls };
 }
 
 function seedCandle(tsMs: number): HistoricalCandle {
@@ -275,6 +309,226 @@ describe("M5 historical/snapshot API routes", () => {
       const body = await json(res);
       expect(body.candles.length).toBe(0);
       expect(body.providersTried.length).toBe(0);
+    } finally { h.cleanup(); }
+  });
+});
+
+describe("WP6A — shared retention contracts and persistence", () => {
+  const allClasses = {
+    version: 1,
+    classes: { CANDLE: { maxAgeDays: 30 }, SNAPSHOT: { maxAgeDays: 7 }, ACTIVITY: { maxAgeDays: 9 } }
+  };
+
+  test("retentionSettingsViewSchema parses a valid all-classes view", () => {
+    const parsed = retentionSettingsViewSchema.safeParse({ settings: allClasses, valid: true, error: null });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.valid).toBe(true);
+      expect(parsed.data.settings?.classes.ACTIVITY?.maxAgeDays).toBe(9);
+    }
+  });
+
+  test("retentionSettingsViewSchema treats valid empty settings as valid", () => {
+    const parsed = retentionSettingsViewSchema.safeParse({ settings: { version: 1, classes: {} }, valid: true, error: null });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.settings?.classes).toEqual({});
+  });
+
+  test("retentionSettingsViewSchema parses an invalid view with a non-empty error", () => {
+    const parsed = retentionSettingsViewSchema.safeParse({ settings: null, valid: false, error: "retention settings not configured" });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.error).toBe("retention settings not configured");
+  });
+
+  test("retentionSettingsViewSchema rejects invalid branches and combinations", () => {
+    expect(retentionSettingsViewSchema.safeParse({ settings: null, valid: false, error: "" }).success).toBe(false);
+    expect(retentionSettingsViewSchema.safeParse({ settings: allClasses, valid: true, error: "oops" }).success).toBe(false);
+    expect(retentionSettingsViewSchema.safeParse({ settings: null, valid: true, error: null }).success).toBe(false);
+    expect(retentionSettingsViewSchema.safeParse({ settings: allClasses, valid: false, error: "bad" }).success).toBe(false);
+    expect(retentionSettingsViewSchema.safeParse({ settings: null, valid: false, error: null }).success).toBe(false);
+    expect(retentionSettingsViewSchema.safeParse({ valid: true, error: null }).success).toBe(false);
+  });
+
+  test("retentionCleanupResultSchema requires all fields and validates every count", () => {
+    const ok = { ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2, activitiesDeleted: 3 };
+    expect(retentionCleanupResultSchema.safeParse(ok).success).toBe(true);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, candlesDeleted: undefined }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, candlesDeleted: 1.5 }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, candlesDeleted: -1 }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, candlesDeleted: "1" }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, reason: 5 }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ...ok, ran: "true" }).success).toBe(false);
+    expect(retentionCleanupResultSchema.safeParse({ ran: false, reason: "invalid", candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 }).success).toBe(true);
+  });
+
+  test("AppSettings.getRetention distinguishes missing, malformed, invalid, valid-empty and valid-configured", () => {
+    const h = harness();
+    try {
+      expect(h.settings.getRetention()).toEqual({ settings: null, valid: false, error: "retention settings not configured" });
+
+      writeRawRetention(h, "{not json");
+      expect(h.settings.getRetention()).toEqual({ settings: null, valid: false, error: "retention settings malformed" });
+
+      writeRawRetention(h, JSON.stringify({ version: 99 }));
+      expect(h.settings.getRetention()).toEqual({ settings: null, valid: false, error: "retention settings invalid" });
+
+      h.settings.setRetention({ version: 1, classes: {} });
+      expect(h.settings.getRetention()).toEqual({ settings: { version: 1, classes: {} }, valid: true, error: null });
+
+      h.settings.setRetention({ version: 1, classes: { CANDLE: { maxAgeDays: 30 } } });
+      const configured = h.settings.getRetention();
+      expect(configured.valid).toBe(true);
+      expect(configured.settings?.classes.CANDLE?.maxAgeDays).toBe(30);
+      expect(configured.error).toBeNull();
+    } finally { h.cleanup(); }
+  });
+});
+
+describe("WP6A — retention cleanup behavior", () => {
+  test("missing settings fail closed without calling any repository", () => {
+    const h = harness();
+    try {
+      const repos = fakeRepositories();
+      const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+      expect(result).toEqual({ ran: false, reason: "retention settings not configured", candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 });
+      expect(repos.calls).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+
+  test("malformed and schema-invalid persisted settings fail closed", () => {
+    for (const raw of ["{not json", JSON.stringify({ version: 99 })]) {
+      const h = harness();
+      try {
+        writeRawRetention(h, raw);
+        const repos = fakeRepositories();
+        const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+        expect(result.ran).toBe(false);
+        expect(result.candlesDeleted).toBe(0);
+        expect(result.snapshotsDeleted).toBe(0);
+        expect(result.activitiesDeleted).toBe(0);
+        expect(repos.calls).toEqual([]);
+      } finally { h.cleanup(); }
+    }
+  });
+
+  test("valid empty settings run with zero deletes and no repository calls", () => {
+    const h = harness();
+    try {
+      h.settings.setRetention({ version: 1, classes: {} });
+      const repos = fakeRepositories();
+      const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+      expect(result).toEqual({ ran: true, reason: null, candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 });
+      expect(repos.calls).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+
+  test("each configured class is cleaned independently", () => {
+    const cases: Array<{
+      settings: RetentionSettings;
+      expectedCall: string;
+      expected: { candlesDeleted: number; snapshotsDeleted: number; activitiesDeleted: number };
+    }> = [
+      {
+        settings: { version: 1, classes: { CANDLE: { maxAgeDays: 30 } } },
+        expectedCall: `candles:${FIXED_NOW - 30 * DAY_MS}`,
+        expected: { candlesDeleted: 1, snapshotsDeleted: 0, activitiesDeleted: 0 }
+      },
+      {
+        settings: { version: 1, classes: { SNAPSHOT: { maxAgeDays: 7 } } },
+        expectedCall: `snapshots:${FIXED_NOW - 7 * DAY_MS}`,
+        expected: { candlesDeleted: 0, snapshotsDeleted: 2, activitiesDeleted: 0 }
+      },
+      {
+        settings: { version: 1, classes: { ACTIVITY: { maxAgeDays: 9 } } },
+        expectedCall: `activities:${FIXED_NOW - 9 * DAY_MS}`,
+        expected: { candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 3 }
+      }
+    ];
+    for (const c of cases) {
+      const h = harness();
+      try {
+        h.settings.setRetention(c.settings);
+        const repos = fakeRepositories();
+        const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+        expect(result.ran).toBe(true);
+        expect(result.candlesDeleted).toBe(c.expected.candlesDeleted);
+        expect(result.snapshotsDeleted).toBe(c.expected.snapshotsDeleted);
+        expect(result.activitiesDeleted).toBe(c.expected.activitiesDeleted);
+        expect(repos.calls).toEqual([c.expectedCall]);
+      } finally { h.cleanup(); }
+    }
+  });
+
+  test("mixed configuration applies each class independently", () => {
+    const h = harness();
+    try {
+      h.settings.setRetention({
+        version: 1,
+        classes: { CANDLE: { maxAgeDays: 30 }, SNAPSHOT: { maxAgeDays: 7 }, ACTIVITY: { maxAgeDays: 9 } }
+      });
+      const repos = fakeRepositories();
+      const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+      expect(result).toEqual({ ran: true, reason: null, candlesDeleted: 1, snapshotsDeleted: 2, activitiesDeleted: 3 });
+      expect(repos.calls).toEqual([
+        `candles:${FIXED_NOW - 30 * DAY_MS}`,
+        `snapshots:${FIXED_NOW - 7 * DAY_MS}`,
+        `activities:${FIXED_NOW - 9 * DAY_MS}`
+      ]);
+    } finally { h.cleanup(); }
+  });
+
+  test("an omitted class does not trigger cleanup for that class", () => {
+    const h = harness();
+    try {
+      h.settings.setRetention({ version: 1, classes: { CANDLE: { maxAgeDays: 30 }, ACTIVITY: { maxAgeDays: 9 } } });
+      const repos = fakeRepositories();
+      const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, repos.activities, () => FIXED_NOW);
+      expect(result.snapshotsDeleted).toBe(0);
+      expect(repos.calls).toEqual([
+        `candles:${FIXED_NOW - 30 * DAY_MS}`,
+        `activities:${FIXED_NOW - 9 * DAY_MS}`
+      ]);
+    } finally { h.cleanup(); }
+  });
+
+  test("ACTIVITY limit with no activity repository deletes nothing for that class", () => {
+    const h = harness();
+    try {
+      h.settings.setRetention({ version: 1, classes: { ACTIVITY: { maxAgeDays: 9 } } });
+      const repos = fakeRepositories();
+      const result = applyRetentionCleanup(h.settings, repos.candles, repos.snapshots, undefined, () => FIXED_NOW);
+      expect(result).toEqual({ ran: true, reason: null, candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 });
+      expect(repos.calls).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+
+  test("remote cleanup is rejected (local-owner only)", async () => {
+    const h = harness();
+    try {
+      const res = await h.app.request("/api/retention/cleanup", { method: "POST" }, h.remoteEnv);
+      expect(res.status).toBe(403);
+      expect((await json(res)).error).toBe("forbidden");
+    } finally { h.cleanup(); }
+  });
+
+  test("API retention and cleanup responses parse with the shared schemas", async () => {
+    const h = harness();
+    try {
+      const before = await json(await h.app.request("/api/retention", {}, h.localEnv));
+      expect(retentionSettingsViewSchema.safeParse(before).success).toBe(true);
+      expect(before.valid).toBe(false);
+
+      const saved = await json(await h.app.request("/api/retention", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: 1, classes: {} })
+      }, h.localEnv));
+      expect(retentionSettingsViewSchema.safeParse(saved).success).toBe(true);
+      expect(saved.valid).toBe(true);
+      expect(saved.settings.classes).toEqual({});
+
+      const cleanup = await json(await h.app.request("/api/retention/cleanup", { method: "POST" }, h.localEnv));
+      expect(retentionCleanupResultSchema.safeParse(cleanup).success).toBe(true);
+      expect(cleanup).toEqual({ ran: true, reason: null, candlesDeleted: 0, snapshotsDeleted: 0, activitiesDeleted: 0 });
     } finally { h.cleanup(); }
   });
 });
