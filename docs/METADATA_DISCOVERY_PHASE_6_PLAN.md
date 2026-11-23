@@ -1,7 +1,7 @@
 # MarketHubTS — Metadata Discovery Phase 6 Implementation Plan
 
 > **Document type:** Technical implementation plan and bounded execution specification  
-> **Status:** WP6A and WP6B implemented, independently reviewed and published. WP6C remains pending separate authorization.
+> **Status:** Phase 6 complete: WP6A, WP6B and WP6C implemented, independently audited KEEP and published on `develop`.
 >
 > **Repository:** `Rajendertyagi/MarketHubTS`  
 > **GitHub branch reviewed:** `develop`  
@@ -83,7 +83,7 @@ At the reviewed baseline:
 
 - Metadata discovery Phases 1, 2, 3 and 5 are recorded as implemented and published on `develop`.
 - Phase 4 derivative expiry discovery remains blocked on a real catalog population path and a bounded query. It is not part of Phase 6.
-- Phase 6 WP6A (retention consistency) and WP6B (snapshot provider selection) are implemented, independently audited to KEEP and published on `develop`; WP6C (Overview accuracy) remains pending separate authorization. Phase 6 is therefore not yet complete.
+- Phase 6 is complete: WP6A (retention consistency), WP6B (snapshot provider selection) and WP6C (Overview accuracy) are all implemented, independently audited KEEP and published on `develop`.
 - Phase 7 is the final cross-system acceptance phase and depends on previous phases.
 - M6-D/E source and tests are present on `develop`, but neither phase is accepted or complete. M6-B4 remains separately owned and not accepted.
 - Production market-data drivers remain locked. There is no verified live provider socket/feed, and no provider-backed historical or option-chain retrieval is active.
@@ -710,13 +710,29 @@ Phase 6 is complete only when all of the following are true:
 - Local test evidence is distinguished from CI evidence.
 - Current status and any remaining unverified behavior are reported honestly.
 
-**Current status (2026-11-23):** WP6A and WP6B have KEEP / no findings from independent review and are published on `develop` (WP6A: `f25d514` implementation, `128e44a` audit fix, `2866bae` technical-lead loading-state race fix; WP6B: `d132894`). WP6C has not been authorized or started, so its gate criterion above is not met and Phase 6 is not yet complete.
+**Current status (2026-11-23):** All three work packages have KEEP dispositions from independent review and are published on `develop` — WP6A (`f25d514` implementation, `128e44a` audit fix, `2866bae` technical-lead loading-state race fix; independent audit KEEP after fix cycles, technical-lead final KEEP), WP6B (`d132894`; independent audit KEEP, no code defects) and WP6C (`b37fa67`; independent audit KEEP with two optional non-blocking nits). All §11 exit-gate criteria are met and Phase 6 is complete. Final verification (local/agent-reported, not CI): full suite 975 pass / 0 fail (8247 assertions); typecheck, build and `git diff --check` clean.
 
 Phase 6 completion does not complete Phase 4, Phase 7, M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates.
 
 ---
 
-## 12. Reference index
+## 12. Close-out record
+
+This document is now an implementation record as well as the original plan. Phase 6 is **complete and published on `develop`**; it is not an open implementation assignment and grants no further authorization.
+
+| Work package | Scope | Implementation / fix commits | Independent audit verdict |
+|---|---|---|---|
+| WP6A — Retention consistency | Shared response contracts, safe retention form editing, honest saved-settings state, fail-closed regression coverage | `f25d514` (implementation), `128e44a` (audit fix), `2866bae` (technical-lead loading-state race fix) | KEEP after fix cycles; technical-lead final KEEP |
+| WP6B — Snapshot provider selection | Explicit-only provider selection derived from `providerIdSchema`; no FYERS default, no "Automatic" option; no service/fallback change | `d132894` | KEEP, no code defects |
+| WP6C — Overview accuracy | Presentation-only `OverviewStatus` component using existing `data.mcp.httpHandlerMounted`; two narrow doc citation fixes | `b37fa67` | KEEP (two optional non-blocking nits) |
+
+All §11 Phase 6 exit-gate criteria are met. Final verification (local/agent-reported, not CI): full suite **975 pass / 0 fail (8247 assertions)**; `bun run typecheck`, `bun run build` and `git diff --check` clean. No live provider verification; production drivers remain locked.
+
+Phase 6 completion does **not** complete Phase 4 (derivative expiry, blocked on catalog population), Phase 7 (cross-system acceptance), M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates.
+
+---
+
+## 13. Reference index
 
 ### Repository sources reviewed at `develop` HEAD `a1df3d1964dac209af20bd9f797bc25d99efb278`
 
