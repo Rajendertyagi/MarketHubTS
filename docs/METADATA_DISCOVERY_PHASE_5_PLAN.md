@@ -22,7 +22,7 @@ These are the inputs and failure modes the governing docs imply but no single ha
 
 ## 0. Decision: this is the next implementation increment
 
-The canonical order is: Phase 1 + Phase 3 WP 3a → Phase 3 WP 3b–3c → Phase 2 WP 2a–2c (all published) → **Phase 5 (next)** → Phase 6 → Phase 7. Phase 4 remains blocked on catalog population. Phase 5's prerequisites (Phase 1 identity, Phase 2 descriptor pattern) are met.
+The canonical order was: Phase 1 + Phase 3 WP 3a → Phase 3 WP 3b–3c → Phase 2 WP 2a–2c → **Phase 5** — all four are now implemented and published on `develop`. Phase 4 remains blocked on catalog population; Phases 6 and 7 remain separately gated. Phase 5's prerequisites (Phase 1 identity, Phase 2 descriptor pattern) were met.
 
 **Extensibility boundary:** this improves how the existing provider set is represented and consumed. It does **not** make providers dynamically plug-in-extensible. `UPSTOX` and `FYERS` remain the only provider identities until the shared identity contract, registry and adapter composition are deliberately extended.
 

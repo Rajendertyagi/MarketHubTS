@@ -3,7 +3,7 @@
 **Plan basis:** Independently inspected repository source at `develop` commit `1b1925a20ae50bf187666a6c3406d89aa121736f`.
 **Phase:** [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1, Phase 1 — Shared contract consistency.
 **First implementation milestone:** Phase 1 contract centralization plus the Phase 3 historical interval-selector increment. This UI increment is included because the roadmap explicitly groups it into the bounded first milestone. The catalog picker and MCP Operation selector remain later increments.
-**Status:** Implementation plan only. No application source, tests, contracts, API, migration, manifest, dependency or runtime configuration has been changed by this plan; this document is added to the repository as documentation only. Every implementation step requires separate authorization.
+**Status:** Historical implementation plan and record. Phase 1 was implemented and published; the later increments it deferred are also complete — the catalog picker (Phase 3 WP 3b–3c), MCP Operation selector (Phase 2) and provider status/capability work (Phase 5) are all published on `develop`. References below to work "remaining in Phase 5" describe the scope boundary at the time this plan was written; see the Phase 2/3/5 plan §12 close-outs for current status. Provider identity remains fixed to `UPSTOX`/`FYERS` — no dynamic extensibility is claimed.
 
 **Governing documents:**
 - [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) — authoritative architecture requirement (AD-025) and source-verified centralization inventory §10
