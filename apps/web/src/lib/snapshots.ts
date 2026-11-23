@@ -2,7 +2,8 @@ import {
   optionChainCaptureConfigSchema,
   optionChainSnapshotSchema,
   type OptionChainCaptureConfig,
-  type OptionChainSnapshot
+  type OptionChainSnapshot,
+  type ProviderId
 } from "@markethub/contracts";
 
 export type SnapshotErrorKind = "forbidden" | "validation" | "unavailable" | "not-found" | "internal";
@@ -86,7 +87,7 @@ export async function deleteCaptureConfig(id: string): Promise<void> {
 export interface CaptureRequest {
   underlyingCanonicalId: string;
   expiryDate: string;
-  provider?: "UPSTOX" | "FYERS";
+  provider?: ProviderId;
   strikeRangeJson?: string | null;
   nativeIdentifier?: string;
 }

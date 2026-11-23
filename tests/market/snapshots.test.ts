@@ -24,10 +24,30 @@ function envelope(overrides: Partial<OptionChainSnapshotEnvelope> = {}): OptionC
 
 class FakeOptionProvider implements OptionChainProvider {
   calls: OptionChainRequest[] = [];
-  constructor(readonly id: ProviderId, private readonly value: OptionChainSnapshotEnvelope = envelope()) {}
+  constructor(
+    readonly id: ProviderId,
+    private readonly value: OptionChainSnapshotEnvelope = envelope(),
+    private readonly trace?: string[]
+  ) {}
   async fetchOptionChain(request: OptionChainRequest): Promise<OptionChainSnapshotEnvelope> {
     this.calls.push(request);
+    this.trace?.push(this.id);
     return this.value;
+  }
+}
+
+/** Deterministic failing provider — no vendor API, no credentials. */
+class FailingOptionProvider implements OptionChainProvider {
+  calls: OptionChainRequest[] = [];
+  constructor(
+    readonly id: ProviderId,
+    private readonly message = "provider down",
+    private readonly trace?: string[]
+  ) {}
+  async fetchOptionChain(request: OptionChainRequest): Promise<OptionChainSnapshotEnvelope> {
+    this.calls.push(request);
+    this.trace?.push(this.id);
+    throw new Error(this.message);
   }
 }
 
@@ -99,6 +119,150 @@ describe("OptionChainSnapshotService", () => {
       const result = await h.service.captureScheduled(config({ captureEnabled: false }));
       expect(result.snapshot).toBeNull();
       expect(p.calls.length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  // --- WP6B: explicit provider exclusivity and omitted-provider order ---
+
+  test("explicit UPSTOX success calls UPSTOX and not FYERS", async () => {
+    const upstox = new FakeOptionProvider("UPSTOX");
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({
+        underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29", provider: "UPSTOX"
+      });
+      expect(result.error).toBeNull();
+      expect(result.snapshot?.provider).toBe("UPSTOX");
+      expect(upstox.calls.length).toBe(1);
+      expect(fyers.calls.length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("explicit FYERS success calls FYERS and not UPSTOX", async () => {
+    const upstox = new FakeOptionProvider("UPSTOX");
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({
+        underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29", provider: "FYERS"
+      });
+      expect(result.error).toBeNull();
+      expect(result.snapshot?.provider).toBe("FYERS");
+      expect(fyers.calls.length).toBe(1);
+      expect(upstox.calls.length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("explicit provider failure returns an error and does not call the other provider", async () => {
+    const upstox = new FailingOptionProvider("UPSTOX", "upstox failed");
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({
+        underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29", provider: "UPSTOX"
+      });
+      expect(result.snapshot).toBeNull();
+      expect(result.error).toContain("upstox failed");
+      expect(upstox.calls.length).toBe(1);
+      expect(fyers.calls.length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("omitted provider tries injected providers in their existing order", async () => {
+    const trace: string[] = [];
+    const upstox = new FailingOptionProvider("UPSTOX", "up down", trace);
+    const fyers = new FakeOptionProvider("FYERS", envelope(), trace);
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({ underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29" });
+      expect(result.error).toBeNull();
+      expect(trace).toEqual(["UPSTOX", "FYERS"]);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+
+    // Reversed injection order must be honoured — no fixed provider preference.
+    const reverseTrace: string[] = [];
+    const fyersFirst = new FailingOptionProvider("FYERS", "fy down", reverseTrace);
+    const upstoxSecond = new FakeOptionProvider("UPSTOX", envelope(), reverseTrace);
+    const h2 = harness([fyersFirst, upstoxSecond]);
+    try {
+      const result = await h2.service.captureOnDemand({ underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29" });
+      expect(result.error).toBeNull();
+      expect(reverseTrace).toEqual(["FYERS", "UPSTOX"]);
+    } finally { closeDatabaseHandle(h2.handle); removeTempDir(h2.dir); }
+  });
+
+  test("first provider fails, next succeeds: snapshot identifies the successful provider", async () => {
+    const upstox = new FailingOptionProvider("UPSTOX", "up down");
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({ underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29" });
+      expect(result.error).toBeNull();
+      expect(result.snapshot?.provider).toBe("FYERS");
+      expect(result.snapshot?.provenance.provider).toBe("FYERS");
+      expect(upstox.calls.length).toBe(1);
+      expect(fyers.calls.length).toBe(1);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("all omitted-provider attempts fail: unavailable error, no invented data", async () => {
+    const upstox = new FailingOptionProvider("UPSTOX", "up down");
+    const fyers = new FailingOptionProvider("FYERS", "fy down");
+    const h = harness([upstox, fyers]);
+    try {
+      const result = await h.service.captureOnDemand({ underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29" });
+      expect(result.snapshot).toBeNull();
+      expect(result.error).toBeTruthy();
+      expect(result.error).toContain("fy down"); // last sanitized error
+      expect(upstox.calls.length).toBe(1);
+      expect(fyers.calls.length).toBe(1);
+      expect(h.service.listSnapshots().length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("explicit provider not in configured list does not invoke a different provider", async () => {
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([fyers]); // only FYERS configured
+    try {
+      const result = await h.service.captureOnDemand({
+        underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29", provider: "UPSTOX"
+      });
+      expect(result.snapshot).toBeNull();
+      expect(result.error).toBe("no provider available");
+      expect(fyers.calls.length).toBe(0);
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("scheduled capture uses the config provider and stays explicit", async () => {
+    const upstox = new FakeOptionProvider("UPSTOX");
+    const fyers = new FakeOptionProvider("FYERS");
+    const h = harness([upstox, fyers]);
+    try {
+      const saved = config({ provider: "UPSTOX" });
+      h.service.putCaptureConfig(saved);
+      const result = await h.service.captureScheduled(saved);
+      expect(result.error).toBeNull();
+      expect(result.snapshot?.provider).toBe("UPSTOX");
+      expect(upstox.calls.length).toBe(1);
+      expect(fyers.calls.length).toBe(0);
+      expect(upstox.calls[0]!.provider).toBe("UPSTOX"); // request carries the explicit provider
+    } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
+  });
+
+  test("on-demand capture does not read or modify saved configs", async () => {
+    const upstox = new FakeOptionProvider("UPSTOX");
+    const h = harness([upstox]);
+    try {
+      const saved = config({ provider: "FYERS" });
+      h.service.putCaptureConfig(saved);
+      const result = await h.service.captureOnDemand({
+        underlyingCanonicalId: UNDERLYING, expiryDate: "2026-01-29", provider: "UPSTOX"
+      });
+      expect(result.snapshot?.configId).toBeNull();
+      expect(result.snapshot?.provider).toBe("UPSTOX");
+      expect(upstox.calls[0]!.provider).toBe("UPSTOX"); // request provider, not saved config's FYERS
+      expect(h.service.getCaptureConfig("cfg-1")).toEqual(saved); // unchanged
     } finally { closeDatabaseHandle(h.handle); removeTempDir(h.dir); }
   });
 });

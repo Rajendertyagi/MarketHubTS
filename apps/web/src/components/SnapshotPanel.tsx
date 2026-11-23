@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import type { OptionChainCaptureConfig, OptionChainSnapshot } from "@markethub/contracts";
+import { providerIdSchema, type OptionChainCaptureConfig, type OptionChainSnapshot, type ProviderId } from "@markethub/contracts";
 import {
   captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshot, fetchSnapshots,
   saveCaptureConfig, SnapshotHttpError
 } from "../lib/snapshots";
+import { selectedProviderOrError } from "../lib/snapshot-form";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
@@ -25,7 +26,7 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
   const [snapshots, setSnapshots] = useState<OptionChainSnapshot[] | null>(null);
   const [underlying, setUnderlying] = useState("");
   const [expiry, setExpiry] = useState("");
-  const [provider, setProvider] = useState<"UPSTOX" | "FYERS">("FYERS");
+  const [provider, setProvider] = useState<ProviderId | "">("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -46,6 +47,8 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
   }, [focusSnapshotId]);
 
   const addConfig = async () => {
+    const selectedProvider = selectedProviderOrError(provider);
+    if (selectedProvider === null) { setError("Choose a provider before adding a config."); return; }
     if (!underlying.trim() || !expiry.trim()) { setError("Enter an underlying and expiry first."); return; }
     const now = new Date().toISOString();
     const config: OptionChainCaptureConfig = {
@@ -57,7 +60,7 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
       captureMode: "MANUAL",
       scheduleJson: null,
       streamingEnabled: false,
-      provider,
+      provider: selectedProvider,
       createdAt: now,
       updatedAt: now
     };
@@ -80,11 +83,13 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
   };
 
   const capture = async () => {
+    const selectedProvider = selectedProviderOrError(provider);
+    if (selectedProvider === null) { setError("Choose a provider before capturing."); return; }
     if (!underlying.trim() || !expiry.trim()) { setError("Enter an underlying and expiry first."); return; }
     setLoading(true);
     setError(null);
     try {
-      await captureSnapshot({ underlyingCanonicalId: underlying.trim(), expiryDate: expiry.trim(), provider });
+      await captureSnapshot({ underlyingCanonicalId: underlying.trim(), expiryDate: expiry.trim(), provider: selectedProvider });
       setMessage("Snapshot captured.");
       loadSnapshots();
     } catch (cause) {
@@ -111,15 +116,19 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
           disabled={loading}
         />
         <input aria-label="Expiry" className={input} placeholder="2026-01-29" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-        <select aria-label="Provider" className={input} value={provider} onChange={(e) => setProvider(e.target.value as "UPSTOX" | "FYERS")}>
-          <option value="FYERS">FYERS</option>
-          <option value="UPSTOX">UPSTOX</option>
+        <select aria-label="Provider" className={input} value={provider} onChange={(e) => setProvider(e.target.value as ProviderId | "")}>
+          <option value="">Choose provider</option>
+          {providerIdSchema.options.map((id) => <option key={id} value={id}>{id}</option>)}
         </select>
         <div className="flex gap-2">
-          <button type="button" className={button} onClick={() => void addConfig()}>Add config</button>
-          <button type="button" disabled={loading} className={button} onClick={() => void capture()}>Capture now</button>
+          <button type="button" disabled={!provider} className={button} onClick={() => void addConfig()}>Add config</button>
+          <button type="button" disabled={loading || !provider} className={button} onClick={() => void capture()}>Capture now</button>
         </div>
       </div>
+
+      <p className="mt-2 text-xs text-slate-400">
+        Provider selection is manual. Only the provider you choose is attempted for an explicit selection; there is no fallback to another provider. Provider-backed capture is not active in the normal application composition, so a request may report unavailable rather than return data.
+      </p>
 
       {error && <p className="mt-3 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-100" role="alert">{error}</p>}
       {message && <p className="mt-3 text-xs text-slate-300" role="status">{message}</p>}
