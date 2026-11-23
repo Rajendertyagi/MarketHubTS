@@ -458,8 +458,8 @@ No official provider API behavior or account entitlement is changed or newly ass
 
 ## 12. Handoff boundary and authorization
 
-This document is a proposed plan, not an implementation assignment and not permission to modify application code.
+This document is now an implementation record as well as the original plan. Phase 5 is **complete and published on `develop`**; it is not an open implementation assignment and grants no further authorization.
 
-The Phase 2 documentation close-out is complete (`5dcfb6d`) and this plan is published on `develop` (`41924ce`). When the product owner authorizes Phase 5 implementation, split the work into the four bounded assignments in §4 (5A, 5B, 5C.1, 5C.2). Use the latest `develop` state and repeat the repository/protocol checks before assigning WP 5A.
+All four work packages were separately authorized, implemented, independently audited to KEEP with no outstanding findings, and published: WP 5A (`2df616d`), WP 5B (`bfc1e36`), WP 5C.1 (`16f2b88`), WP 5C.2 (`0712cb8`), with the final documentation close-out at `abf5c64`. Per-package evidence is recorded in §4. No further Phase 5 implementation work is pending.
 
-**Recommended sequence:** Phase 2 documentation close-out is complete (committed in `5dcfb6d`) and this Phase 5 plan is published on `develop` (`41924ce`) → authorize WP 5A → independently audit → authorize WP 5B → independently audit → authorize WP 5C.1 → independently audit → authorize WP 5C.2 → independently audit → run cross-system acceptance in Phase 7 when its other prerequisites are complete. Each work package is separately authorized and audited; do not authorize all of Phase 5 as one implementation task.
+**Remaining work (separately gated):** Phase 7 cross-system acceptance runs when its other prerequisites are complete. Live provider verification (Stage G) remains locked and requires separate authorization. No Phase 6, Phase 7 or Stage G work is authorized by this document.
