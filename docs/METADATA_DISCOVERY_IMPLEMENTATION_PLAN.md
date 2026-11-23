@@ -159,7 +159,7 @@
 **Work packages:**
 - **6a — Retention controls (area H).** **IMPLEMENTED and published (`f25d514`/`128e44a`/`2866bae`; independent audit KEEP).** Preserve `retentionDataClassSchema` validation and fail-closed cleanup; keep small presentation mapping.
 - **6b — Snapshot provider semantics (area I).** **IMPLEMENTED and published (`d132894`; independent audit KEEP).** Decision resolved: explicit-only selection, no "Automatic"/default option, no FYERS default, options derived from `providerIdSchema`; explicit = exclusive filter no fallback (`snapshots/service.ts:139–141`), omitted = try configured providers in order (`:143–167`). Snapshot service ordering and fallback were not changed.
-- **6c — Overview status text (area J).** Correct four stale statements in `App.tsx:211,219,281,282` distinguishing implemented foundation, implemented-but-locked, unavailable provider-backed/live, and genuinely planned.
+- **6c — Overview status text (area J).** Correct the stale Overview summary and Foundation status rows in `App.tsx` (Overview paragraph and Foundation status section; now rendered by `components/OverviewStatus.tsx`), distinguishing implemented foundation, implemented-but-locked, unavailable provider-backed/live, and genuinely planned.
 
 **Expected files:** `HistoricalPanel.tsx`, `SnapshotPanel.tsx`, `App.tsx`, related contracts/routes, tests.
 

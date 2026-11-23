@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet } from "@tanstack/react-router";
 import { fetchProvidersStatus, fetchSystemStatus, formatUptime } from "./lib/status";
 import { StatusBadge, toneForState } from "./components/StatusBadge";
+import { OverviewStatus } from "./components/OverviewStatus";
 import { ProviderStatusContent } from "./components/ProviderStatus";
 import { LivePanel } from "./components/LivePanel";
 import { SubscriptionPanel } from "./components/SubscriptionPanel";
@@ -115,7 +116,7 @@ export function App() {
       <main id="main" className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
         <div className="mb-6">
           <h2 className="text-xl font-semibold">System overview</h2>
-          <p className="mt-1 text-sm text-slate-400">Real runtime status from the local MarketHubTS backend. Market data, providers, catalog, alerts, and MCP HTTP are not implemented in this foundation milestone.</p>
+          <p className="mt-1 text-sm text-slate-400">Real runtime status from the local MarketHubTS backend. The status below distinguishes implemented foundations from locked or inactive functionality, incomplete work, unaccepted milestones, and features that are not implemented.</p>
         </div>
 
         {query.isLoading && (
@@ -172,14 +173,7 @@ export function App() {
 
               <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
                 <h3 className="mb-3 text-base font-semibold">Foundation status</h3>
-                <ul className="space-y-2 text-sm text-slate-300">
-                  <li className="flex items-center justify-between"><span>Runtime & config</span><StatusBadge label="Implemented" tone="ok" /></li>
-                  <li className="flex items-center justify-between"><span>SQLite & migrations</span><StatusBadge label="Implemented" tone="ok" /></li>
-                  <li className="flex items-center justify-between"><span>API health/readiness</span><StatusBadge label="Implemented" tone="ok" /></li>
-                  <li className="flex items-center justify-between"><span>WebUI shell</span><StatusBadge label="Implemented" tone="ok" /></li>
-                  <li className="flex items-center justify-between"><span>Market data/providers</span><StatusBadge label="Not implemented" tone="neutral" /></li>
-                  <li className="flex items-center justify-between"><span>MCP HTTP transport</span><StatusBadge label="Not implemented" tone="neutral" /></li>
-                </ul>
+                <OverviewStatus mcpHttpHandlerMounted={data.mcp?.httpHandlerMounted === true} />
               </section>
             </div>
           </div>
