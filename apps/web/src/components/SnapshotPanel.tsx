@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { providerIdSchema, type OptionChainCaptureConfig, type OptionChainSnapshot, type ProviderId } from "@markethub/contracts";
 import {
   captureSnapshot, deleteCaptureConfig, fetchCaptureConfigs, fetchSnapshot, fetchSnapshots,
   saveCaptureConfig, SnapshotHttpError
 } from "../lib/snapshots";
 import { selectedProviderOrError } from "../lib/snapshot-form";
+import { fetchDerivativeExpiries } from "../lib/expiries";
+import {
+  createExpiryController, expiryOriginLabel, expiryStatusInfo, initialExpiryState,
+  isValidExpiryDate, type ExpiryController, type ExpiryState, type ExpiryStatusInfo
+} from "../lib/expiry-form";
 import { InstrumentPicker } from "./InstrumentPicker";
 import { StatusBadge } from "./StatusBadge";
 
@@ -20,13 +25,60 @@ function toError(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
+/**
+ * Pure presentational expiry selector. Suggestions come only from the WP4B
+ * response passed in `state.options`; the editable manual input is always
+ * rendered. Renderable with renderToStaticMarkup in tests.
+ */
+export function ExpirySelectorView({
+  state, status, onValue, onRetry, disabled
+}: {
+  state: ExpiryState;
+  status: ExpiryStatusInfo;
+  onValue: (value: string) => void;
+  onRetry: () => void;
+  disabled?: boolean;
+}) {
+  const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
+  const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
+  const origin = state.origin ? expiryOriginLabel(state.origin) : null;
+  return (
+    <div className="flex flex-col gap-1">
+      <select
+        aria-label="Expiry suggestions"
+        className={input}
+        value=""
+        disabled={disabled}
+        onChange={(e) => { if (e.target.value) onValue(e.target.value); }}
+      >
+        <option value="">Choose a suggested expiry (optional)</option>
+        {state.options.map((date) => <option key={date} value={date}>{date}</option>)}
+      </select>
+      <input
+        aria-label="Expiry"
+        className={input}
+        placeholder="2026-01-29"
+        value={state.value}
+        disabled={disabled}
+        onChange={(e) => onValue(e.target.value)}
+      />
+      {origin && <span data-testid="expiry-origin" className="text-xs text-amber-300">{origin}</span>}
+      {status.text && <p className="text-xs text-slate-400" role="status">{status.text}</p>}
+      {state.loadState === "error" && (
+        <button type="button" className={button} onClick={onRetry} disabled={disabled}>Retry expiries</button>
+      )}
+    </div>
+  );
+}
+
 export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | null }) {
   const [focusedSnapshot, setFocusedSnapshot] = useState<OptionChainSnapshot | null>(null);
   const [configs, setConfigs] = useState<OptionChainCaptureConfig[]>([]);
   const [snapshots, setSnapshots] = useState<OptionChainSnapshot[] | null>(null);
   const [underlying, setUnderlying] = useState("");
-  const [expiry, setExpiry] = useState("");
   const [provider, setProvider] = useState<ProviderId | "">("");
+  const [expiryState, setExpiryState] = useState<ExpiryState>(initialExpiryState);
+  const expiryControllerRef = useRef<ExpiryController | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -40,6 +92,27 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
 
   useEffect(() => { loadConfigs(); loadSnapshots(); }, []);
 
+  // WP4C: one stable controller; dispose aborts any in-flight expiry request.
+  useEffect(() => {
+    const controller = createExpiryController({
+      fetchExpiries: fetchDerivativeExpiries,
+      onState: setExpiryState
+    });
+    expiryControllerRef.current = controller;
+    return () => { controller.dispose(); expiryControllerRef.current = null; };
+  }, []);
+
+  // Refetch only for a complete, explicit underlying/provider pair. Changing
+  // either key clears the prior value and marker synchronously inside load().
+  useEffect(() => {
+    const controller = expiryControllerRef.current;
+    if (!controller) return;
+    const id = underlying.trim();
+    const selected = selectedProviderOrError(provider);
+    if (!id || selected === null) { controller.clear(); return; }
+    controller.load({ underlyingCanonicalId: id, provider: selected });
+  }, [underlying, provider]);
+
   // M6-C: open/select the snapshot referenced by an activity record.
   useEffect(() => {
     if (!focusSnapshotId) { setFocusedSnapshot(null); return; }
@@ -49,12 +122,14 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
   const addConfig = async () => {
     const selectedProvider = selectedProviderOrError(provider);
     if (selectedProvider === null) { setError("Choose a provider before adding a config."); return; }
-    if (!underlying.trim() || !expiry.trim()) { setError("Enter an underlying and expiry first."); return; }
+    const expiryValue = expiryState.value.trim();
+    if (!underlying.trim() || !expiryValue) { setError("Enter an underlying and expiry first."); return; }
+    if (!isValidExpiryDate(expiryValue)) { setError("Enter a valid YYYY-MM-DD expiry date."); return; }
     const now = new Date().toISOString();
     const config: OptionChainCaptureConfig = {
       id: `capture-${Date.now()}`,
       underlyingCanonicalId: underlying.trim(),
-      expiryDate: expiry.trim(),
+      expiryDate: expiryValue,
       strikeRangeJson: null,
       captureEnabled: true,
       captureMode: "MANUAL",
@@ -85,11 +160,13 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
   const capture = async () => {
     const selectedProvider = selectedProviderOrError(provider);
     if (selectedProvider === null) { setError("Choose a provider before capturing."); return; }
-    if (!underlying.trim() || !expiry.trim()) { setError("Enter an underlying and expiry first."); return; }
+    const expiryValue = expiryState.value.trim();
+    if (!underlying.trim() || !expiryValue) { setError("Enter an underlying and expiry first."); return; }
+    if (!isValidExpiryDate(expiryValue)) { setError("Enter a valid YYYY-MM-DD expiry date."); return; }
     setLoading(true);
     setError(null);
     try {
-      await captureSnapshot({ underlyingCanonicalId: underlying.trim(), expiryDate: expiry.trim(), provider: selectedProvider });
+      await captureSnapshot({ underlyingCanonicalId: underlying.trim(), expiryDate: expiryValue, provider: selectedProvider });
       setMessage("Snapshot captured.");
       loadSnapshots();
     } catch (cause) {
@@ -99,6 +176,7 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
 
   const input = "w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100";
   const button = "rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50";
+  const expiryStatus = expiryStatusInfo(expiryState.loadState, expiryState.response, expiryState.error);
 
   return (
     <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -115,7 +193,13 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
           placeholder="Search by symbol or name…"
           disabled={loading}
         />
-        <input aria-label="Expiry" className={input} placeholder="2026-01-29" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+        <ExpirySelectorView
+          state={expiryState}
+          status={expiryStatus}
+          onValue={(value) => expiryControllerRef.current?.setValue(value)}
+          onRetry={() => expiryControllerRef.current?.retry()}
+          disabled={loading}
+        />
         <select aria-label="Provider" className={input} value={provider} onChange={(e) => setProvider(e.target.value as ProviderId | "")}>
           <option value="">Choose provider</option>
           {providerIdSchema.options.map((id) => <option key={id} value={id}>{id}</option>)}
@@ -128,6 +212,9 @@ export function SnapshotPanel({ focusSnapshotId }: { focusSnapshotId?: string | 
 
       <p className="mt-2 text-xs text-slate-400">
         Provider selection is manual. Only the provider you choose is attempted for an explicit selection; there is no fallback to another provider. Provider-backed capture is not active in the normal application composition, so a request may report unavailable rather than return data.
+      </p>
+      <p className="mt-1 text-xs text-slate-400">
+        Expiry suggestions come from the selected provider&apos;s catalogue. A manually entered date is never verified against that catalogue and never triggers provider fallback. Live capture remains unavailable until separately enabled.
       </p>
 
       {error && <p className="mt-3 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-100" role="alert">{error}</p>}
