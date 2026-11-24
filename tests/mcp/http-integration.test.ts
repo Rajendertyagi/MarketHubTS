@@ -188,11 +188,13 @@ function highWater(samples: SseBufferSample[]) {
 }
 
 /**
- * Healthy subscriber on the SAME wrapped handler, driven in-process (the proven
- * slow-consumer.test.ts pattern). The deliberately unread stream below is the
- * one that must traverse the real Bun listener; an in-process healthy control
- * avoids a Bun HTTP-client interaction that stalls a wrapped SSE stream after
- * its first couple of frames (recorded as a separate concern).
+ * Healthy subscriber on the SAME wrapped handler, driven IN-PROCESS ONLY (the
+ * proven slow-consumer.test.ts pattern). This is NOT real-listener healthy-path
+ * evidence: a wrapped SSE stream read through the real Bun listener stalls after
+ * its first couple of frames (also reproduced with a Node http client; the
+ * unwrapped handler delivers all frames). The deliberately unread stream below
+ * is the one that must traverse the real listener. See the tracked follow-up in
+ * docs/M6_E_EVIDENCE.md ("Bun wrapped-SSE stall").
  */
 async function connectHealthyInProcess(handler: ReturnType<typeof makeHarness>["handler"], name: string) {
   const client = new Client({ name, version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
@@ -502,10 +504,12 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
 
   test("E1: server-side handler.close() gracefully completes an active listen stream on the real listener (client left open)", async () => {
     let release: (() => void) | null = null;
+    let reached!: () => void;
+    const reachedService = new Promise<void>((resolve) => { reached = resolve; });
     const blocking = new Promise<void>((resolve) => { release = resolve; });
     const h = makeHarness({
       servicesOverride: {
-        getHealth: async () => { await blocking; return { ok: true, value: HEALTH }; }
+        getHealth: async () => { reached(); await blocking; return { ok: true, value: HEALTH }; }
       }
     });
     let server: ReturnType<typeof Bun.serve> | null = null;
@@ -518,7 +522,9 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       // Active subscription + in-flight request, both left open.
       const sub = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
       const inFlight = client.callTool({ name: "markethub_health", arguments: {} });
-      await Bun.sleep(20); // let the request reach the blocking service
+      // Deterministic in-flight signal: the blocking service resolves this as
+      // soon as the request actually reaches it (no fixed sleep / timing guess).
+      await withTimeout(reachedService, 3000, "E1: request did not reach the blocking service");
 
       // Server-side shutdown FIRST — do not close the client first.
       const closePromise = h.handler.close();
@@ -546,7 +552,7 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
     }
   });
 
-  test("E2: bounded SSE through the real listener — slow stream capped, upstream cancelled, healthy subscriber unaffected", async () => {
+  test("E2: bounded SSE through the real listener — slow stream capped/cancelled; healthy subscriber continues (IN-PROCESS CONTROL ONLY; real-listener healthy path NOT exercised in this overflow scenario due to Bun wrapped-SSE stall)", async () => {
     const tracker = overflowTracker();
     const cancels: unknown[] = [];
     const samples: SseBufferSample[] = [];
@@ -563,7 +569,9 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
       const url = `http://127.0.0.1:${server.port}/mcp`;
 
-      // Healthy subscriber on the same wrapped handler (in-process control).
+      // Healthy subscriber on the same wrapped handler — IN-PROCESS CONTROL ONLY.
+      // The real-listener healthy path is NOT exercised in this overflow scenario
+      // (Bun wrapped-SSE stall); do not read this as full real-listener proof.
       healthy = await connectHealthyInProcess(h.handler, "e2-healthy");
 
       // Deliberately unread SSE subscription through the REAL Bun listener.
@@ -593,8 +601,12 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       const slowReader = slow.body!.getReader();
       const drained = await drainSseReader(slowReader);
       expect(drained.done).toBe(true);
+      // Frames actually delivered before EOF stay within the configured bound.
+      expect(drained.frames).toBeLessThanOrEqual(MCP_SSE_MAX_BUFFERED_FRAMES);
 
-      // Queued frames do not continue after overflow; healthy subscriber keeps up.
+      // Publish more after overflow: the in-process healthy control keeps up,
+      // while the already-EOF slow stream remains closed (no post-overflow
+      // delivery). The second drain is an EOF-state check, not a fresh stream.
       const N = 10;
       for (let i = 0; i < N; i++) h.service.track(`E2b-${i}`);
       const target = firstBatch + N;
@@ -602,7 +614,7 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       while (healthy.count() < target && Date.now() < deadline) await Bun.sleep(2);
       expect(healthy.count()).toBe(target);
       const after = await drainSseReader(slowReader, 300);
-      expect(after.done).toBe(true);
+      expect(after.done).toBe(true); // already-EOF stream remains closed
       expect(after.frames).toBe(0);
 
       // Canonical publishing unaffected: no bridge publisher error was raised.
