@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createElement } from "../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   optionChainCaptureConfigSchema,
   type DerivativeExpiriesResponse,
@@ -231,6 +231,36 @@ describe("WP4C — expiry controller", () => {
     c.retry();
     await flush();
     expect(c.getState().origin).toBe("Manual");
+  });
+
+  test("a fetch failure drops a stale Catalogue label but preserves the manual value", async () => {
+    let fail = false;
+    const c = createExpiryController({
+      fetchExpiries: async () => {
+        if (fail) throw new Error("upstream down");
+        return response("NIFTY", "UPSTOX", ["2026-01-29"]);
+      },
+      onState: () => {}
+    });
+    c.load({ underlyingCanonicalId: "NIFTY", provider: "UPSTOX" });
+    await flush();
+    c.setValue("2026-01-29");
+    expect(c.getState().origin).toBe("Catalogue");
+
+    fail = true;
+    c.retry();
+    await flush();
+    expect(c.getState().loadState).toBe("error");
+    expect(c.getState().value).toBe("2026-01-29");
+    expect(c.getState().origin).toBe("Manual");
+    expect(c.getState().options).toEqual([]);
+    expect(c.getState().response).toBeNull();
+
+    const html = renderView(c.getState());
+    expect(html).toContain("Could not load expiries: upstream down");
+    expect(html).toContain("Retry expiries");
+    expect(html).toContain('aria-label="Expiry"');
+    expect(html).toContain(MANUAL_ORIGIN_LABEL);
   });
 
   test("changing provider or underlying clears value and marker synchronously and queries the new pair", async () => {

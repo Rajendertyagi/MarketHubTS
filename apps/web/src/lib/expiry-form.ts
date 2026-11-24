@@ -188,10 +188,14 @@ export function createExpiryController(deps: ExpiryControllerDeps) {
       .catch((error: unknown) => {
         if (!current(gen)) return;
         if (error instanceof Error && error.name === "AbortError") return;
+        // No current response confirms the value any more: keep it as a manual
+        // fallback but drop a stale Catalogue provenance label.
+        const trimmed = state.value.trim();
         emit({
           loadState: "error",
           error: error instanceof Error ? error.message : String(error),
-          options: [], response: null
+          options: [], response: null,
+          origin: trimmed ? expiryOrigin(trimmed, []) : null
         });
       });
   };
