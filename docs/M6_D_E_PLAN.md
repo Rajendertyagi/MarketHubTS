@@ -1,6 +1,6 @@
 # M6-D + M6-E — Notification Bridge, Event Delivery, and Protocol Acceptance
 
-> **Status:** Execution plan for M6-D/E. **Source and tests now exist** — M6-D notification bridge and explicit capabilities (`apps/api/src/mcp-notification-bridge.ts`, `tests/mcp/subscriptions.test.ts`, `tests/mcp/notification-bridge.test.ts`, `tests/mcp/fanout.test.ts`) and M6-E integration/acceptance tests (`tests/mcp/http-integration.test.ts`, `stdio-modern.test.ts`, `legacy-compat.test.ts`, `conformance.test.ts`, `lan-simulation.test.ts`). **Neither phase is accepted or complete**: implementation and passing tests do not mark a phase complete — the independent review gate (§8.1–§8.3) is still required. M6-B4 remains separately owned; M6-C acceptance is unchanged. This document remains the governing plan, not an acceptance record.
+> **Status:** Execution plan for M6-D/E. **Source and tests now exist** — M6-D notification bridge and explicit capabilities (`apps/api/src/mcp-notification-bridge.ts`, `tests/mcp/subscriptions.test.ts`, `tests/mcp/notification-bridge.test.ts`, `tests/mcp/fanout.test.ts`) and M6-E integration/acceptance tests (`tests/mcp/http-integration.test.ts`, `stdio-modern.test.ts`, `legacy-compat.test.ts`, `conformance.test.ts`, `lan-simulation.test.ts`). **Neither phase is accepted or complete**: implementation and passing tests do not mark a phase complete — the independent review gate (§8.1–§8.3) is still required. M6-B4 remains separately owned; M6-C acceptance is unchanged. The canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) now governs B4/D/E execution and is audited KEEP — **planning only**; it grants no implementation authorization and does not change either phase's not-accepted status. This document remains the governing plan, not an acceptance record.
 > **Last updated:** 2026-11-21 (official MCP/SDK research re-verified this date; §4)
 > **M6-C acceptance baseline:** `32b034a38e9c0db134de13b9b51a9e12d1ffdee7` — the final reviewed M6-C commit, **not necessarily current `develop` HEAD**. Re-fetch `develop` and record its actual HEAD at implementation start (§2.1); this SHA is the accepted foundation the phases build on, not a claim about the live branch tip.
 > **Depends on:** M6-A (`7860c7f`: Streamable HTTP at `/mcp` + retained STDIO, shared factory); M6-B1/B2/B3 (`0d58bbb`: tools, resources, prompts, cache hints, snapshot pagination); **M6-C accepted and closed at `32b034a`** (acceptance record in [`M6_C_PLAN.md`](M6_C_PLAN.md) §0). M6-B4 conformance/parity remains separately tracked.
@@ -339,6 +339,8 @@ git diff --check
 Adjust focused names to actual files. Report local results separately from CI evidence. Run the full suite only after focused D/E tests are deterministic and no child process or SSE stream is leaked.
 
 ## 8. Phase gates and acceptance criteria
+
+> **Execution reference:** the canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) (planning only, audited KEEP) governs the B4 → D → E execution order and these gates; it grants no implementation authorization and does not mark any phase accepted.
 
 ### 8.1 M6-D definition of done
 
