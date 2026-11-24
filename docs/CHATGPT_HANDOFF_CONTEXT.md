@@ -18,7 +18,7 @@
 - Metadata-discovery Phase 4 (provider-backed derivative expiry discovery) is **complete, published, and audited KEEP**. The final published baseline is `2ed4c1e`, **not** `85bb8a6` (the baseline named in the handoff request is outdated by three commits).
 - The four technical-lead findings A–D described in section 7 were **fixed in `13826fb` and independently re-audited KEEP**; Finding E (plan close-out) was completed in `1b51427`; the Windows `EBUSY` test flake was root-cause fixed in `2ed4c1e`. Details and evidence are in section 7.
 - Latest independently re-run full suite: **1076 pass / 0 fail** (two consecutive runs by the audit agent). No GitHub CI status checks were reported for these commits — all results are local, not CI.
-- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` now exists (planning only, audited KEEP; grants no implementation authorization). **M6-B4, M6-D and M6-E remain not accepted**; M6 is not complete. No M6-B4/D/E implementation was performed in this documentation work.
+- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` exists as a **published planning draft undergoing independent corrections** (planning only, not finally approved or implementation-ready; grants no implementation authorization). **M6-B4, M6-D and M6-E remain not accepted**; M6 is not complete. No M6-B4/D/E implementation was performed in this documentation work.
 
 **Next actions (recommended, not authorized):**
 1. Re-verify live `develop`/`main` SHAs and `git status` before any work.
@@ -36,12 +36,11 @@ All facts in this section were verified directly from the local checkout on 2026
 | Item | Verified value |
 |---|---|
 | Branch | `develop` |
-| Local HEAD | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` |
-| `origin/develop` | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` (in sync) |
-| Local `main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` |
-| `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync) |
-| `git status --short` | ` M docs/REFERENCES.md` ; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` |
-| Handoff file before this task | Did not exist (`Test-Path` false) — this document is newly created |
+| Local HEAD / `origin/develop` | `72743cfe68e665dda018a3f4e098208f880a979f` (in sync) — **published planning-document baseline** |
+| Original inspected implementation baseline | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` — the checkout inspected when this handoff was first created; distinct from the planning-document baseline above |
+| Local `main` / `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync; untouched) |
+| `git status --short` | ` M docs/REFERENCES.md` ; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` (two preserved user-work items) |
+| This handoff file | **Tracked** — added in `1ddf24b` and present at `72743cf`. It did not exist when this document was first created, but it is **not untracked now**; preserve it, do not overwrite or delete it. |
 
 **Recent commit history (newest first, verified with `git log --oneline -20`):**
 
@@ -321,25 +320,25 @@ These are documentation drift, not code defects. They should be corrected in a f
 
 This document is a **handoff aid only**. It is not a new governing architecture plan and grants no implementation or publication permission.
 
-- **Created only:** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created.
+- **Created only (at original creation time):** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created. **It was subsequently committed in `1ddf24b` and is now tracked at `72743cf` — it is not untracked in the current repository state.**
 - **Not modified:** `docs/METADATA_DISCOVERY_PHASE_4_PLAN.md`, `docs/PROJECT_STATUS.md`, any code or test file, any other documentation, and any pre-existing user work.
-- **No commit, push, merge, rebase, branch change or other Git write was performed** as part of creating this document.
+- **No commit, push, merge, rebase, branch change or other Git write was performed** as part of creating this document. (The later `1ddf24b` commit was a separate, authorized documentation publication.)
 - **Pre-existing user work preserved:** ` M docs/REFERENCES.md` and `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`.
 
-**`git status --short` before creating this document (independently verified):**
+**`git status --short` before creating this document (historical, independently verified at creation time):**
 ```
  M docs/REFERENCES.md
 ?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md
 ```
 
-**`git status --short` after creating this document (independently verified):**
+**`git status --short` after creating this document (historical, independently verified at creation time):**
 ```
  M docs/REFERENCES.md
 ?? docs/CHATGPT_HANDOFF_CONTEXT.md
 ?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md
 ```
 
-The only difference is the addition of the requested handoff file. All pre-existing user work is untouched.
+These two blocks are **historical snapshots from the original creation task**. In the current state the handoff file is tracked (added in `1ddf24b`), and the working tree contains only the two preserved user-work items. The only difference at creation time was the addition of the requested handoff file; all pre-existing user work is untouched.
 
 ---
 

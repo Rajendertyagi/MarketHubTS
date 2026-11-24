@@ -55,12 +55,12 @@ It does **not** count client-side notification-handler exceptions (none are thro
 | 32 | 20 | 2.20 ms | 3.25 ms | 3.68 ms | 3.96 ms | 1.04 MB | 0 |
 | 64 | 20 | 2.09 ms | 2.94 ms | 3.74 ms | 4.51 ms | 1.47 MB | 0 |
 
-In every table the `errors` column is the total `publisherErrors + missing + duplicates` defined above (all zero in every run). Across all runs, p95 at N=64 ranged **3.62–7.91 ms** and max **3.65–10.28 ms** (the higher figures came from a run under heavier concurrent load). The 50 ms budget still holds with >6× headroom over the worst observed p95.
+In every table the `errors` column is the total `publisherErrors + missing + duplicates` defined above (all zero in every run). Across the **four preserved runs**, p95 ranged **3.44–3.74 ms** and max **3.65–4.51 ms**. An earlier draft of this document reported p95 **3.62–7.91 ms** and max **3.65–10.28 ms** from a "heavier load" run; that run's full raw measurements were **not preserved**, so those two higher figures are **withdrawn** and are not used for any headroom claim here. If such a run is later produced, its complete raw table must be preserved before its figures can be cited.
 
 ## 3. Selected values and rationale
 
 - **`maxSubscriptions = 64`** — a conservative bound for a single local owner with a handful of MCP clients (not a public service). The sweep shows no drops, no errors, and flat latency from 8 → 64 subscribers, so 64 is well above any realistic client count while bounding the number of open streams and total fan-out cost. It is not raised without further evidence.
-- **Latency budget = 50 ms** — derived from the measured p95 at the bound (~3.6 ms): 50 ms gives >13× headroom over the worst observed p95 and >11× over the worst observed max (4.51 ms). It is **not** the test's per-update observation deadline (2 s), which is only a safety net for a stalled stream.
+- **Latency budget = 50 ms** — derived from the preserved measurements at the bound: worst preserved p95 = 3.74 ms → **50 / 3.74 ≈ 13.4× headroom**; worst preserved max = 4.51 ms → **50 / 4.51 ≈ 11.1× headroom**. (For reference only, the withdrawn unpreserved figures would give 50 / 7.91 ≈ 6.3× and 50 / 10.28 ≈ 4.9×; they are not used.) It is **not** the test's per-update observation deadline (2 s), which is only a safety net for a stalled stream. The `maxSubscriptions = 64` value and the 50 ms budget are **retained** because the preserved evidence justifies them (flat latency from 8 → 64, zero drops/errors); they are not changed merely for arithmetic consistency.
 
 ## 4. Slow-consumer evidence
 

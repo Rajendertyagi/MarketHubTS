@@ -1,12 +1,12 @@
 # M6-B4 + M6-D + M6-E Completion Plan (planning only)
 
 > **Document type:** Bounded implementation plan / assignment scaffold. **Not** an acceptance record, **not** a status authority, **not** an implementation authorization.
-> **Status:** PLANNING ONLY. No implementation, source/test/manifest/DB change, commit, push, merge or publication is authorized by this document. Each work package (WP) requires its own separate product-owner authorization before any code is written.
+> **Status:** PLANNING ONLY — a **published planning draft undergoing independent corrections**, not a finally approved or implementation-ready plan. This document was published on `develop` at `72743cf` and is now being corrected in a documentation-only pass; it grants no implementation, commit or publication authorization. No implementation, source/test/manifest/DB change, commit, push, merge or publication is authorized by this document. Each work package (WP) requires its own separate product-owner authorization before any code is written. B4, D and E remain **not accepted** until their own gates actually pass.
 > **Repository:** `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`).
-> **Branch:** `develop`. **Reviewed HEAD:** `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` (local `develop` and `origin/develop` in sync at review time).
+> **Branch:** `develop`. **Published planning-document baseline:** `72743cfe68e665dda018a3f4e098208f880a979f` (local `develop` and `origin/develop` in sync; this is the commit that published this plan and its cross-references). **Original inspected implementation baseline:** `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` (the checkout on which the implementation/test facts and the 1076/0 baseline were independently verified). These are distinct and must not be conflated.
 > **`main`:** `865d86f393a29bc1ec8d455a51d9efa82d722c48` (local and `origin/main` in sync; untouched; must never be modified without separate explicit authorization).
 > **Date:** 2026-11-24.
-> **Execution order (mandatory):** M6-B4 → M6-D → M6-E. M6-E final acceptance only after the B4 and D gates pass. M6 may be declared complete only when B4, D and E are all accepted and the combined gate (§8.3 of `M6_D_E_PLAN.md`) passes.
+> **Execution order (scheduling, not a technical dependency):** M6-B4 → M6-D → M6-E. B4 and D are **independently owned**; B4 is scheduled first for sequential work and separate conformance-evidence closure, **not** because D depends architecturally on B4. D's technical gate is its own §8.1. E requires **both** B4 and D. M6 may be declared complete only when B4, D and E are all accepted and the combined gate (§8.3 of `M6_D_E_PLAN.md`) passes.
 >
 > **Governing documents (authoritative; this plan narrows but does not replace them):**
 > - [`AGENTS.md`](../AGENTS.md) — repository entry point, invariants, working rules.
@@ -30,16 +30,16 @@
 
 **The single most important distinction:** For M6-D and M6-E, the **code and tests already exist** on `develop`. That is **not** the same as those phases being accepted. Acceptance requires an independent review gate that has **never been completed** — every checkbox in `M6_D_E_PLAN.md` §8.1, §8.2 and §8.3 is still unchecked `[ ]`. Passing tests do not mark a phase complete. M6-B4 (conformance/parity closeout) has **not even been started**: there is no `parity.test.ts` and no `docs/M6_B4_PLAN.md`.
 
-**Current state (all independently verified against the local checkout at the reviewed HEAD unless labeled otherwise):**
-- Branch `develop`, HEAD `2ed4c1e`, in sync with `origin/develop`. `main`/`origin/main` at `865d86f`, untouched.
-- Working tree has three pre-existing user-work items that must be preserved and never reverted: ` M docs/REFERENCES.md`, `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`, `?? docs/CHATGPT_HANDOFF_CONTEXT.md`.
-- **Verified baseline full suite: 1076 pass / 0 fail, 8833 `expect()` calls, 92 test files, exit 0.** This is the real current baseline (independently re-run by the audit agent at `2ed4c1e`, local — not CI). Do **not** inherit the older 1061/2 or 1073/1 figures from earlier handoff material. Re-confirm at the start of each WP.
-- M6-A, B1, B2, B3 are implemented and published; M6-C is accepted and closed at `32b034a`. M6-D/E source and tests exist but are not accepted. M6-B4 is not started. M6 is therefore **not complete**.
+**Current state (all independently verified against the local checkout unless labeled otherwise):**
+- Branch `develop`, HEAD `72743cf` (published planning-document baseline), in sync with `origin/develop`. The original inspected implementation baseline was `2ed4c1e`. `main`/`origin/main` at `865d86f`, untouched.
+- Working tree has **two** pre-existing user-work items that must be preserved and never reverted: ` M docs/REFERENCES.md`, `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`. `docs/CHATGPT_HANDOFF_CONTEXT.md` is **tracked** (added in `1ddf24b`, present at `72743cf`) — it is preserved, but it is **not** an untracked user-work item.
+- **Original pre-B4 baseline full suite: 1076 pass / 0 fail, 8833 `expect()` calls, 92 test files, exit 0.** Independently re-run by the audit agent at `2ed4c1e` (local — not CI). Do **not** inherit the older 1061/2 or 1073/1 figures. This figure is retained for historical comparison only; it is **not** a permanent pass-count requirement — adding tests is expected to grow the count. Re-run and record the actual result immediately before B4, then use each accepted WP's result as the next WP's baseline (§8.1).
+- M6-A, B1, B2, B3 are implemented and published; M6-C is accepted and closed at `32b034a`. M6-D/E source and tests exist but are not accepted. M6-B4 is not started. M6 is therefore **not complete**. This plan is a published draft under independent correction, not an approved implementation-ready plan.
 
 **Next actions (recommended, not authorized):**
-1. Obtain separate product-owner authorization for M6-B4 first. Do not begin D or E until B4's gate passes.
-2. At implementation start, re-verify live `develop`/`main` SHAs, `git status`, and the official MCP spec/SDK versions (recorded target `2026-07-28` / SDK `2.4.0`; re-verify, do not assume).
-3. Complete the 18-question Option and Metadata Impact Assessment for the WP before writing code (§4/§5/§6 placeholders below).
+1. Obtain separate product-owner authorization for each WP. B4 is **scheduled** first for sequential work and separate conformance-evidence closure; D is independently owned and may proceed under its own §8.1 gate. E requires both B4 and D. Do not treat B4 as an architectural prerequisite for D (§3.1).
+2. At implementation start, re-verify live `develop`/`main` SHAs, `git status`, and the official MCP spec/SDK versions (recorded target `2026-07-28` / SDK `2.4.0`; re-verify against official sources, do not assume).
+3. Complete the 18-question Option and Metadata Impact Assessment for the WP before writing code (§4.7/§5.11/§6.9 are now fully answered; re-confirm answers against live source at implementation time).
 4. Follow the per-WP sequence in §3; finish with an independent fresh-context review before any acceptance claim.
 5. Do not start Stage G, M5 Phase 4B, M7, provider activation, or any publication. Do not touch `main`.
 
@@ -52,33 +52,32 @@
 | Item | Verified value |
 |---|---|
 | Branch | `develop` |
-| Local HEAD | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` |
-| `origin/develop` | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` (in sync) |
-| Local `main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` |
-| `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync) |
-| `git status --short --branch` | `## develop...origin/develop`; ` M docs/REFERENCES.md`; `?? docs/CHATGPT_HANDOFF_CONTEXT.md`; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` |
-| Recent `git log -5` | `2ed4c1e` (EBUSY cleanup fix), `1b51427` (Phase 4 plan closeout), `13826fb` (catalog hardening), `85bb8a6` (Phase 4 docs), `ed967e3` (Phase 4 plan) |
+| Local HEAD / `origin/develop` | `72743cfe68e665dda018a3f4e098208f880a979f` (in sync) — **published planning-document baseline** |
+| Original inspected implementation baseline | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` — the checkout where implementation/test facts and 1076/0 were verified; distinct from the planning-document baseline |
+| Local `main` / `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync; untouched) |
+| `git status --short --branch` | `## develop...origin/develop`; ` M docs/REFERENCES.md`; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` (two preserved user-work items). `docs/CHATGPT_HANDOFF_CONTEXT.md` is **tracked** (added in `1ddf24b`). |
+| Recent `git log -5` | `72743cf` (canonical plan published), `1ddf24b` (cross-references + handoff file added), `2ed4c1e` (EBUSY cleanup fix), `1b51427` (Phase 4 plan closeout), `13826fb` (catalog hardening) |
 
-### 1.2 Baseline test result (verified for this plan; re-confirm at implementation start)
+### 1.2 Baseline test result (original pre-B4 baseline; re-confirm at implementation start)
 
-- Full suite: **1076 pass / 0 fail**, 8833 `expect()` calls, 92 files, exit 0.
+- Full suite at the **original inspected implementation baseline `2ed4c1e`**: **1076 pass / 0 fail**, 8833 `expect()` calls, 92 files, exit 0.
 - Source: independently re-run by the audit agent at `2ed4c1e` (two consecutive runs), recorded in `docs/CHATGPT_HANDOFF_CONTEXT.md` §8.1. **Local result — not CI.** No GitHub status checks were reported for these commits.
-- This figure supersedes the stale 1061/2 and 1073/1 figures that appear in older handoff/status material. Any future report must compare against **1076/0**, not the old numbers.
+- This figure supersedes the stale 1061/2 and 1073/1 figures in older handoff/status material. It is the **ORIGINAL pre-B4 baseline** retained for historical comparison, **not** a permanent exact pass-count requirement: adding tests is expected to increase the count. The live baseline procedure is in §8.1.
 
 ### 1.3 What exists vs what is missing, per WP
 
 | WP | Exists (independently verified) | Missing / not done (independently verified) |
 |---|---|---|
-| **M6-B4** | `tests/mcp/conformance.test.ts` (9 named C-assertions), `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `security.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts`; B1–B3 implementation and tests. | `tests/mcp/parity.test.ts` does **not** exist. `docs/M6_B4_PLAN.md` does **not** exist. `docs/M6_B_PLAN.md` line 3 says "M6-B4 implementation not started." B4 owns the conformance/parity closeout evidence for C13–C16 and C18–C19 (implementation ownership per `M6_PLAN.md` §3.1); no B4 closeout/acceptance record. |
-| **M6-D** | `apps/api/src/mcp-notification-bridge.ts` (one-listener bridge, stable URI `markethub://market/snapshot`, idempotent start/stop, contained errors); `tests/mcp/{subscriptions,notification-bridge,fanout}.test.ts`; evidence `docs/M6_D_FANOUT_EVIDENCE.md` (N=8/32/64, M=20, p95 ~3.6 ms, `maxSubscriptions=64`, 50 ms budget, slow-consumer queue 22 frames/4,126 bytes). Commits `dfa6aad`, `40c7b70`, `a9d20ae`, `aee329d`, `8ac4417`, `f70025e` (all 2026-11-21). | `M6_D_E_PLAN.md` §8.1 checklist entirely unchecked `[ ]`. No independent review gate completed. No acceptance record. Phase not accepted. |
+| **M6-B4** | `tests/mcp/conformance.test.ts` (9 named C-assertions), `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts`; B1–B3 implementation and tests. **Note:** `security.test.ts (under tests/mcp/)` does **not** exist — the correct files are `tests/providers/security.test.ts`, `tests/mcp/activity.test.ts` and `tests/mcp/http-integration.test.ts` (§4.2). | `tests/mcp/parity.test.ts` does **not** exist. `docs/M6_B4_PLAN.md` does **not** exist. `docs/M6_B_PLAN.md` line 3 says "M6-B4 implementation not started." B4 owns the conformance/parity closeout evidence for C13–C16 and C18–C19 (implementation ownership per `M6_PLAN.md` §3.1); no B4 closeout/acceptance record. Planned named assertions still missing: C3 `-32002`/`-32042` negative, C6 `serverInfo` `_meta`, C18 no-extensions, C19 `tools/list` wire schema, C21 deprecated-method negatives (§4.3, §6.7). |
+| **M6-D** | `apps/api/src/mcp-notification-bridge.ts` (one-listener bridge, stable URI `markethub://market/snapshot`, idempotent start/stop, contained errors); `tests/mcp/{subscriptions,notification-bridge,fanout}.test.ts`; evidence `docs/M6_D_FANOUT_EVIDENCE.md` (N=8/32/64, M=20, preserved p95 3.44–3.74 ms, max 3.65–4.51 ms, `maxSubscriptions=64`, 50 ms budget, slow-consumer queue 22 frames/4,126 bytes; unpreserved 7.91/10.28 ms run withdrawn). Commits `dfa6aad`, `40c7b70`, `a9d20ae`, `aee329d`, `8ac4417`, `f70025e` (all 2026-11-21). | `M6_D_E_PLAN.md` §8.1 checklist entirely unchecked `[ ]`. No independent review gate completed. No acceptance record. Phase not accepted. |
 | **M6-E** | `tests/mcp/{http-integration,stdio-modern,legacy-compat,conformance,lan-simulation,http-smoke}.test.ts`; `docs/M6_E_EVIDENCE.md` (C1–C21 matrix, all rows evidenced, partially evidenced, or justified N/A — C6 is partial: `subscriptionId` asserted, `serverInfo` `_meta` not asserted); `docs/M6_E_LAN_ACCEPTANCE.md` (user-approved scope change). Commits `57e1c7f` + fixes. | `M6_D_E_PLAN.md` §8.2 and §8.3 checklists entirely unchecked `[ ]`. No independent review gate completed. No acceptance record. Phase not accepted. M6-E must not claim B4 acceptance. |
 
 ### 1.4 Preserved user work (must not be reverted or overwritten)
 
-- ` M docs/REFERENCES.md` — pre-existing modification.
-- `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` — pre-existing untracked file.
-- `?? docs/CHATGPT_HANDOFF_CONTEXT.md` — pre-existing untracked handoff aid.
-- This plan adds exactly one new file: `docs/M6_B4_D_E_COMPLETION_PLAN.md`. No other file is created or modified by this planning task.
+- ` M docs/REFERENCES.md` — pre-existing modification (user work; do not modify in this task).
+- `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` — pre-existing untracked file (user work; do not modify in this task).
+- `docs/CHATGPT_HANDOFF_CONTEXT.md` — **tracked**, added in `1ddf24b` and present at `72743cf`. It is **not** untracked and is **not** new user work in this task; it is preserved and must not be overwritten or deleted. Earlier snapshots that listed it as `??` describe the state before `1ddf24b` and are historical only.
+- This plan was published as one new file at `72743cf`; the current documentation-only correction pass modifies only the nine named docs and creates no new plan file. No source, test, manifest, lockfile or DB file is changed.
 
 ### 1.5 Labeling convention used throughout this plan
 
@@ -115,11 +114,11 @@ Product owner authorizes one bounded WP → OpenCode implements → independent 
 
 ### 2.4 Mandatory 12-element assignment format (protocol §4)
 
-Every implementation assignment (each WP below) must specify: (1) objective; (2) verified current state; (3) exact scope; (4) architectural direction; (5) files/components allowed to change; (6) protected areas; (7) non-goals; (8) acceptance criteria; (9) required tests; (10) verification instructions; (11) expected report format; (12) completed Option and Metadata Impact Assessment. An assignment without a completed assessment is incomplete. The WP sections below are planning scaffolds; they become implementation assignments only when all 12 elements and the 18-question assessment are completed and separately authorized.
+Every implementation assignment (each WP below) must specify: (1) objective; (2) verified current state; (3) exact scope; (4) architectural direction; (5) files/components allowed to change; (6) protected areas; (7) non-goals; (8) acceptance criteria; (9) required tests; (10) verification instructions; (11) expected report format; (12) completed Option and Metadata Impact Assessment. An assignment without a completed assessment is incomplete. **All 12 elements are now mapped per WP in §3.4 and all 18-question assessments are answered in §4.7/§5.11/§6.9**; these are planning answers, not implementation evidence. They become implementation assignments only when separately authorized and re-confirmed against live source.
 
 ### 2.5 Mandatory 18-question Option and Metadata Impact Assessment (protocol §4.1)
 
-Every WP must answer all 18 questions before implementation is authorized (source-of-truth ownership, shared contracts, provider/runtime registration, MCP/REST/WebUI consumers, domain-data discovery, config persistence, forward compatibility, dependency direction). Placeholders are provided in §4, §5 and §6; they must be completed in the implementation assignment/report. No backend-owned option may be introduced as a separately maintained frontend constant (AD-025 / `METADATA_AND_CAPABILITY_DISCOVERY.md`).
+Every WP must answer all 18 questions before implementation is authorized (source-of-truth ownership, shared contracts, provider/runtime registration, MCP/REST/WebUI consumers, domain-data discovery, config persistence, forward compatibility, dependency direction). **All 18 answers are now completed in §4.7 (B4), §5.11 (D) and §6.9 (E)** — every row is answered; re-confirm them against live source at implementation start. No backend-owned option may be introduced as a separately maintained frontend constant (AD-025 / `METADATA_AND_CAPABILITY_DISCOVERY.md`).
 
 ### 2.6 Evidence labeling (protocol §5, §6; `CHATGPT_HANDOFF_CONTEXT.md` §10)
 
@@ -129,23 +128,24 @@ Distinguish **implemented**, **placeholder/scaffold**, **planned**, **proposed**
 
 ## 3. Execution order and gates
 
-### 3.1 Mandatory order
+### 3.1 Scheduling order and technical dependencies (distinct)
 
 ```
-M6-B4 (conformance/parity closeout)  ──gate──▶  M6-D (notification bridge)  ──gate──▶  M6-E (acceptance)
-                                                                                          │
-                                                                                          ▼
-                                                              combined §8.3 gate ──▶ M6 ACCEPTED/CLOSED
+SCHEDULING (sequential work):   M6-B4  ──▶  M6-D  ──▶  M6-E
+TECHNICAL GATES:                B4 closeout gate   (independent owner)
+                                D §8.1 gate        (independent owner; NOT dependent on B4)
+                                E §8.2 gate        (requires B4 closeout AND D §8.1)
+                                combined §8.3 gate (D+E; mandatory) ──▶ M6 ACCEPTED/CLOSED
 ```
 
-- **B4 first.** Its conformance/parity unit work must not be silently absorbed into D or E. M6-E may consume B4 evidence and close end-to-end gaps, but B4 rows remain owned by B4 until B4's own closeout is accepted (`M6_D_E_PLAN.md` §2.1.3, §6.5).
-- **D second.** D must pass its phase gate (§8.1) before E begins (`M6_D_E_PLAN.md` §2.1.5).
-- **E last.** E final acceptance only after B4 and D gates pass. E assembles the C1–C21 evidence matrix but does **not** claim B4 acceptance.
-- **Combined gate (§8.3)** must pass before either D or E is declared complete. M6 may be declared complete only when B4, D and E are all accepted (`M6_D_E_PLAN.md` §8.3 final line).
+- **B4 is scheduled first**, for sequential work and to close its conformance/parity evidence separately. Its rows must not be silently absorbed into D or E; B4 rows remain B4-owned until B4's own closeout is accepted (`M6_D_E_PLAN.md` §2.1.3, §6.5). **This is a scheduling choice, not an architectural prerequisite.** Neither `M6_D_E_PLAN.md` nor `M6_PLAN.md` establishes that D depends on B4; do not describe B4 as D's technical prerequisite.
+- **D is independently owned.** D's only technical gate is its own §8.1 (`M6_D_E_PLAN.md` §2.1.5). D does not inherit B4 ownership, and B4 acceptance is not an entry condition for D.
+- **E requires both B4 and D.** E final acceptance only after B4 closeout and D §8.1 pass. E assembles the C1–C21 evidence matrix but does **not** claim B4 acceptance or transfer B4 ownership to E.
+- **Combined gate (§8.3)** is mandatory and must pass before either D or E is declared complete. M6 may be declared complete only when B4, D and E are all accepted (`M6_D_E_PLAN.md` §8.3 final line).
 
 ### 3.2 Per-WP sequence (repeat for each of B4, D, E)
 
-1. **18-question assessment** — complete and record the Option and Metadata Impact Assessment (§4/§5/§6 placeholders) in the assignment/report.
+1. **18-question assessment** — re-confirm and record the already-completed Option and Metadata Impact Assessment (§4.7/§5.11/§6.9) against live source in the assignment/report.
 2. **State what exists** — re-verify branch/SHAs/status, baseline tests, and the exact existing files/evidence for this WP; do not re-implement what already works.
 3. **Smallest changes** — make only the minimal additions/corrections needed to close the WP's gate; prefer reusing existing named assertions and files over creating new ones.
 4. **Focused tests** — run the WP's focused suites first; they must be deterministic and leak no child processes or SSE streams before the full suite runs.
@@ -157,6 +157,61 @@ M6-B4 (conformance/parity closeout)  ──gate──▶  M6-D (notification bri
 ### 3.3 Fix-forward blockers
 
 If independent review finds a defect in an **already-accepted** package (e.g. M6-A/B/C), record it as a **fix-forward blocker** with its own regression test and separate authorization. Do **not** silently reopen or re-accept the accepted package. Note the defect, its owner package, the evidence, and the disposition in the acceptance record.
+
+### 3.4 12-element assignment maps (one per WP)
+
+Protocol §4 requires all 12 elements in every implementation assignment. These are **planning maps**; they become assignments only after separate product-owner authorization. Allowed-file lists are deliberately narrow; everything else is protected. "Existing only where a real defect requires it" means a fix-forward with regression test and separate authorization (§3.3), never a repository-wide edit permission.
+
+**B4 — conformance/parity closeout**
+
+| # | Element | B4 planning answer |
+|---|---|---|
+| 1 | Objective | Close C13–C16/C18–C19 with named assertions + real HTTP/STDIO parity; no new user-facing capability. |
+| 2 | Verified current state | `72743cf` published plan; original implementation baseline `2ed4c1e`; 9 named tests in `conformance.test.ts`; no `parity.test.ts`; no `security.test.ts (under tests/mcp/)`. |
+| 3 | Exact scope | Named negative/gap assertions (C3/C6/C18/C19/C20/C21), snapshot pagination (C14), parity test; no new tools/resources. |
+| 4 | Architectural direction | Reuse existing named assertions and shared registration; SDK-owned protocol; no source redesign. |
+| 5 | Allowed files | New `tests/mcp/parity.test.ts`; existing `tests/mcp/{conformance,tools,resources,cache-hints,feed-sync,tools-adapters,stdio-adapter,operation-descriptors,operation-routes,subscriptions,activity,snapshot-page,snapshot-page-routes}.test.ts` **only where a named assertion is missing**; `docs/M6_B_PLAN.md`, `docs/M6_E_EVIDENCE.md`, `docs/M6_B4_D_E_COMPLETION_PLAN.md`. |
+| 6 | Protected files | All application source (`apps/**`, `packages/**`), manifests/lockfiles, DB, `main`, Stage G/M5 Phase 4B/M7, `docs/REFERENCES.md`, `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`, `docs/CHATGPT_HANDOFF_CONTEXT.md`. |
+| 7 | Non-goals | No new capability, no provider activation, no commit/push, no D/E acceptance claim. |
+| 8 | Acceptance criteria | §4.6: every row named-asserted, parity passes, focused + full + typecheck + build + diff-check, independent KEEP. |
+| 9 | Required tests | §4.4 focused command incl. `parity.test.ts`; full suite vs immediately preceding accepted baseline (§8.1). |
+| 10 | Verification instructions | §8: exact commands/exit codes/counts, failure names, isolation, local-vs-CI labels, baseline comparison. |
+| 11 | Report format | §12 10-item report; C1–C21 ownership table; no commit/push confirmation. |
+| 12 | 18-question assessment | §4.7 — fully answered; re-confirm against live source at implementation time. |
+
+**D — notification bridge and event delivery**
+
+| # | Element | D planning answer |
+|---|---|---|
+| 1 | Objective | Accept the existing one-process bridge + `subscriptions/listen` delivery with read-after-notify, correct capability advertisement, bounded fan-out, race-safe recovery, ordered shutdown. |
+| 2 | Verified current state | Source/tests exist (`mcp-notification-bridge.ts`, `subscriptions/notification-bridge/fanout.test.ts`); §8.1 all `[ ]`; not accepted. |
+| 3 | Exact scope | Close §8.1; correct only a real defect in the bridge, API composition/capability wiring, D-specific tests and fan-out evidence. |
+| 4 | Architectural direction | One canonical source (`MarketDataService.subscribe()`), one process-wide bridge, SDK-owned listen/IDs/SSE, stable URI `markethub://market/snapshot`, feed catch-up via `markethub://events/live`. |
+| 5 | Allowed files | `apps/api/src/mcp-notification-bridge.ts`, `apps/api/src/index.ts`/`app.ts` (composition/capability wiring) **only if a real defect requires it**; `tests/mcp/{subscriptions,notification-bridge,fanout}.test.ts`; `docs/M6_D_FANOUT_EVIDENCE.md`, `docs/M6_D_E_PLAN.md`, `docs/M6_B4_D_E_COMPLETION_PLAN.md`. |
+| 6 | Protected files | `packages/mcp-core/src/factory.ts` and other shared source except a documented fix-forward; all other `apps/**`/`packages/**`; manifests/lockfiles/DB; `main`; Stage G/M5 Phase 4B/M7; the three preserved docs in §1.4. |
+| 7 | Non-goals | No second event system, no custom SSE/protocol, no API SSE relay for STDIO, no provider activation, no commit/push. |
+| 8 | Acceptance criteria | §5.10 / `M6_D_E_PLAN.md` §8.1 all checked after independent KEEP. |
+| 9 | Required tests | Focused D suites; full suite vs B4's accepted baseline (§8.1). |
+| 10 | Verification instructions | §8; wire-visible shapes, race/recovery, fan-out arithmetic (§5.7, `M6_D_FANOUT_EVIDENCE.md`). |
+| 11 | Report format | §12 10-item report; C17 ownership; limitations (stream-count bound only, no STDIO live delivery). |
+| 12 | 18-question assessment | §5.11 — fully answered; re-confirm against live source at implementation time. |
+
+**E — end-to-end conformance and transport acceptance**
+
+| # | Element | E planning answer |
+|---|---|---|
+| 1 | Objective | Final acceptance: real HTTP listener + pinned client, STDIO spawned process, legacy posture, LAN simulation, C1–C21 assembly. Final acceptance, **not** a new feature. |
+| 2 | Verified current state | E tests/evidence exist; §8.2/§8.3 all `[ ]`; not accepted; B4/D not yet accepted. |
+| 3 | Exact scope | Real HTTP integration, STDIO (incl. re-listen after reconnect), legacy compat, LAN simulation, conformance evidence, acceptance docs. |
+| 4 | Architectural direction | Reuse M6-A/B/C/D; no duplicate market logic; thin local-API STDIO; no API SSE relay; physical LAN out of scope. |
+| 5 | Allowed files | `tests/mcp/{http-integration,stdio-modern,legacy-compat,conformance,lan-simulation,http-smoke}.test.ts`; `docs/M6_E_EVIDENCE.md`, `docs/M6_E_LAN_ACCEPTANCE.md`, `docs/M6_D_E_PLAN.md`, `docs/M6_PLAN.md`, `docs/PROJECT_STATUS.md`, `docs/IMPLEMENTATION_ROADMAP.md`, `docs/M6_B4_D_E_COMPLETION_PLAN.md`. Application source changes **only** via documented fix-forward + separate authorization. |
+| 6 | Protected files | All `apps/**`/`packages/**` source except an authorized fix-forward; manifests/lockfiles/DB; `main`; Stage G/M5 Phase 4B/M7; the three preserved docs in §1.4. |
+| 7 | Non-goals | No new capability, no B4 ownership transfer, no physical LAN claim, no commit/push. |
+| 8 | Acceptance criteria | §6.8 §8.2 + combined §8.3 after independent KEEP. |
+| 9 | Required tests | §6.3 16-item real-listener list; §6.4 STDIO incl. re-listen; §6.5 legacy; §6.6 simulation; full suite vs D's accepted baseline (§8.1). |
+| 10 | Verification instructions | §8; real listener never replaced by `handler.fetch`; official spec/SDK re-verified (§6.2). |
+| 11 | Report format | §12 10-item report; C1–C21 ownership/gap map; one unambiguous result (§12.2). |
+| 12 | 18-question assessment | §6.9 — fully answered; re-confirm against live source at implementation time. |
 
 ---
 
@@ -170,27 +225,38 @@ Close the M6-B4 conformance/parity sub-phase: prove C13–C16 and C18–C19 with
 
 - `docs/M6_B_PLAN.md` line 3: "M6-B4 implementation not started." §7 defines B4 as "Parity + conformance tests (C13–C16, C18–C19)" with exit condition "`parity.test.ts` passes; no extensions advertised; no MRTR/server-initiated requests."
 - `tests/mcp/parity.test.ts` does **not** exist; `docs/M6_B4_PLAN.md` does **not** exist (independently verified).
-- Existing reusable named assertions: `tests/mcp/conformance.test.ts` has 9 named tests (C2, C4, C3/C10, C3 version, C9, C3 invalid params, C11 SSE headers, C11 Last-Event-ID, C5 no server-initiated requests); `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `security.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts` already cover much of C13–C16/C18–C19.
+- Existing reusable named assertions: `tests/mcp/conformance.test.ts` has 9 named tests (C2, C4, C3/C10, C3 version, C9, C3 invalid params, C11 SSE headers, C11 Last-Event-ID, C5 no server-initiated requests); `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts` already cover much of C13–C16/C18–C19. **Corrected paths:** `security.test.ts (under tests/mcp/)` does **not** exist. The real files are `tests/providers/security.test.ts` (provider management/status secret exposure), `tests/mcp/activity.test.ts` (MCP activity error/summarization redaction) and `tests/mcp/http-integration.test.ts` (actual Host/Origin and HTTP security). None of these proves JSON Schema 2020-12; that needs a `tools/list` wire assertion (§4.3 C19).
 - `docs/M6_E_EVIDENCE.md` maps C13 (tools/resources/prompts), C14 (pagination), C15 (cache hints), C16 (MRTR N/A), C18 (no extensions), C19 (JSON Schema 2020-12, no remote `$ref`) to existing tests. **Ownership nuance:** `M6_PLAN.md` §3.1 is authoritative for implementation ownership — C13, C14, C16 and C19 are owned by M6-B; C15 and C18 are owned by M6-A/B. M6-B4 owns only the **conformance/parity closeout evidence** for C13–C16 and C18–C19 as the B4 sub-phase (per `M6_B_PLAN.md` §7); it does not transfer A/B implementation ownership or create a second owner of the same acceptance decision.
 
 ### 4.3 Exact scope (C13–C16, C18–C19)
 
 - **C13** — standard operations (`tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get`); deterministic `tools/list` order SHOULD.
-- **C14** — opaque `nextCursor`, stable cursors, invalid cursor → `-32602`; bounded keyset cursors for catalog/feed/activity.
+- **C14** — opaque `nextCursor`, stable cursors, invalid cursor → `-32602`; bounded keyset cursors for catalog/feed/activity **and snapshot pagination (M6-B3)**. Map each cursor to its real test/service interface: catalog → `tools.test.ts` / `CatalogRepository.searchInstruments`; feed → `feed-sync.test.ts` / `LiveEventHub.readAfter`; snapshot → `tests/mcp/snapshot-page.test.ts` and `tests/mcp/snapshot-page-routes.test.ts` / `OptionChainSnapshotService.listSnapshotsPage` (versioned opaque cursor, stable progression, malformed/wrong-version cursor rejected, bounded page size, final page `nextCursor: null`); activity → `tests/mcp/activity.test.ts` / activity repository. Clients treat every cursor as opaque; no client decodes it.
 - **C15** — cache hints `ttlMs`/`cacheScope` MUST on `server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read`; same scope across pages; MRTR retries not cached.
 - **C16** — MRTR `input_required` not used in M6; assert no server-initiated requests; document N/A; never use deprecated push pattern.
 - **C18** — capability negotiation/extensions: advertise none; never claim unsupported extensions.
 - **C19** — JSON Schema 2020-12 default; no auto-dereference of network `$ref`; bounded composition keywords.
 - **Parity** — HTTP direct services and STDIO local-API client reach the same capabilities with identical response semantics where the local API exposes them; capabilities reported `unavailable` over STDIO are asserted as such, not silently omitted (`M6_PLAN.md` §4.1.3, §11a `parity.test.ts`).
+
+**Planned named assertions for open conformance gaps (cross-owner; `M6_PLAN.md` §3.1 is authoritative for ownership).** These are **planned, not existing evidence** — do not mark a row passed because this plan now requires it. Each needs a named assertion and a re-review before its status can change:
+
+| Row | Owner | Planned named assertion (target file) | Current honest status |
+|---|---|---|---|
+| C3 | M6-A/B | Wire-level negative: no error code `-32002` or `-32042` is emitted for any M6 request (`tests/mcp/conformance.test.ts`). | Not present; C3 must not be called fully evidenced until it exists. |
+| C6 | M6-A/D | Wire-level verification of `io.modelcontextprotocol/serverInfo` in result `_meta` (prefer official SDK wire behavior; `tests/mcp/conformance.test.ts` or `tests/mcp/subscriptions.test.ts`). The mandatory `subscriptionId` requirement stays a **separate** assertion. If the SHOULD cannot be satisfied, record a reasoned deviation with owner. | Partial: `subscriptionId` asserted; `serverInfo` `_meta` not asserted. |
+| C18 | M6-A/B | Modern `server/discover` result advertises **no** unsupported extension map (`tests/mcp/subscriptions.test.ts` / `conformance.test.ts`). | Partial: explicit capabilities asserted, no-extensions not asserted. |
+| C19 | M6-B | Actual `tools/list` wire output uses JSON Schema 2020-12 and contains no auto-dereferenced network `$ref` (`tests/mcp/tools.test.ts`, or the smallest correct new MCP test). Provider credential tests do **not** prove this. | Partial: no named wire assertion; `security.test.ts (under tests/mcp/)` does not exist. |
+| C20 | M6-A/B/D | Split by responsibility: `tests/providers/security.test.ts` = provider management/status secret exposure; `tests/mcp/activity.test.ts` = MCP activity error/summarization redaction; `tests/mcp/http-integration.test.ts` = actual Host/Origin and HTTP security. Verify each against the exact C20 part it proves. | Evidenced in three parts; wrong path removed. |
+| C21 | M6-A/B/D | Explicit negatives: `ping`, `logging/setLevel`, `resources/subscribe` rejected with method-not-found on the modern protocol; deprecated capabilities/surfaces not advertised; legacy HTTP+SSE not implemented; no SSE `Last-Event-ID` replay (reuse `tests/mcp/http-integration.test.ts` / `conformance.test.ts`). Do **not** confuse retained 2025-era Streamable HTTP/STDIO compatibility with deprecated legacy HTTP+SSE. | Partial: "modern client uses discover" does not prove deprecated methods absent. |
 - **Preserve honest-unavailable capabilities:** retain `futures_chain` and `market_information` as discoverable tools returning an explicit `unavailable` result, and retain `markethub://events/alerts` as discoverable-but-unavailable (M7 dependency). Do not fabricate data or remove these capabilities.
 - **Do not add new tools/resources to pad the conformance matrix.** B4 is a verification/closeout sub-phase; any new capability requires its own authorized assignment.
 
 ### 4.4 Required tests (reuse existing assertions; create the B4 closeout artifact)
 
-- **Prefer reusing existing named assertions.** Map each of C13–C16/C18–C19 to an existing named test in `conformance.test.ts`, `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `security.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts`. Do not duplicate a test merely to match a filename.
-- **Create `tests/mcp/parity.test.ts` as the required B4 closeout artifact.** `M6_B_PLAN.md` §7 sets the literal B4 exit condition "`parity.test.ts` passes"; the file does not exist today and must be created for B4 to close. It may wrap/reuse existing named assertions (importing or delegating to them) rather than duplicating test logic, so no duplicate tests are introduced. It must assert: both transports expose the same capabilities where the local API provides them; `catalog_search` and `events/live` are available over both (B decision 1); `futures_chain`, `market_information` and `markethub://events/alerts` are discoverable and return explicit `unavailable`; a capability in state (b) is tested as `unavailable`, not silently omitted.
-- Add only missing named assertions (e.g. an explicit "no extensions advertised" assertion if not already present in `subscriptions.test.ts` "server/discover advertises explicit capabilities…").
-- Focused command: `bun test tests/mcp/conformance.test.ts tests/mcp/tools.test.ts tests/mcp/resources.test.ts tests/mcp/cache-hints.test.ts tests/mcp/feed-sync.test.ts tests/mcp/security.test.ts tests/mcp/parity.test.ts` (the `parity.test.ts` file is required, not optional).
+- **Prefer reusing existing named assertions.** Map each of C13–C16/C18–C19 to an existing named test in `conformance.test.ts`, `tools.test.ts`, `resources.test.ts`, `cache-hints.test.ts`, `feed-sync.test.ts`, `tools-adapters.test.ts`, `stdio-adapter.test.ts`, `operation-descriptors.test.ts`, `operation-routes.test.ts`, plus `snapshot-page.test.ts`/`snapshot-page-routes.test.ts` for C14 snapshot pagination. Do not duplicate a test merely to match a filename. `security.test.ts (under tests/mcp/)` does **not** exist; use the three correct files listed in §4.2/§4.3.
+- **Create `tests/mcp/parity.test.ts` as the required B4 closeout artifact — it must be a meaningful test, not an empty filename-satisfying wrapper.** `M6_B_PLAN.md` §7 sets the literal B4 exit condition "`parity.test.ts` passes"; the file does not exist today and must be created for B4 to close. It must **exercise the actual HTTP and STDIO adapters** (real `createMcpHandler` HTTP path and a spawned/STDIO local-API client, reusing genuine helpers such as those in `http-integration.test.ts`, `stdio-adapter.test.ts` and `stdio-modern.test.ts`) and assert equivalent capability/result behavior **wherever the local API exposes the capability**. It must assert: `catalog_search` and `events/live` are available over both (B decision 1); `futures_chain`, `market_information` and `markethub://events/alerts` are discoverable and return explicit `unavailable`; a capability in state (b) is tested as `unavailable`, **not** treated as parity by silent omission. It may import/delegate to existing named assertions to avoid duplicate logic, but a file that merely imports a test and asserts nothing is not acceptable.
+- Add only missing named assertions from the §4.3 gap table (C3 negative, C6 `serverInfo` `_meta`, C18 no-extensions, C19 `tools/list` wire schema, C20 split paths, C21 deprecated-method negatives). Do not mark any of them passed until the assertion exists and is reviewed.
+- Focused command: `bun test tests/mcp/conformance.test.ts tests/mcp/tools.test.ts tests/mcp/resources.test.ts tests/mcp/cache-hints.test.ts tests/mcp/feed-sync.test.ts tests/mcp/snapshot-page.test.ts tests/mcp/snapshot-page-routes.test.ts tests/mcp/parity.test.ts` (the `parity.test.ts` file is required, not optional; no nonexistent `security.test.ts (under tests/mcp/)`).
 
 ### 4.5 Ownership boundary
 
@@ -202,34 +268,34 @@ Close the M6-B4 conformance/parity sub-phase: prove C13–C16 and C18–C19 with
 
 - Every C13–C16/C18–C19 row has a named assertion (existing or new) and is recorded in a B4 closeout record. Implementation ownership stays with `M6_PLAN.md` §3.1 (C13/C14/C16/C19 = B; C15/C18 = A/B); B4 owns only the closeout evidence.
 - `tests/mcp/parity.test.ts` exists and passes (the literal `M6_B_PLAN.md` §7 exit condition; it may wrap/reuse existing named assertions); no capability silently dropped; no extensions advertised; no MRTR/server-initiated requests.
-- Focused tests, `bun run typecheck`, `bun run build`, `git diff --check` pass; full suite shows no new failures vs the 1076/0 baseline.
+- Focused tests, `bun run typecheck`, `bun run build`, `git diff --check` pass; full suite shows no new failures vs the **immediately preceding accepted baseline** (the freshly re-run pre-B4 result per §8.1; 1076/0 at `2ed4c1e` is retained only as the original historical baseline). Expected pass-count growth from new tests is not a failure; unexplained failures are investigated, not silently adopted.
 - Independent review KEEP with no findings; acceptance recorded in `docs/M6_B_PLAN.md` (and referenced from `M6_PLAN.md`/`PROJECT_STATUS.md` per §9).
 - No provider activation, Stage G, M7, new dependency, migration or protocol redesign.
 
-### 4.7 Option and Metadata Impact Assessment — 18 questions (TEMPLATE — complete at authorized implementation)
+### 4.7 Option and Metadata Impact Assessment — 18 questions (answered)
 
-> All answers below are **TBD — complete at implementation** unless marked with a verified fact. The executor must fill every row in the implementation assignment/report before code is written (protocol §4.1). "No change" is a valid answer where verified.
+> All 18 answers are completed from source/evidence inspection at the published planning baseline. They are **planning answers**, not implementation evidence; re-confirm against live source at implementation start (protocol §4.1). B4 is test/acceptance work and adds **no new user-facing capability**; "N/A" below is justified by that scope, not a blank.
 
-| # | Question (protocol §4.1) | Answer (complete at implementation) |
+| # | Question (protocol §4.1) | Answer |
 |---|---|---|
-| 1 | New selectable options, capabilities, entities or config fields? | TBD — expected "none" (verification-only WP) |
-| 2 | Who owns their source of truth (exact module/contract/registry)? | TBD |
-| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | TBD |
-| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | TBD |
-| 5 | Does an existing API/schema/registry/repository already provide the information? | TBD |
-| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | TBD — expected "sufficient" |
-| 7 | How does the UI update when new values are registered, without a frontend-list edit? | TBD — expected "no UI change" |
-| 8 | Cache invalidation / refresh behavior needed? | TBD |
-| 9 | Any metadata fields sensitive or unsafe to expose? | TBD — expected "none added" |
-| 10 | Tests proving frontend/backend consistency and no duplicate definition? | TBD |
-| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | TBD — expected "none" |
-| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | TBD — expected "preserved" |
-| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | TBD — expected "no new operation" |
-| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | TBD |
-| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | TBD |
-| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | TBD — expected "no config change" |
-| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | TBD |
-| 18 | Dependency direction — circular import introduced? | TBD — expected "no new dependency" |
+| 1 | New selectable options, capabilities, entities or config fields? | **None.** B4 adds named assertions and `parity.test.ts` only; no new user-facing capability, selector or config field. N/A for new options — justified by verification-only scope. |
+| 2 | Who owns their source of truth (exact module/contract/registry)? | Unchanged. MCP capability registration: `packages/mcp-core/src/factory.ts` + `tools.ts`/`resources.ts`/`prompts.ts`; requirement matrix: `docs/M6_PLAN.md` §3.1; evidence: `docs/M6_E_EVIDENCE.md` and `tests/mcp/*`. B4 owns no new registry. |
+| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | **None added.** B4 only asserts existing enums/capabilities/domain data. N/A — verification only. |
+| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | Unchanged: WebUI via existing REST/discovery endpoints; MCP via `server/discover` + `tools/list`/`resources/list`/`prompts/list`; REST/SSE via existing routes; STDIO via the thin local-API adapters. B4 adds no new consumer path. |
+| 5 | Does an existing API/schema/registry/repository already provide the information? | **Yes.** `M6_PLAN.md` §3.1, `M6_E_EVIDENCE.md`, existing tests and shared registration already provide everything B4 asserts. No new source needed. |
+| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | **Direct shared-package import / existing test helpers are sufficient.** No new discovery or read API. |
+| 7 | How does the UI update when new values are registered, without a frontend-list edit? | **No UI change.** B4 registers no value the UI could display. N/A — no frontend-list edit. |
+| 8 | Cache invalidation / refresh behavior needed? | **None introduced.** Existing cache hints (`ttlMs: 0`, `cacheScope: "private"` on six operations) are asserted, not changed; no new invalidation path. |
+| 9 | Any metadata fields sensitive or unsafe to expose? | **None added.** Negative assertions only; no credentials, tokens, provider-native identifiers or secrets in tests/docs/`_meta`. N/A — nothing new exposed. |
+| 10 | Tests proving frontend/backend consistency and no duplicate definition? | `tests/mcp/parity.test.ts` (real HTTP + STDIO adapters) plus reused named assertions prove transport consistency; no duplicate definition because assertions are reused, not copied, and no frontend constant is added. |
+| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | **None.** No enum/schema changed; all consumers unchanged. N/A — verification only. |
+| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | **Preserved.** No provider identity or registration change; fixed `UPSTOX`/`FYERS` contract untouched. |
+| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | **No new operation.** Descriptors remain derived from the same `packages/mcp-core` registration source; parity asserts the existing inventory only. |
+| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | **None.** No consumer reads a new value; no hardcoding introduced or removed. N/A — verification only. |
+| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | **No new domain API.** Existing bounded/paginated catalog, feed, snapshot and activity interfaces are asserted (C14), not changed. |
+| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | **No config change.** MCP on-demand operations remain side-effect-free; B4 adds no config write. |
+| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | **No new value introduced.** N/A — no frontend or second backend list edit; verification only. |
+| 18 | Dependency direction — circular import introduced? | **No new dependency, no circular import.** Tests import existing helpers only; dependency direction unchanged. |
 
 ---
 
@@ -243,7 +309,7 @@ Complete and accept the M6-D notification bridge: connect canonical `MarketDataS
 
 - Source exists: `apps/api/src/mcp-notification-bridge.ts` — one process-lifetime bridge; `MARKET_SNAPSHOT_URI = "markethub://market/snapshot"`; `start()` subscribes once to `service.subscribe()`; `stop()` idempotent unsubscribe; every `LiveChangeEvent` maps to one `notifier.resourceUpdated(uri)`; publisher errors contained via best-effort `onError`.
 - Tests exist: `tests/mcp/subscriptions.test.ts`, `tests/mcp/notification-bridge.test.ts`, `tests/mcp/fanout.test.ts`.
-- Evidence exists: `docs/M6_D_FANOUT_EVIDENCE.md` — N ∈ {8,32,64}, M=20, p95 ~3.6 ms, `maxSubscriptions=64`, 50 ms budget, slow-consumer queue 22 frames / 4,126 bytes, no per-stream bound claimed.
+- Evidence exists: `docs/M6_D_FANOUT_EVIDENCE.md` — N ∈ {8,32,64}, M=20, preserved p95 3.44–3.74 ms, max 3.65–4.51 ms, `maxSubscriptions=64`, 50 ms budget, slow-consumer queue 22 frames / 4,126 bytes, no per-stream bound claimed; unpreserved 7.91/10.28 ms run withdrawn.
 - Commits: `dfa6aad`, `40c7b70`, `a9d20ae`, `aee329d`, `8ac4417`, `f70025e` (all 2026-11-21).
 - **Not accepted:** `M6_D_E_PLAN.md` §8.1 checklist all `[ ]`; no independent review gate; no acceptance record.
 
@@ -297,34 +363,36 @@ Complete and accept the M6-D notification bridge: connect canonical `MarketDataS
 ### 5.9 STDIO HTTP-only boundary
 
 - Active `MarketDataService → MCP` delivery acceptance is **HTTP only**. STDIO is a local-API client with no canonical live-event source/relay; do not advertise `resources.subscribe` or claim live updates on STDIO.
-- M6-E tests modern `subscriptions/listen` **control-plane** behavior on a real STDIO process (ack ordering, actually honored — possibly empty — filter, cancellation, correlation, clean shutdown). Adding an API SSE relay for active STDIO delivery is an explicit scope decision requiring separate authorization.
+- M6-E tests modern `subscriptions/listen` **control-plane** behavior on a real STDIO process (ack ordering, actually honored — possibly empty — filter, cancellation, correlation, clean shutdown). **Explicit M6-E test step (§6.4): after an established STDIO connection is closed and a new one opened, the client opens `subscriptions/listen` again and the server returns a fresh ack with the correct honored filter; no subscription state is assumed to survive the old connection, and no active live notification delivery is claimed for STDIO.** Adding an API SSE relay for active STDIO delivery is an explicit scope decision requiring separate authorization.
 
 ### 5.10 Exit gate (§8.1 of D plan)
 
-All §8.1 checkboxes must be independently verified and checked: one process-wide bridge; modern HTTP client receives correct `resources/updated`; ack-first/filter/ID/isolation/cancellation/graceful close/bounded subscriptions proven; capabilities explicitly initialized with modern/legacy assertions; read-after-notify with wire-visible shapes and all race/recovery tests passing; bounded fan-out measured with documented `maxSubscriptions` and latency budget; slow-consumer limitation recorded; shutdown distinguishes graceful vs aborted; notification failures cannot change data outcomes; no custom protocol/SSE/migration/dependency/provider activation; focused tests + typecheck + build + diff-check pass; full suite no new failures vs 1076/0; independent review KEEP.
+All §8.1 checkboxes must be independently verified and checked: one process-wide bridge; modern HTTP client receives correct `resources/updated`; ack-first/filter/ID/isolation/cancellation/graceful close/bounded subscriptions proven; capabilities explicitly initialized with modern/legacy assertions; read-after-notify with wire-visible shapes and all race/recovery tests passing; bounded fan-out measured with documented `maxSubscriptions` and latency budget (correct arithmetic per `M6_D_FANOUT_EVIDENCE.md`); slow-consumer limitation recorded; shutdown distinguishes graceful vs aborted; notification failures cannot change data outcomes; no custom protocol/SSE/migration/dependency/provider activation; focused tests + typecheck + build + diff-check pass; full suite no new failures vs the immediately preceding accepted baseline (§8.1; 1076/0 at `2ed4c1e` is the original historical baseline); independent review KEEP.
 
-### 5.11 Option and Metadata Impact Assessment — 18 questions (TEMPLATE — complete at authorized implementation)
+### 5.11 Option and Metadata Impact Assessment — 18 questions (answered)
 
-| # | Question (protocol §4.1) | Answer (complete at implementation) |
+> All 18 answers are completed from source/evidence inspection at the published planning baseline. Re-confirm against live source at implementation start. **Special note:** `resources.subscribe` is a **conditional MCP protocol capability**, **not** a user-selectable option, frontend selector, provider identity or config field. Its source of truth is the shared MCP factory (`packages/mcp-core/src/factory.ts`, `createMcpServer`) reading the SDK request context (`McpRequestContext.era` and `requestInfo`), with the process-wide bridge created in `apps/api` composition. It is advertised **only** when `ctx.era === "modern" && ctx.requestInfo !== undefined` (modern HTTP); legacy HTTP and **all** STDIO contexts do not advertise it. No new frontend selector, no new provider identity, no new user config and no new REST discovery endpoint are needed.
+
+| # | Question (protocol §4.1) | Answer |
 |---|---|---|
-| 1 | New selectable options, capabilities, entities or config fields? | TBD — note `resources.subscribe` capability is conditional, not a user option |
-| 2 | Who owns their source of truth (exact module/contract/registry)? | TBD — expected `apps/api` composition + SDK handler |
-| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | TBD |
-| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | TBD |
-| 5 | Does an existing API/schema/registry/repository already provide the information? | TBD — expected reuse of `MarketDataService`/`LiveEventHub` |
-| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | TBD — expected "sufficient" |
-| 7 | How does the UI update when new values are registered, without a frontend-list edit? | TBD — expected "no UI change" |
-| 8 | Cache invalidation / refresh behavior needed? | TBD — notification is a change signal; client re-reads |
-| 9 | Any metadata fields sensitive or unsafe to expose? | TBD — notifications carry URI + SDK metadata only |
-| 10 | Tests proving frontend/backend consistency and no duplicate definition? | TBD |
-| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | TBD — expected "none" |
-| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | TBD — expected "preserved" |
-| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | TBD — expected "no new operation; capability flags only" |
-| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | TBD |
-| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | TBD — `events/live` bounded to 100 |
-| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | TBD — expected "no config change" |
-| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | TBD |
-| 18 | Dependency direction — circular import introduced? | TBD — expected "no new dependency" |
+| 1 | New selectable options, capabilities, entities or config fields? | **No user-selectable option.** `resources.subscribe` is a conditional MCP protocol capability computed from the SDK request context, not a user choice. No new entity or config field. |
+| 2 | Who owns their source of truth (exact module/contract/registry)? | Shared MCP factory `packages/mcp-core/src/factory.ts` (`createMcpServer`) computes `subscribe = ctx.era === "modern" && ctx.requestInfo !== undefined` and sets it in the `McpServer` constructor capabilities; the SDK request context (`McpRequestContext`) supplies `era`/`requestInfo`; the one process-wide bridge is created in `apps/api` composition (`apps/api/src/index.ts`, `mcp-notification-bridge.ts`). No new registry. |
+| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | No new enum or user-managed value. The only capability change is the existing conditional `resources.subscribe` flag; `listChanged` flags are explicitly `false`. Domain data remains the canonical snapshot/feed. |
+| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | MCP clients read the flag via `server/discover` capabilities; WebUI/REST/SSE are unaffected and continue to use existing routes; STDIO clients see the flag absent/false. No new consumer path. |
+| 5 | Does an existing API/schema/registry/repository already provide the information? | **Yes.** `MarketDataService.subscribe()` is the canonical change source; `LiveEventHub` is the bounded feed/replay source; `markethub://market/snapshot` and `markethub://events/live` already exist. Reuse them; no new source. |
+| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | **Sufficient.** `server/discover` already advertises capabilities; `resources/read` on the existing snapshot/feed URIs is the read path. No new discovery or read API. |
+| 7 | How does the UI update when new values are registered, without a frontend-list edit? | **No UI change.** No user-facing value is registered; the capability is protocol-level. N/A — no frontend-list edit. |
+| 8 | Cache invalidation / refresh behavior needed? | Notification is a **change signal only** — it carries the URI and SDK metadata, no payload. The client re-reads `markethub://market/snapshot` and catches up via `markethub://events/live?after=<cursor>&limit=100` (bootstrap `after=first`), validating continuity and persisting the opaque cursor with `lastFeedRevision` as one checkpoint. Existing cache hints are unchanged. |
+| 9 | Any metadata fields sensitive or unsafe to expose? | **None added.** Notifications carry only the stable URI and SDK metadata (`subscriptionId`); no market payload, credentials, tokens or provider-native identifiers. `serverInfo` is self-reported and must not drive behavior or security decisions. |
+| 10 | Tests proving frontend/backend consistency and no duplicate definition? | `tests/mcp/subscriptions.test.ts`, `notification-bridge.test.ts`, `fanout.test.ts` plus `http-integration.test.ts` assert the capability/filter/notification behavior; no duplicate definition because the flag is computed once in the shared factory. |
+| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | **None.** No enum/schema changed; only capability flags are set explicitly. N/A — verification of existing contracts. |
+| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | **Preserved.** No provider identity or registration change; fixed `UPSTOX`/`FYERS` contract untouched; no provider activation. |
+| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | **No new operation.** Descriptors remain derived from the same `packages/mcp-core` registration source; only capability flags change. `subscriptions/listen` is SDK-owned. |
+| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | **None.** REST/SSE and WebUI do not read the MCP capability; no hardcoding introduced. The app's `/api/market/stream` SSE remains unrelated to MCP listen streams. |
+| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | **No new domain API.** `markethub://events/live` is bounded to 100 events per read with an opaque runtime-scoped cursor; snapshot reads are the bootstrap. |
+| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | **No config change.** The bridge is process-lifetime and in-memory; no operational config, credential, connection or retention setting is written by MCP. |
+| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | **No new value introduced.** The capability is derived from the request context at runtime; no frontend or second backend list edit. N/A. |
+| 18 | Dependency direction — circular import introduced? | **No new dependency, no circular import.** The bridge uses the existing SDK notifier and shared services; dependency direction unchanged. |
 
 ---
 
@@ -367,6 +435,7 @@ The deeper wire-level recovery scenarios required by `M6_D_E_PLAN.md` §5.2/§6.
 - Extend `tests/mcp/stdio-modern.test.ts` (do not build another harness): spawn the actual `apps/mcp-server/src/index.ts` with `StdioClientTransport` and a test local API server; pin to `2026-07-28`.
 - Verify `server/discover` body (`supportedVersions`, `capabilities`, `_meta['io.modelcontextprotocol/serverInfo']`), tool listing/call, resource reads, prompt retrieval.
 - Verify `subscriptions/listen` is handled by the SDK; because there is no event relay, confirm the ack does **not** claim `resourceSubscriptions` honored; verify cancellation and clean process shutdown with no leaked child.
+- **Explicit reconnect/re-listen test step (not only part of the combined gate):** (1) establish a STDIO connection and open `subscriptions/listen`, receiving the ack; (2) close that connection; (3) establish a **new** STDIO connection; (4) open `subscriptions/listen` again on the new connection; (5) assert the server returns a **fresh ack** with the correct honored filter (no `resourceSubscriptions` on STDIO, no `listChanged` bits). **No subscription state is assumed to survive the old connection, and no active live notification delivery is claimed for STDIO.** This is a control-plane assertion only; the thin local-API STDIO architecture is preserved (no SQLite, no `MarketDataService`, no API SSE relay).
 - Assert stdout carries only protocol messages; diagnostics on stderr. Preserve the thin local-API architecture (no SQLite, no `MarketDataService` in the STDIO app).
 
 ### 6.5 Legacy posture
@@ -383,7 +452,22 @@ The deeper wire-level recovery scenarios required by `M6_D_E_PLAN.md` §5.2/§6.
 
 ### 6.7 C1–C21 evidence matrix with strict ownership
 
-- Use `docs/M6_PLAN.md` §3.1 matrix and maintain a test-to-requirement table with one explicit named assertion per applicable MUST. `docs/M6_E_EVIDENCE.md` already contains a complete matrix (all rows evidenced, partially evidenced, or justified N/A) — reuse and re-verify it; do not duplicate tests merely to match a filename. **C6 is partial** (`subscriptionId` asserted in `subscriptions.test.ts`; `serverInfo` `_meta` not asserted); C5 and C16 are justified N/A. Do not describe the matrix as fully evidenced where a row is partial.
+- Use `docs/M6_PLAN.md` §3.1 matrix and maintain a test-to-requirement table with one explicit named assertion per applicable MUST. `docs/M6_E_EVIDENCE.md` contains a matrix that is **not fully evidenced**: several rows are partial or have planned-only assertions. Reuse and re-verify it; do not duplicate tests merely to match a filename. **C5 and C16 are justified N/A; C3, C6, C18, C19 and C21 are partial/planned** (gap table below). Do not describe the matrix as fully evidenced where a row is partial, and do not mark a planned assertion as passed.
+
+**Corrected C1–C21 ownership / gap map (`M6_PLAN.md` §3.1 authoritative for ownership):**
+
+| Row(s) | Owner | Evidence status at planning baseline | Gap / planned assertion |
+|---|---|---|---|
+| C1, C2, C4, C7–C13, C15, C17 | M6-A/B (C17 = M6-D) | Evidenced by named tests in `conformance.test.ts`, `http-integration.test.ts`, `subscriptions.test.ts`, `cache-hints.test.ts`, `tools.test.ts`, `resources.test.ts`. | None identified; re-verify at implementation start. |
+| C3 | M6-A/B | Partial — `-32602`/`-32601`/`-32020`/`-32022` asserted; negative codes not asserted. | Planned: named wire assertion that `-32002` and `-32042` are **not** emitted. |
+| C5 | M6-A/B | Justified N/A — no capability-gated methods in M6. | None. |
+| C6 | M6-A/D | Partial — `subscriptionId` asserted; `serverInfo` `_meta` not asserted. | Planned: wire-level `io.modelcontextprotocol/serverInfo` in result `_meta`; record reasoned deviation + owner if the SHOULD cannot be satisfied. |
+| C14 | M6-B | Evidenced for catalog/feed/activity; **snapshot pagination omitted from the evidence map**. | Add `tests/mcp/snapshot-page.test.ts` + `snapshot-page-routes.test.ts` (opaque versioned cursor, stable progression, invalid cursor, bounded pages, client treats cursor opaque). |
+| C16 | M6-B | Justified N/A — MRTR not used in M6. | None. |
+| C18 | M6-A/B | Partial — explicit capabilities asserted; no-extensions not asserted. | Planned: modern `server/discover` advertises no unsupported extension map. |
+| C19 | M6-B | Partial — no named wire assertion; wrong `security.test.ts (under tests/mcp/)` reference removed. | Planned: actual `tools/list` wire output for JSON Schema 2020-12 and no auto-dereferenced network `$ref` (`tools.test.ts` or smallest correct new MCP test). |
+| C20 | M6-A/B/D | Evidenced in three parts. | Correct paths: `tests/providers/security.test.ts` (provider management/status secrets), `tests/mcp/activity.test.ts` (activity error/summarization redaction), `tests/mcp/http-integration.test.ts` (Host/Origin + HTTP security). |
+| C21 | M6-A/B/D | Partial — "modern client uses discover" does not prove deprecated methods absent. | Planned: explicit negatives for `ping`, `logging/setLevel`, `resources/subscribe` (method-not-found), no deprecated capability advertisement, no legacy HTTP+SSE, no `Last-Event-ID` replay (reuse existing integration test). Do not conflate retained 2025-era Streamable HTTP/STDIO compatibility with deprecated legacy HTTP+SSE. |
 - **Ownership (must stay separate; `M6_PLAN.md` §3.1 is authoritative for implementation ownership):**
   - **M6-A/B own** their transport/capability rows (C1–C12, C15, C18–C21 as applicable). Specifically, C15 and C18 are A/B implementation rows.
   - **M6-B4 owns** the conformance/parity **closeout evidence** for C13–C16 and C18–C19 as the B4 sub-phase (per `M6_B_PLAN.md` §7), without transferring A/B implementation ownership of C15/C18 or creating a second owner of the same acceptance decision. C13, C14, C16 and C19 implementation ownership is M6-B.
@@ -398,28 +482,30 @@ The deeper wire-level recovery scenarios required by `M6_D_E_PLAN.md` §5.2/§6.
 - **§8.3 (combined D+E gate):** real pinned client over actual listener opens `subscriptions/listen`, receives a supported notification after a canonical change, re-reads `markethub://market/snapshot` and `markethub://events/live` by cursor, observes graceful close — using the **same** bridge and handler D wired; same client set verifies discovery/tools/resources/prompts over both transports with no duplicate market logic and no deprecated methods; STDIO and HTTP expose the same notification control-plane semantics, STDIO re-listen after reconnect verified, no false capability advertisement; no D interface untested by E and no E assertion depending on behavior D did not implement; evidence assembled in one report referencing both gates. A gap in either blocks the combined gate and any M6-complete claim.
 - **Implementation or passing tests alone do not mark a phase complete — the independent review gate is required.**
 
-### 6.9 Option and Metadata Impact Assessment — 18 questions (TEMPLATE — complete at authorized implementation)
+### 6.9 Option and Metadata Impact Assessment — 18 questions (answered)
 
-| # | Question (protocol §4.1) | Answer (complete at implementation) |
+> All 18 answers are completed from source/evidence inspection at the published planning baseline. Re-confirm against live source at implementation start. **E is final acceptance, not a new feature** — it assembles evidence and adds real-listener/real-client assertions; "N/A" below is justified by that scope, not a blank.
+
+| # | Question (protocol §4.1) | Answer |
 |---|---|---|
-| 1 | New selectable options, capabilities, entities or config fields? | TBD — expected "none" (acceptance-only WP) |
-| 2 | Who owns their source of truth (exact module/contract/registry)? | TBD |
-| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | TBD |
-| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | TBD |
-| 5 | Does an existing API/schema/registry/repository already provide the information? | TBD — expected reuse of existing tests/evidence |
-| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | TBD — expected "sufficient" |
-| 7 | How does the UI update when new values are registered, without a frontend-list edit? | TBD — expected "no UI change" |
-| 8 | Cache invalidation / refresh behavior needed? | TBD |
-| 9 | Any metadata fields sensitive or unsafe to expose? | TBD — expected "none added" |
-| 10 | Tests proving frontend/backend consistency and no duplicate definition? | TBD |
-| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | TBD — expected "none" |
-| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | TBD — expected "preserved" |
-| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | TBD — expected "no new operation" |
-| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | TBD |
-| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | TBD |
-| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | TBD — expected "no config change" |
-| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | TBD |
-| 18 | Dependency direction — circular import introduced? | TBD — expected "no new dependency" |
+| 1 | New selectable options, capabilities, entities or config fields? | **None.** E is acceptance-only; no new user-facing capability, selector or config field. N/A for new options — justified by acceptance scope. |
+| 2 | Who owns their source of truth (exact module/contract/registry)? | Unchanged. Requirements: `docs/M6_PLAN.md` §3.1; registration: `packages/mcp-core/src/factory.ts` + `tools.ts`/`resources.ts`/`prompts.ts`; capability flag: shared factory + SDK request context; bridge: `apps/api` composition. E owns no new registry. |
+| 3 | Shared contract enums, backend capabilities, domain data or user-managed values? | **None added.** E asserts existing enums/capabilities/domain data only. N/A — acceptance only. |
+| 4 | How does each consumer (WebUI, MCP, REST/SSE, adapters) obtain them? | Unchanged: WebUI via existing REST/discovery endpoints; MCP via `server/discover` + list operations; REST/SSE via existing routes; STDIO via thin local-API adapters. E adds no new consumer path. |
+| 5 | Does an existing API/schema/registry/repository already provide the information? | **Yes.** Existing tests/evidence (`M6_E_EVIDENCE.md`, `M6_D_FANOUT_EVIDENCE.md`, `M6_E_LAN_ACCEPTANCE.md`) and shared services provide everything E assembles. No new source. |
+| 6 | Is a new discovery/read API necessary, or is a direct shared-package import sufficient? | **Sufficient.** `server/discover` and existing `resources/read` paths are asserted; no new discovery or read API. |
+| 7 | How does the UI update when new values are registered, without a frontend-list edit? | **No UI change.** E registers no displayable value. N/A — no frontend-list edit. |
+| 8 | Cache invalidation / refresh behavior needed? | **None introduced.** Existing cache hints are asserted; notification remains a change signal with client re-read of `markethub://market/snapshot` and cursor catch-up via `markethub://events/live`. |
+| 9 | Any metadata fields sensitive or unsafe to expose? | **None added.** E asserts redaction (`tests/mcp/activity.test.ts`) and secret exposure (`tests/providers/security.test.ts`); no credentials/tokens in tests, docs or `_meta`. |
+| 10 | Tests proving frontend/backend consistency and no duplicate definition? | `http-integration.test.ts`, `stdio-modern.test.ts`, `legacy-compat.test.ts`, `lan-simulation.test.ts` prove transport consistency; no duplicate definition because assertions reuse existing helpers and no frontend constant is added. |
+| 11 | Shared contract impact — existing enum/schema changed; all consumers updated? | **None.** No enum/schema changed; all consumers unchanged. N/A — acceptance only. |
+| 12 | Provider/runtime registration impact — fixed `UPSTOX`/`FYERS` contract preserved? | **Preserved.** No provider identity or registration change; fixed `UPSTOX`/`FYERS` contract untouched; no provider activation. |
+| 13 | MCP tool/resource/prompt impact — descriptor derived from same registration source? | **No new operation.** Descriptors remain derived from the same `packages/mcp-core` registration source; E asserts the existing inventory over both transports. |
+| 14 | REST/SSE/WebUI consumer impact — which consumers read it, any hardcoding today? | **None.** No consumer reads a new value; no hardcoding introduced or removed. N/A — acceptance only. |
+| 15 | Domain-data discovery impact — bounded/paginated domain API if large/changing? | **No new domain API.** Existing bounded/paginated catalog, feed, snapshot and activity interfaces are asserted (C14), not changed. |
+| 16 | Configuration persistence impact — can MCP on-demand ops avoid silently changing config? | **No config change.** E adds no config write; MCP on-demand operations remain side-effect-free. |
+| 17 | Forward compatibility — new value appears without a frontend/second backend list edit? | **No new value introduced.** N/A — no frontend or second backend list edit; acceptance only. |
+| 18 | Dependency direction — circular import introduced? | **No new dependency, no circular import.** E reuses existing test helpers and the pinned dev-only client; dependency direction unchanged. |
 
 ---
 
@@ -447,10 +533,14 @@ These apply to **all three WPs** and are non-negotiable. Violation is a scope br
 
 ## 8. Testing and evidence standards
 
-### 8.1 Establish baseline before changes
+### 8.1 Baseline procedure (per-WP, chained)
 
-- Re-run and record the full suite at the reviewed HEAD before any WP: expected **1076 pass / 0 fail**, 8833 `expect()` calls, 92 files, exit 0 (verified baseline). If it differs, stop and investigate before proceeding; do not silently adopt a new baseline.
-- Re-verify `git status`, branch and SHAs; confirm the three preserved user-work items are intact.
+- **Original pre-B4 baseline (historical):** **1076 pass / 0 fail**, 8833 `expect()` calls, 92 files, exit 0, independently verified at `2ed4c1e` (local, not CI). Retain this for historical comparison; it is **not** a permanent exact pass-count requirement — adding tests is expected to grow the count.
+- **Immediately before B4:** re-run the full suite on the live checkout and record the **actual** result (commit SHA, counts, exit code). This freshly measured result is B4's baseline. If it differs from 1076/0, investigate and explain the difference before proceeding; do not silently adopt it.
+- **After B4 is accepted:** use B4's **accepted commit and recorded result** as D's baseline.
+- **After D is accepted:** use D's **accepted commit and recorded result** as E's baseline.
+- Each WP is compared **only to the immediately preceding accepted baseline**, while the original 1076/0 figure is preserved for historical comparison. Distinguish **expected pass-count growth** from **new failures**: growth from added tests is normal; any new failure must be named, investigated and fixed, never silently adopted as the new normal.
+- Re-verify `git status`, branch and SHAs at each step; confirm the two preserved user-work items are intact and that `docs/CHATGPT_HANDOFF_CONTEXT.md` remains tracked.
 
 ### 8.2 Focused tests after each WP
 
@@ -464,7 +554,7 @@ bun test
 git diff --check
 ```
 
-- Full-suite acceptance is **no new failures vs the 1076/0 baseline**, not merely "some tests pass." Any new failure must be fixed before exit. Report the exact failure list and compare to the baseline.
+- Full-suite acceptance is **no new failures vs the immediately preceding accepted baseline** (§8.1), not merely "some tests pass" and not "exactly 1076." Any new failure must be fixed before exit. Report the exact failure list and compare to that baseline; also note the count relative to the original 1076/0 historical baseline.
 
 ### 8.3 Evidence reporting requirements
 
@@ -472,15 +562,17 @@ For every command, report:
 - **Exact command** and **exit code**.
 - **Pass/fail counts** (e.g. `1076 pass / 0 fail`, `8833 expect() calls`, `92 files`).
 - **Failure names** (if any) with file and test name.
-- **Baseline comparison** (vs 1076/0; list any new failures).
+- **Baseline comparison** (vs the immediately preceding accepted baseline per §8.1; list any new failures; note count vs the original 1076/0 historical baseline).
 - **Isolation** — whether a failing test passes in isolation (e.g. `bun test <file>`).
-- **Local vs CI** — label results as **local (agent-reported)**, **local (independently verified)**, or **CI**. **Never call local tests CI.** No CI status checks were reported for these commits; do not imply otherwise.
+- **Local vs CI** — keep these labels distinct: **existing test evidence**, **test needing future authorization**, **agent-reported local**, **independently verified local**, **GitHub CI**. **Never call local tests CI.** The 1076/0 figure is a **local baseline**, not CI. No CI status checks were reported for these commits; do not imply otherwise.
 
 ### 8.4 Evidence honesty
 
 - Never claim a test validates a feature that has not been implemented. Never claim an audit is complete without evidence.
-- Distinguish implemented / agent-reported / independently verified / CI (§1.5).
+- **Do not invent missing test results, and do not mark a missing assertion passed merely because this plan now requires it.** Planned assertions in §4.3/§6.7 are requirements, not evidence; their status stays partial until the named assertion exists and is reviewed.
+- Distinguish implemented / agent-reported / independently verified / CI (§1.5 and §8.3).
 - Review against the failure matrix, not just the happy path (protocol §6).
+- **Preserve the official re-verification requirement:** MCP specification `2026-07-28` and TypeScript SDK `2.4.0` must be re-verified against official sources at implementation start (§6.2); if newer stable versions exist, retarget and update `M6_PLAN.md` §3.1 before coding.
 - No live provider calls, credentials, market sessions or external network in any test; use synthetic/injected state and honest empty/unavailable provider states.
 
 ---
@@ -493,7 +585,7 @@ After each WP's independent review is KEEP and its gate passes, update **only** 
 - `docs/M6_B_PLAN.md` — B4 closeout/acceptance record (new section), status line update.
 - `docs/M6_D_E_PLAN.md` — check the applicable §8.1 (D) and/or §8.2 (E) checkboxes; add acceptance records; check §8.3 only when the combined gate passes.
 - `docs/M6_PLAN.md` — status line and phase disposition (B4/D/E accepted) only when true.
-- `docs/PROJECT_STATUS.md` — repository status and verification figures (use 1076/0 baseline and the new measured figures).
+- `docs/PROJECT_STATUS.md` — repository status and verification figures (use the immediately preceding accepted baseline per §8.1 and the new measured figures; retain 1076/0 at `2ed4c1e` as the original historical baseline).
 - `docs/IMPLEMENTATION_ROADMAP.md` — M6 milestone status only when all three WPs are accepted.
 
 ### 9.2 Record in each acceptance record
@@ -610,11 +702,13 @@ No hedging. Passing tests without the independent review gate is **M6 NOT CLOSED
 - `tests/mcp/conformance.test.ts` — 9 named C-assertions (reuse for B4).
 - `tests/mcp/subscriptions.test.ts`, `notification-bridge.test.ts`, `fanout.test.ts` — M6-D tests.
 - `tests/mcp/http-integration.test.ts`, `stdio-modern.test.ts`, `legacy-compat.test.ts`, `lan-simulation.test.ts`, `http-smoke.test.ts` — M6-E tests.
-- `tests/mcp/parity.test.ts` — **does not exist**; required B4 closeout artifact (may wrap/reuse existing named assertions).
-- `docs/M6_E_EVIDENCE.md` — C1–C21 evidence map with strict ownership.
+- `tests/mcp/parity.test.ts` — **does not exist**; required B4 closeout artifact (must exercise real HTTP + STDIO adapters; may reuse existing named assertions but must not be an empty wrapper).
+- `tests/providers/security.test.ts`, `tests/mcp/activity.test.ts`, `tests/mcp/http-integration.test.ts` — the **actual** C20 evidence files; `security.test.ts (under tests/mcp/)` does **not** exist.
+- `tests/mcp/snapshot-page.test.ts`, `tests/mcp/snapshot-page-routes.test.ts` — M6-B3 snapshot pagination evidence for C14.
+- `docs/M6_E_EVIDENCE.md` — C1–C21 evidence map with strict ownership (partial rows documented in §6.7).
 - `docs/M6_D_FANOUT_EVIDENCE.md` — fan-out measurements, `maxSubscriptions=64`, 50 ms budget, slow-consumer limitation.
 - `docs/M6_E_LAN_ACCEPTANCE.md` — user-approved LAN scope change (physical LAN out of scope).
-- `docs/CHATGPT_HANDOFF_CONTEXT.md` — workflow, reviewer identity, baseline evidence, labeling conventions (pre-existing user work; preserve).
+- `docs/CHATGPT_HANDOFF_CONTEXT.md` — workflow, reviewer identity, baseline evidence, labeling conventions (**tracked**, added in `1ddf24b`; preserve, do not overwrite or delete).
 
 ### 13.3 Official sources (re-verify at implementation start)
 - MCP 2026-07-28 spec: `https://modelcontextprotocol.io/specification/2026-07-28`

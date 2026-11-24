@@ -1,6 +1,6 @@
 # M6-B — MCP Capabilities over Shared Services
 
-> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented and published on `develop` at `0d58bbb`**; **M6-B4 implementation not started.** Awaiting separate authorization for the remaining sub-phase. The canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) now governs B4/D/E execution and is audited KEEP — **planning only**; it grants no implementation authorization and does not change B4's not-started status.
+> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented and published on `develop` at `0d58bbb`**; **M6-B4 implementation not started.** Awaiting separate authorization for the remaining sub-phase. The canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) governs B4/D/E execution as a **published planning draft undergoing independent corrections** — **planning only**, not finally approved or implementation-ready; it grants no implementation authorization and does not change B4's not-started status.
 > **Last updated:** 2026-11-20
 > **Depends on:** M6-A (implemented at `7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory, `markethub_health` only) and M6-B1 (catalog search + event-feed seams; final implementation baseline `be9421911ad74766a200ef091fcacdcef8448177`).
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §4.1.2 (McpServices), §4.1.3 (STDIO parity), §5 (inventory), §5.1–§5.3 (catalog search, annotations, capability table), §10 (M6-B), §11–§12 (tests/acceptance). This document adds execution detail; it does not change that design.
@@ -189,7 +189,7 @@ An empty page with `nextCursor: null` means end-of-results; a `snapshot-required
 
 Do not start a sub-phase without its own authorization. M6-B is not complete until all four pass.
 
-> **B4 execution reference:** the canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) (planning only, audited KEEP) governs the B4 work package and the subsequent D/E work packages; each still requires its own separate authorization. No B4 implementation or acceptance is claimed here.
+> **B4 execution reference:** the canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) (published planning draft undergoing independent corrections; planning only, not approved/implementation-ready) governs the B4 work package and the subsequent D/E work packages; each still requires its own separate authorization. No B4 implementation or acceptance is claimed here.
 
 ## 8. Tests
 
