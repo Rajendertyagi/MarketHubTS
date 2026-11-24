@@ -1,6 +1,6 @@
 # Phase 4 — Provider-backed derivative expiry discovery
 
-> **Status:** Planning specification only. This document does not authorize implementation, database changes, commits, pushes, provider activation, or live market-data testing.
+> **Status:** Complete and published. All three work packages (WP4A/WP4B/WP4C) were implemented, independently audited to KEEP with no findings, and published on `develop`. See the close-out record at the end of this document. This document grants no further authorization.
 >
 > **Repository baseline reviewed:** `develop` at Phase 6 documentation close-out commit `cbb4e445901396177a7f02becea16f8a545d0b65` (2026-11-24 review). The close-out commit changes documentation only; the source-level Phase 4 findings described below remain applicable.
 >
@@ -706,4 +706,25 @@ This plan follows `docs/PROJECT_MANAGER_PROTOCOL.md`:
 
 ---
 
-**End of Phase 4 plan.** No implementation or publication permission is granted by this document.
+## 13. Close-out record (2026-11-24)
+
+Phase 4 is **complete and published on `develop`**. All three work packages were implemented by `opencode/hy4-flash-free` and independently audited by `opencode/iceman-free` to KEEP with no outstanding findings, including fix-forward cycles for audit and technical-lead findings.
+
+| WP | Scope | Implementation / fix commits | Audit |
+|---|---|---|---|
+| WP4A | Upstox BOD + FYERS Symbol Master import, single-transaction complete-snapshot reconciliation, shared-field conflicts, daily refresh, source-date honesty, import-report validation, referenced-underlying filtering | `03adab1`, `bcec6ab`, `8785670`, `13826fb` | KEEP (multiple fix cycles) |
+| WP4B | Bounded provider-aware expiry API `GET /api/catalog/derivative-expiries` with honest FRESH/STALE/UNKNOWN freshness | `e99c5f3` | KEEP |
+| WP4C | Snapshot Panel expiry selector with manual fallback, origin labelling, race guard | `9862464`, `13061da` | KEEP |
+| Plan | Canonical specification | `ed967e3`, close-out `85bb8a6` | KEEP |
+
+**Technical-lead fix-forward (closed before acceptance):** complete import reports are validated before reconciliation (invalid/incomplete/empty required segments fail closed with last-known-good retained); existing populated shared derivative fields are preserved when a provider omits them; Upstox underlyings are restricted to those referenced by in-scope options; index-option cross-provider convergence is reported honestly as not achievable (the masters have no shared index identifier) with per-provider resolution tested instead of a fabricated identity.
+
+**Delivered:** a local catalogue from public Upstox/FYERS masters (no credentials, no live calls), a bounded provider-aware expiry API with honest freshness, and a Snapshot Panel selector that keeps manual entry as a clearly-labelled unverified fallback. Provider identity stays fixed `UPSTOX`/`FYERS`; no Automatic option, no FYERS default. No live provider connection, no activation, no Stage G change, no full exchange catalogue claim.
+
+**Verification (local/agent-reported, not CI):** focused suites pass; full suite 1073 pass / 1 fail — the single failure is a pre-existing Windows `EBUSY` temp-dir cleanup flake in an untouched supervisor test (passes in isolation); `bun run typecheck`, `bun run build` and `git diff --check` clean. GitHub showed no status checks for these commits.
+
+**Not delivered / separate gates:** live provider verification (Stage G), provider activation, M5 Phase 4B, M6-D/E, M6-B4, Phase 7 cross-system acceptance, and full exchange catalogue coverage.
+
+---
+
+**End of Phase 4 plan.** This document is now an implementation record as well as the original specification. It grants no implementation or publication permission.
