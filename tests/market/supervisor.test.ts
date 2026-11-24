@@ -12,7 +12,7 @@ import {
   DriverLockedError, LockedUpstoxDriver, StreamSupervisor,
   type DriverCallbacks, type DriverSubscription, type ReconnectTimerScheduler, type StreamingDriver
 } from "../../apps/api/src/stream-supervisor";
-import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
+import { closeDatabaseHandle, removeTempDirAsync } from "../helpers/fs-cleanup";
 
 const A = "v1|NSE|INDEX|INDEX|CODE:NIFTY50";
 const B = "v1|NSE|INDEX|INDEX|CODE:NIFTYBANK";
@@ -210,10 +210,10 @@ async function harnessWithCatalog(
       }));
     });
   };
-  const cleanup = () => {
+  const cleanup = async () => {
     supervisor.stop();
     closeDatabaseHandle(handle);
-    removeTempDir(dir);
+    await removeTempDirAsync(dir);
   };
   return { subscriptions, service, supervisor, get driver() { return instances[0]!; }, instances, seed, cleanup };
 }
@@ -278,10 +278,10 @@ async function harness(
     });
   };
 
-  const cleanup = () => {
+  const cleanup = async () => {
     supervisor.stop();
     closeDatabaseHandle(handle);
-    removeTempDir(dir);
+    await removeTempDirAsync(dir);
   };
   return { catalog, subscriptions, service, supervisor, get driver() { return instances[0]!; }, instances, seed, cleanup };
 }
@@ -307,7 +307,7 @@ describe("StreamSupervisor", () => {
     // Desired selections are tracked even when their mapping is unavailable.
     expect(h.service.getItem(A)).toBeDefined();
     expect(h.service.getItem(B)).toBeDefined();
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("empty desired set stops the stream and untracks instruments", async () => {
@@ -321,7 +321,7 @@ describe("StreamSupervisor", () => {
     expect((h.driver as FakeDriver).stopCount).toBe(1);
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
     expect(h.service.getItem(A)).toBeUndefined();
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("reconciles subscription changes through the driver", async () => {
@@ -336,7 +336,7 @@ describe("StreamSupervisor", () => {
     expect(driver.updates.length).toBe(1);
     expect(driver.updates[0]!.map((s) => s.canonicalId).sort()).toEqual([A, B]);
     expect(h.supervisor.getView().generation).toBe(2);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("propagates runtime connection state into the canonical service", async () => {
@@ -346,7 +346,7 @@ describe("StreamSupervisor", () => {
     await h.supervisor.start();
     (h.driver as FakeDriver).emitState("STREAMING");
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("STREAMING");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("rejects unknown and duplicate canonical ids atomically", async () => {
@@ -360,7 +360,7 @@ describe("StreamSupervisor", () => {
     } catch { rejected++; }
     expect(rejected).toBe(2);
     expect(h.supervisor.getView().selections).toEqual([]);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("late driver callbacks after stop are ignored", async () => {
@@ -375,7 +375,7 @@ describe("StreamSupervisor", () => {
     callbacks.onObservation(observation(A, 100));
     callbacks.onConnectionState("STREAMING");
     expect(h.service.revision).toBe(revision);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("bounded retry is exercised with a fresh failing driver per attempt", async () => {
@@ -397,7 +397,7 @@ describe("StreamSupervisor", () => {
       expect((instance as FakeDriver).stopCount).toBe(1);
     }
     expect(h.instances[0]).not.toBe(h.instances[1]);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("a bad observation cannot corrupt shared state", async () => {
@@ -409,7 +409,7 @@ describe("StreamSupervisor", () => {
     // Observation for an untracked instrument is rejected by the service but isolated.
     expect(() => driver.emitObservation(observation("untracked", 1))).not.toThrow();
     expect(h.service.getItem(A)).toBeDefined();
-    h.cleanup();
+    await h.cleanup();
   });
 });
 
@@ -440,7 +440,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     driver.callbacks!.onObservation(observation(A, 100));
     driver.callbacks!.onConnectionState("STREAMING");
     expect(h.service.revision).toBe(revisionAtStop);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("stop then rejection of a pending start performs final cleanup", async () => {
@@ -461,7 +461,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     expect(driver.stopCount).toBe(1); // terminal retirement; late rejection is inert
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("a current start failure cleans up before retrying with a fresh instance", async () => {
@@ -482,7 +482,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
       expect((instance as AllocatingFailDriver).stopCount).toBe(1);
     }
     expect(h.instances[0]).not.toBe(h.instances[1]);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("a pending update rejection after stop leaves NOT_STARTED with no retry", async () => {
@@ -512,7 +512,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     expect(h.service.getConnectionStatus("UPSTOX")?.state).toBe("NOT_STARTED");
     expect(driver.starts.length).toBe(1); // no retry scheduled
     expect(h.service.revision).toBe(revisionAtStop); // no late canonical mutation
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("a stale generation cannot mutate tracking or driver state after a concurrent commit", async () => {
@@ -565,7 +565,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
 
     supervisor.stop();
     closeDatabaseHandle(handle);
-    removeTempDir(dir);
+    await removeTempDirAsync(dir);
   });
 
   test("post-commit reconciliation failure is captured in runtime status, not thrown", async () => {
@@ -605,7 +605,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
 
     supervisor.stop();
     closeDatabaseHandle(handle);
-    removeTempDir(dir);
+    await removeTempDirAsync(dir);
   });
 
   test("desired generation advances while applied generation stays on reconciliation failure", async () => {
@@ -627,7 +627,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     expect(view.runtime.generation).toBe(1); // applied unchanged
     expect(view.runtime.lastError).toContain("mapping resolution failed");
     expect(view.selections).toEqual([{ canonicalId: B, enabled: true }]); // not hidden
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("applied generation advances after a successful retry of the same generation", async () => {
@@ -661,7 +661,7 @@ describe("review fixes — supervisor lifecycle and generation", () => {
     expect(view.generation).toBe(2);
     expect(view.runtime.generation).toBe(2); // advanced after successful retry
     expect(view.runtime.lastError).toBeNull();
-    h.cleanup();
+    await h.cleanup();
   });
 });
 
@@ -704,7 +704,7 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("ERROR", "late error");
     expect(h.service.revision).toBe(revision);
     expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("ERROR retires the driver and retries with a fresh start", async () => {
@@ -732,7 +732,7 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("DISCONNECTED");
     expect(h.service.revision).toBe(revision);
     expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("empty desired set retires the driver and invalidates its callbacks", async () => {
@@ -753,7 +753,7 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("STREAMING");
     expect(h.service.revision).toBe(revision);
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("pending update resolving after stop cleans up again without advancing applied generation", async () => {
@@ -792,7 +792,7 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("STREAMING");
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("pending update rejecting after stop cleans up again with no retry or state overwrite", async () => {
@@ -832,7 +832,7 @@ describe("final supervisor lifecycle corrections", () => {
     oldCallbacks.onConnectionState("ERROR", "late error");
     expect(h.service.revision).toBe(revisionAtStop);
     expect(h.supervisor.getView().runtime.connectionState).toBe("NOT_STARTED");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("stale reconnect timer is cancelled so a newer driver epoch can retry", async () => {
@@ -890,7 +890,7 @@ describe("final supervisor lifecycle corrections", () => {
     callbacksB.onConnectionState("DISCONNECTED");
     expect(h.service.revision).toBe(revision);
     expect(h.supervisor.getView().runtime.connectionState).toBe(stateBefore);
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("confirmed STREAMING cancels a stale reconnect timer from a retired instance", async () => {
@@ -926,7 +926,7 @@ describe("final supervisor lifecycle corrections", () => {
     expect(h.instances.reduce((n, i) => n + (i as FakeDriver).starts.length, 0)).toBe(startsBefore);
     expect(h.instances.reduce((n, i) => n + (i as FakeDriver).updates.length, 0)).toBe(updatesBefore);
     expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
-    h.cleanup();
+    await h.cleanup();
   });
 
   test("a stale generation timer cannot suppress a newer generation factory-failure retry", async () => {
@@ -986,7 +986,7 @@ describe("final supervisor lifecycle corrections", () => {
       expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
       expect(h.supervisor.getView().generation).toBe(2);
       expect(h.supervisor.getView().runtime.generation).toBe(2);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 });
 
@@ -1021,6 +1021,6 @@ describe("locked production driver boundary", () => {
     // No retry is scheduled: state stays ERROR after a wait.
     await Bun.sleep(20);
     expect(h.supervisor.getView().runtime.connectionState).toBe("ERROR");
-    h.cleanup();
+    await h.cleanup();
   });
 });

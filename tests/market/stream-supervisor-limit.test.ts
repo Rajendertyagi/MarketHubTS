@@ -19,7 +19,7 @@ import {
   type ReconnectTimerScheduler,
   type StreamingDriver
 } from "../../apps/api/src/stream-supervisor";
-import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
+import { closeDatabaseHandle, removeTempDirAsync } from "../helpers/fs-cleanup";
 
 const A = "v1|NSE|INDEX|INDEX|CODE:NIFTY50";
 const B = "v1|NSE|INDEX|INDEX|CODE:NIFTYBANK";
@@ -152,7 +152,7 @@ interface H {
   seed(canonicalId: string, nativeIdentifier: string): Promise<void>;
   /** Commit desired state to the repo and apply that exact generation to the runtime. */
   commitAndApply(selections: Array<{ canonicalId: string; enabled: boolean }>): Promise<number>;
-  cleanup(): void;
+  cleanup(): Promise<void>;
 }
 
 async function harness(initialFailMode: "start" | "update" | "none" = "start", ordinary = false): Promise<H> {
@@ -196,7 +196,7 @@ async function harness(initialFailMode: "start" | "update" | "none" = "start", o
     await supervisor.applyDesiredState(selections, gen);
     return gen;
   };
-  const cleanup = () => { supervisor.stop(); closeDatabaseHandle(handle); removeTempDir(dir); };
+  const cleanup = async () => { supervisor.stop(); closeDatabaseHandle(handle); await removeTempDirAsync(dir); };
   return { subscriptions, supervisor, instances, timers, driverConfig, seed, commitAndApply, cleanup };
 }
 
@@ -213,7 +213,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.capabilities!.find((c) => c.component === "quote")?.status).toBe("LIMITED");
       expect(view.runtime.capabilities!.find((c) => c.component === "depth")?.status).toBe("LIMITED");
       expect(view.runtime.capabilities!.find((c) => c.component === "derivatives")?.status).toBe("UNSUPPORTED");
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("no automatic retry is scheduled for the limited generation", async () => {
@@ -223,7 +223,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       await h.commitAndApply([{ canonicalId: A, enabled: true }]);
       expect(h.timers.active.length).toBe(0);
       expect(h.instances.length).toBe(1); // no fresh driver acquired
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("desired state stays committed; applied generation does not advance", async () => {
@@ -235,7 +235,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.generation).toBe(1);
       expect(view.selections).toEqual([{ canonicalId: A, enabled: true }]);
       expect(view.runtime.generation).toBe(0); // failed generation not applied
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("a new desired generation clears stale limitation and permits a fresh attempt", async () => {
@@ -253,7 +253,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.capabilities).toBeUndefined(); // stale limitation cleared
       expect(view.runtime.generation).toBe(2);
       expect(h.instances.length).toBe(2); // fresh driver for new generation
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("a limit on an older connecting driver does not block a newer committed generation", async () => {
@@ -288,7 +288,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.capabilities).toBeUndefined(); // no stale limitation
       expect(view.runtime.generation).toBe(2);
       expect(h.instances.length).toBe(2); // gen2 got its own fresh driver
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("stale-generation terminal failure schedules no retry that can overlap the newer start", async () => {
@@ -332,7 +332,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.generation).toBe(2);
       expect(view.runtime.capabilities).toBeUndefined();
       expect(h.instances.length).toBe(2);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("a terminal failure landing between enqueue and run blocks the queued same-generation run", async () => {
@@ -359,7 +359,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(h.instances.length).toBe(1); // no retry driver for the limited generation
       expect(h.supervisor.getView().runtime.connectionState).toBe("ERROR");
       expect(h.supervisor.getView().runtime.capabilities).toBeDefined();
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("repeated reconciliation of the same limited generation is blocked", async () => {
@@ -372,7 +372,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       // blocked without acquiring a fresh driver.
       await h.supervisor.applyDesiredState([{ canonicalId: A, enabled: true }], gen);
       expect(h.instances.length).toBe(countAfterFirst); // no new attempt
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("ordinary recoverable error still schedules a reconnect", async () => {
@@ -384,7 +384,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.connectionState).toBe("ERROR");
       expect(view.runtime.capabilities).toBeUndefined(); // no structured limitation
       expect(h.timers.active.length).toBe(1); // ordinary error retries
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("limit failure during subscription update is handled consistently", async () => {
@@ -404,7 +404,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(view.runtime.capabilities!.find((c) => c.component === "quote")?.status).toBe("LIMITED");
       expect(view.runtime.generation).toBe(1); // gen 2 not applied
       expect(h.timers.active.length).toBe(0); // no retry
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("async terminal notification and promise rejection cause exactly one retirement", async () => {
@@ -417,7 +417,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       expect(d.callOrder[0]).toBe("terminal"); // before connection-error
       expect(d.stopCount).toBe(1); // retired once despite both paths
       expect(h.timers.active.length).toBe(0);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("capability results survive driver retirement", async () => {
@@ -427,7 +427,7 @@ describe("Stage C Finding 3 — typed LIMITED terminal failure", () => {
       await h.commitAndApply([{ canonicalId: A, enabled: true }]);
       expect(h.instances[0]!.stopCount).toBe(1);
       expect(h.supervisor.getView().runtime.capabilities).toBeDefined();
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 });
 
@@ -462,7 +462,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       // enqueue a duplicate that would update the recovered driver.
       await Bun.sleep(0); // let any duplicate queued reconcile run
       expect(h.instances[1]!.updates).toHaveLength(0);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("B: terminal callback after successful update belongs to gen2, not gen3", async () => {
@@ -494,7 +494,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       expect(view.runtime.generation).toBe(3);
       expect(view.runtime.capabilities).toBeUndefined();
       expect(h.instances.length).toBe(2);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("C: stale non-operation disconnect schedules no retry for gen2", async () => {
@@ -519,7 +519,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       // update the recovered gen2 driver.
       await Bun.sleep(0); // let any duplicate queued reconcile run
       expect(h.instances[1]!.updates).toHaveLength(0);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("D: stale retry timer cannot enqueue, create a driver, or clear a newer timer", async () => {
@@ -557,7 +557,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       // extra updateSubscriptions on the recovered driver.
       await Bun.sleep(0); // let any duplicate queued reconcile run
       expect(h.instances[1]!.updates).toHaveLength(0);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("E: stale timer cannot affect a newer generation's own retry", async () => {
@@ -600,7 +600,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       for (let i = 0; i < 100 && h.supervisor.getView().runtime.connectionState !== "STREAMING"; i++) await Bun.sleep(1);
       expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
       expect(h.supervisor.getView().runtime.generation).toBe(2);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
   });
 
   test("F: current-generation retries remain bounded and LIMITED never retries", async () => {
@@ -618,7 +618,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       for (let i = 0; i < 100 && h.supervisor.getView().runtime.connectionState !== "STREAMING"; i++) await Bun.sleep(1);
       expect(h.supervisor.getView().runtime.connectionState).toBe("STREAMING");
       expect(h.instances.length).toBe(2);
-    } finally { h.cleanup(); }
+    } finally { await h.cleanup(); }
 
     // Current-generation LIMITED failure schedules no retry.
     const limited = await harness();
@@ -627,7 +627,7 @@ describe("Stage C — generation ownership and retry timer lifecycle", () => {
       await limited.commitAndApply([{ canonicalId: A, enabled: true }]);
       expect(limited.timers.active.length).toBe(0);
       expect(limited.supervisor.getView().runtime.capabilities).toBeDefined();
-    } finally { limited.cleanup(); }
+    } finally { await limited.cleanup(); }
   });
 });
 
