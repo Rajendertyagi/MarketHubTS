@@ -1,7 +1,7 @@
 # M6 — MCP Market-Data and Event Interface Plan
 
 > **Status:** Research complete; governing plan (the remaining B4/D/E work: **Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized**). **M6-A is implemented and published** (`7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, shared factory, `markethub_health`). **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`: catalog-search seam, event-feed read seam, their HTTP endpoints and MCP service adapters). **M6-B2 is implemented and published** (`0e0ec6d`: nine tools registered through the shared factory over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented and published on `develop` at `0d58bbb`** (resources/prompts/cache hints, snapshot pagination); **M6-C is accepted and closed on `develop` at final reviewed commit `32b034a`** (durable activity history and WebUI inspection; acceptance record in [`M6_C_PLAN.md`](M6_C_PLAN.md) §0); **M6-B4 implementation is complete** (conformance/parity: `tests/mcp/parity.test.ts` plus named C3/C6/C18/C19/C21 assertions in `tests/mcp/conformance.test.ts`; source-level independent review verdict **KEEP**), but **B4 is not formally accepted** (closeout is a separate product-owner gate; separately owned). M6-D/E source and tests are present but neither phase is formally accepted (independent review gate in [M6_D_E_PLAN.md](M6_D_E_PLAN.md) §8.1–§8.3). Stage G separately gated and locked. The canonical completion plan for the remaining B4/D/E work is [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) — **Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized** (planning only, not finally approved or implementation-ready); it grants no implementation authorization and does not mark any phase accepted. M6 remains not complete. This document remains the governing plan; it does not claim M6 complete.
-> **Last updated:** 2026-11-21 (M6-C acceptance recorded; M6-D/E plans revised)
+> **Last updated:** 2026-11-25 (documentation reconciliation: independent KEEP verdict for Design A recorded, "D slow-consumer residual risk" decision closed as MITIGATED, resource-accounting caveat added — see §15; M6-C acceptance recorded 2026-11-21)
 > **Related:** [MCP_INTERFACE.md](MCP_INTERFACE.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) (M6), [PROJECT_STATUS.md](PROJECT_STATUS.md), [STAGE_5_PLAN.md](STAGE_5_PLAN.md) §15, [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [REFERENCES.md](REFERENCES.md) §8
 
 ## 1. Objective and scope
@@ -563,3 +563,27 @@ New `tests/mcp/` suite (mirrors source areas). **Three distinct test classes are
 - Watchlist/alert/scanner workflow services (M7) or MCP mutation of operational config.
 - Microservices, Redis/brokers, event stores, audit/telemetry platforms, or a second frontend/API architecture. (One small additive `mcp_activity` migration is proposed in §9.1/§13 as the minimal durable-history mechanism; it is not implemented here.)
 - Inventing standard MCP notification types or duplicating market-data calculations in MCP.
+
+## 15. Documentation reconciliation and decision close-out (2026-11-25)
+
+> **Scope:** documentation-only reconciliation of the M6 plan set (`M6_PLAN.md`, `M6_D_E_PLAN.md`, `M6_E_EVIDENCE.md`, `M6_D_FANOUT_EVIDENCE.md`). It records an independent review verdict and a product-owner decision; it does **not** accept any phase, pass any gate, unlock Phase 3, change code or limits, or authorize live provider connection. No application source, tests, manifests, lockfiles, DB or dependencies were changed by this reconciliation. Historical evidence in the linked documents is preserved as recorded; the notes below clarify status and accounting without claiming the original experiments proved more than they did.
+
+### 15.1 Independent technical-lead review — verdict KEEP
+
+- **Verdict:** KEEP Design A; no blocking source defect found.
+- **Reviewed commit range:** `9513e6e..8291738` — `9513e6e` (Design A implementation: standard Web Streams downstream, application-owned bounded FIFO queue, synchronous `pull()` demand signal, `controller.enqueue()` delivery) and `8291738` (enqueue-failure fix: distinct cancellation reason, idempotent cleanup).
+- **Review type:** source and documentation review only. The technical lead did **not** execute the test suite; this review is not a test run.
+- **Confirmed by review:** original SSE stall fixed (synchronous pull + direct enqueue); bounded queue preserved (cap checks before insertion); healthy streaming (real listener, pinned client, 200 notifications); slow clients (raw TCP saturation + overflow); disconnection (idle/active/backpressure); SDK cleanup (listener count returns to baseline); enqueue failure fixed (distinct cancellation reason, idempotent cleanup); SSE timeout implemented (per-request override, global unchanged).
+- **Evidence labeling:** the full suite (1113 pass / 0 fail), typecheck and build results are **agent-reported local evidence, NOT CI**. GitHub reports **zero status checks / workflow runs** for `8291738`; no CI pass is claimed.
+
+### 15.2 Product-owner decision closed — "D slow-consumer residual risk"
+
+- **Status:** CLOSED — MITIGATED (2026-11-25).
+- **Exact disposition:** *"Mitigated by the bounded SSE wrapper, with the documented 16 KiB / 96-frame per-subscription overflow policy."*
+- **Boundary:** closing this one named decision is **not** phase acceptance. M6-D and M6-E remain not accepted; the §8.1/§8.2/§8.3 checklists in `M6_D_E_PLAN.md` remain unchecked; §8.3 has not passed; Phase 3 stays locked. M6-B4 remains separately owned and not accepted. Stage G, M5 Phase 4B and M7 are untouched; no live provider verification has been performed; production drivers remain locked.
+
+### 15.3 Resource-accounting clarification and caveat
+
+- The **~1 MiB** figure is the **application-owned queue budget** (16 KiB × 64 subscriptions), **not** the complete process-memory ceiling. Transport buffers and other memory regions are additional (see `M6_D_FANOUT_EVIDENCE.md` §8.3).
+- **Caveat (resource hardening):** MCP SDK 2.4.0's `resourceSubscriptions` schema is an **unrestricted string array**; `honoredSubset()` copies requested URIs into the acknowledgement. MarketHub permits request bodies up to **4 MiB**. An unusually large subscription request can therefore produce an acknowledgement frame **larger than 16 KiB**; the bounded wrapper rejects it, but only **after** `reader.read()` has already received the frame. This is **not** a bounded-FIFO defect — it means the ~1 MiB figure is the application-owned queue budget, not the absolute maximum transient process memory.
+- **Follow-up (recorded, not implemented):** consider restricting subscription-filter size as a resource-hardening item. No code or limits were changed by this reconciliation.

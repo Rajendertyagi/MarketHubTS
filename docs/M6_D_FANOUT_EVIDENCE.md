@@ -1,7 +1,7 @@
 # M6-D — Fan-out measurement evidence
 
 > **Status:** Recorded measurements supporting the `maxSubscriptions` value and latency budget in `apps/api/src/index.ts`. Not a new requirement; evidence for the M6-D acceptance gate (§8.1 of [`M6_D_E_PLAN.md`](M6_D_E_PLAN.md)).
-> **Last updated:** 2026-11-24 (§7 slow-consumer mitigation evidence added)
+> **Last updated:** 2026-11-25 (§9 reconciliation: independent KEEP verdict, decision closed as MITIGATED, resource-accounting caveat; §7 slow-consumer mitigation evidence added 2026-11-24)
 > **Source:** `tests/mcp/fanout.test.ts` — synthetic in-process load over the real SDK handler, pinned `2026-07-28`, no providers or external network.
 
 ## 1. Method
@@ -87,14 +87,14 @@ The stream is closed gracefully before draining so the queue can be counted. The
 
 - **Decision:** "D slow-consumer residual risk"
 - **Owner:** product owner
-- **Status:** **OPEN — product-owner decision required before M6-D acceptance.**
-- **Risk (not mitigated):** the SDK imposes no per-stream frame or byte limit; `maxSubscriptions = 64` bounds stream count only, and the 50 ms budget bounds publish latency only. The slow-consumer evidence in §4 measures only **M = 20 updates** (22 queued frames / 4,126 bytes on one unread stream) and does **not** establish a safe upper bound under sustained load. No custom queue, byte cap or backpressure subsystem was added.
-- **Disposition required:** the product owner must either explicitly accept this residual risk or authorize a separately scoped bounded follow-up. An OPEN decision blocks M6-D acceptance even if every other §8.1 item passes. Do not record the risk as mitigated; do not change `maxSubscriptions = 64` or the 50 ms budget on account of this item.
-- **2026-11-24 update:** the product owner authorized the separately scoped bounded follow-up in `docs/M6_D_SLOW_CONSUMER_MITIGATION_PLAN.md`. The mitigation is implemented and locally verified; see §7. The decision stays **OPEN** until the independent review gate passes (§7.6).
+- **Status:** **CLOSED — MITIGATED (2026-11-25).** Product-owner disposition: *"Mitigated by the bounded SSE wrapper, with the documented 16 KiB / 96-frame per-subscription overflow policy."* Closing this one named decision does not accept M6-D or pass §8.3.
+- **Risk (as originally recorded; historical):** the SDK imposes no per-stream frame or byte limit; `maxSubscriptions = 64` bounds stream count only, and the 50 ms budget bounds publish latency only. The slow-consumer evidence in §4 measures only **M = 20 updates** (22 queued frames / 4,126 bytes on one unread stream) and does **not** establish a safe upper bound under sustained load. No custom queue, byte cap or backpressure subsystem was added. This is the original evidence record and is not rewritten by the 2026-11-25 close-out (§9).
+- **Disposition (recorded 2026-11-25):** the product owner closed this decision as **CLOSED — MITIGATED** with the exact disposition *"Mitigated by the bounded SSE wrapper, with the documented 16 KiB / 96-frame per-subscription overflow policy."* The separately scoped bounded follow-up was authorized 2026-11-24 and implemented; see §7–§8 and the §9 reconciliation note. Do not change `maxSubscriptions = 64` or the 50 ms budget on account of this item.
+- **Historical (2026-11-24) update:** the product owner authorized the separately scoped bounded follow-up in `docs/M6_D_SLOW_CONSUMER_MITIGATION_PLAN.md`. The mitigation is implemented and locally verified; see §7. At that time the decision stayed OPEN pending the independent review gate (§7.6); it was subsequently closed as MITIGATED on 2026-11-25 (see §9).
 
 ## 7. Slow-consumer mitigation — sustained-load evidence and derived bound (2026-11-24)
 
-> **Status:** Implementation and local verification complete for the separately tracked M6-D slow-consumer mitigation follow-up. This section records the measurement-derived bound, the overflow contract and the verification evidence. It does **not** by itself close the §6 decision or accept M6-D.
+> **Status:** Implementation and local verification complete for the separately tracked M6-D slow-consumer mitigation follow-up. This section records the measurement-derived bound, the overflow contract and the verification evidence. The §6 decision was closed separately by the product owner on 2026-11-25 (see §9); this evidence alone does not accept M6-D.
 
 ### 7.1 Method
 
@@ -114,7 +114,7 @@ With the cap effectively disabled, the unread stream grows linearly (~184 bytes/
 
 - **Healthy burst envelope (measured):** 6 frames / 1,152 bytes high-water under sustained paced load.
 - **Selected caps:** `MCP_SSE_MAX_BUFFERED_FRAMES = 96` (16× the measured 6-frame envelope) and `MCP_SSE_MAX_BUFFERED_BYTES = 16 KiB = 16,384` (~14.2× the measured 1,152-byte envelope). Both are small integer multiples of the observed envelope, rounded to a clear value, comfortably above normal bursts so healthy clients are not torn down.
-- **Worst-case memory ceiling:** 16 KiB/stream × `MCP_MAX_SUBSCRIPTIONS = 64` = **1 MiB** for all listen streams combined — an explicit, acceptable ceiling for a single local owner.
+- **Worst-case memory ceiling:** 16 KiB/stream × `MCP_MAX_SUBSCRIPTIONS = 64` = **1 MiB** for all listen streams combined — an explicit, acceptable ceiling for a single local owner. *(Clarified 2026-11-25: this figure is the application-owned queue budget, not the complete process-memory ceiling; see §9.)*
 - **Orthogonal constants:** `MCP_MAX_SUBSCRIPTIONS = 64` and `FANOUT_LATENCY_BUDGET_MS = 50` are unchanged. 64 bounds stream count, 50 ms bounds publish latency, the new caps bound per-stream queued frames/bytes.
 - **Cap check:** the wrapper checks the cap *before* appending each upstream chunk, so the application-owned buffer never exceeds either cap (T1 asserts high-water ≤ cap).
 
@@ -133,11 +133,13 @@ On overflow the wrapper calls `reader.cancel(SSE_OVERFLOW_REASON)` on the upstre
 
 ### 7.6 Decision disposition
 
-The named decision **"D slow-consumer residual risk"** (§6) remains **OPEN** pending the independent review gate (plan §7.8 / §10). The mitigation is implemented and all local verification gates pass; closure as **"CLOSED — mitigated by bounded SSE wrapper"** requires the `opencode/iceman-free` KEEP audit, which is outside this implementation session. M6-D acceptance and Phase 3 remain gated.
+**Historical (2026-11-24):** the named decision **"D slow-consumer residual risk"** (§6) remained **OPEN** pending the independent review gate (plan §7.8 / §10). The mitigation was implemented and all local verification gates passed; closure as "CLOSED — mitigated by bounded SSE wrapper" required the KEEP audit, which was outside that implementation session.
+
+**Current (2026-11-25):** the product owner closed the decision as **CLOSED — MITIGATED** with the disposition *"Mitigated by the bounded SSE wrapper, with the documented 16 KiB / 96-frame per-subscription overflow policy."* The independent KEEP verdict is recorded in §9. Closing this one named decision does **not** accept M6-D/M6-E, pass §8.3, or unlock Phase 3 — all remain gated.
 
 ## 8. Design A wrapper replacement — real-listener verification and memory accounting (2026-11-25)
 
-> **Status:** The M6-E approved Design A (standard Web Streams + application-owned bounded FIFO queue + synchronous `pull()` demand signal + `controller.enqueue()` delivery) replaced the defective pending-promise/waiter wrapper. This section records the real-listener verification and the explicit memory accounting required by the architectural review. It does **not** change the caps, the overflow contract, the §6 decision, or acceptance status.
+> **Status:** The M6-E approved Design A (standard Web Streams + application-owned bounded FIFO queue + synchronous `pull()` demand signal + `controller.enqueue()` delivery) replaced the defective pending-promise/waiter wrapper. This section records the real-listener verification and the explicit memory accounting required by the architectural review. It does **not** change the caps, the overflow contract, or acceptance status; the §6 decision was closed separately by the product owner on 2026-11-25 (see §9).
 
 ### 8.1 What changed and what did not
 
@@ -170,4 +172,28 @@ The architectural review required the four memory regions to be accounted separa
 3. **One in-flight chunk** — the `Uint8Array` currently held by the drain loop between `reader.read()` resolution and queue append/enqueue. Bounded by the largest upstream frame (well under the cap in practice; an oversized single frame is rejected as overflow before append).
 4. **Bun transport buffer** — bytes already handed to Bun's response-body sink but not yet written to the socket. This is **outside** the application queue and is not bounded by the 16 KiB / 96-frame caps. Measured: a paused raw TCP client received ~236 bytes after headers before backpressure; a `fetch` client left unread buffered ~2,525 frames (~450 KiB) before EOF. This is inherent to Bun's sink and matches the existing contract (E2 already tolerated eagerly-pulled frames).
 
-**Aggregate application-queue ceiling:** 16 KiB × `MCP_MAX_SUBSCRIPTIONS` (64) ≈ **1 MiB** for all listen streams combined. Transport buffers (regions 2–4) are additional and are **not** part of that figure. Heap deltas measured in the saturated and multi-client tests were ~0 MB, consistent with the bounded application queue.
+**Aggregate application-queue ceiling:** 16 KiB × `MCP_MAX_SUBSCRIPTIONS` (64) ≈ **1 MiB** for all listen streams combined. Transport buffers (regions 2–4) are additional and are **not** part of that figure. Heap deltas measured in the saturated and multi-client tests were ~0 MB, consistent with the bounded application queue. *(Clarified 2026-11-25: this ~1 MiB is the application-owned queue budget, not the complete process-memory ceiling; see §9 for the large-acknowledgement caveat.)*
+
+## 9. Reconciliation and decision close-out (2026-11-25)
+
+> **Scope:** documentation-only reconciliation. It records an independent review verdict and a product-owner decision; it does **not** accept any phase, pass any gate, unlock Phase 3, change code or limits, or authorize live provider connection. The §1–§8 measurements are preserved as originally recorded; the notes below clarify status and accounting without claiming the original experiments proved more than they did.
+
+### 9.1 Independent technical-lead review — verdict KEEP
+
+- **Verdict:** KEEP Design A; no blocking source defect found.
+- **Reviewed commit range:** `9513e6e..8291738` — `9513e6e` (Design A implementation: standard Web Streams downstream, application-owned bounded FIFO queue, synchronous `pull()` demand signal, `controller.enqueue()` delivery) and `8291738` (enqueue-failure fix: distinct cancellation reason, idempotent cleanup).
+- **Review type:** source and documentation review only. The technical lead did **not** execute the test suite; this review is not a test run.
+- **Confirmed by review:** original SSE stall fixed (synchronous pull + direct enqueue); bounded queue preserved (cap checks before insertion); healthy streaming (real listener, pinned client, 200 notifications); slow clients (raw TCP saturation + overflow); disconnection (idle/active/backpressure); SDK cleanup (listener count returns to baseline); enqueue failure fixed (distinct cancellation reason, idempotent cleanup); SSE timeout implemented (per-request override, global unchanged).
+- **Evidence labeling:** the full suite (1113 pass / 0 fail), typecheck and build results are **agent-reported local evidence, NOT CI**. GitHub reports **zero status checks / workflow runs** for `8291738`; no CI pass is claimed.
+
+### 9.2 Product-owner decision closed — "D slow-consumer residual risk"
+
+- **Status:** CLOSED — MITIGATED (2026-11-25).
+- **Exact disposition:** *"Mitigated by the bounded SSE wrapper, with the documented 16 KiB / 96-frame per-subscription overflow policy."*
+- **Boundary:** closing this one named decision is **not** phase acceptance. M6-D and M6-E remain not accepted; §8.1/§8.2/§8.3 checklists remain unchecked; §8.3 has not passed; Phase 3 stays locked. M6-B4 remains separately owned and not accepted. Stage G, M5 Phase 4B and M7 are untouched; no live provider verification has been performed; production drivers remain locked.
+
+### 9.3 Resource-accounting clarification and caveat
+
+- The **~1 MiB** figure (§7.3, §8.3) is the **application-owned queue budget** (16 KiB × 64 subscriptions), **not** the complete process-memory ceiling. Transport buffers and other memory regions are additional.
+- **Caveat (resource hardening):** MCP SDK 2.4.0's `resourceSubscriptions` schema is an **unrestricted string array**; `honoredSubset()` copies requested URIs into the acknowledgement. MarketHub permits request bodies up to **4 MiB**. An unusually large subscription request can therefore produce an acknowledgement frame **larger than 16 KiB**; the bounded wrapper rejects it, but only **after** `reader.read()` has already received the frame. This is **not** a bounded-FIFO defect — it means the ~1 MiB figure is the application-owned queue budget, not the absolute maximum transient process memory.
+- **Follow-up (recorded, not implemented):** consider restricting subscription-filter size as a resource-hardening item. No code or limits were changed by this reconciliation.
