@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { istDateString } from "../../packages/contracts/src/index";
-import type { CatalogRepository, CatalogSyncRunRecord, CatalogSyncService, MasterFetch } from "../../packages/market-core/src/index";
-import { CatalogMasterRefresh } from "../../packages/market-core/src/index";
+import { openDatabase, SqliteCatalogRepository } from "../../packages/database/src/index";
+import type { CatalogRepository, CatalogSyncRunRecord, MasterFetch } from "../../packages/market-core/src/index";
+import { CatalogMasterRefresh, CatalogSyncService, buildUpstoxImport, buildFyersImport } from "../../packages/market-core/src/index";
+import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 import { fyersFiles, upstoxRows } from "../fixtures/provider-masters";
 
 const CLOCK = new Date("2026-11-24T10:00:00.000Z"); // IST date 2026-11-24
@@ -73,7 +78,9 @@ function makeFetch(overrides: { upstox?: () => Promise<Response>; fail?: boolean
     if (overrides.upstox && url.includes("upstox")) return overrides.upstox();
     if (url.includes("upstox")) return Response.json(upstoxRows);
     if (url.includes("NSE_FO")) return Response.json(fyersFiles.NSE_FO);
+    if (url.includes("BSE_FO")) return Response.json(fyersFiles.BSE_FO);
     if (url.includes("NSE_CM")) return Response.json(fyersFiles.NSE_CM);
+    if (url.includes("BSE_CM")) return Response.json(fyersFiles.BSE_CM);
     return Response.json({});
   };
   return { fetchFn, calls };
@@ -337,5 +344,124 @@ describe("WP4A app-owned refresh owner", () => {
     expect(batches.length).toBe(1);
     expect(batches[0]!.sourceObservedAt).toBeUndefined();
     expect(wp4bFreshness(batches[0]!.sourceObservedAt, CLOCK.toISOString(), "2026-11-24")).toBe("STALE");
+  });
+});
+
+describe("WP4A refresh validation gate: malformed masters never reconcile", () => {
+  const IMPORT_OPTS = { now: CLOCK.toISOString(), sourceVersion: "fixture-v1", sourceObservedAt: CLOCK.toISOString() };
+
+  function seedBothProviders() {
+    const dir = mkdtempSync(join(tmpdir(), "wp4a-guard-"));
+    const handle = openDatabase({ dbPath: join(dir, "test.sqlite"), migrate: true });
+    const repo = new SqliteCatalogRepository(handle.db, handle.sqlite);
+    const sync = new CatalogSyncService(repo);
+    return { dir, handle, repo, sync };
+  }
+
+  /** Report a yesterday COMPLETED run so the refresh owner proceeds deterministically. */
+  function proceedingCatalog(repo: SqliteCatalogRepository, provider: string): CatalogRepository {
+    const catalog = Object.create(repo) as CatalogRepository;
+    (catalog as any).listSyncRuns = async (q: { provider?: string; status?: string; limit?: number } = {}) => {
+      if (q.provider === provider && q.status === "COMPLETED") {
+        return [runRecord(provider, "2026-11-23T05:00:00.000Z")];
+      }
+      return repo.listSyncRuns(q);
+    };
+    return catalog;
+  }
+
+  async function seed(sync: CatalogSyncService) {
+    const up = buildUpstoxImport(upstoxRows, IMPORT_OPTS);
+    const fy = buildFyersImport(fyersFiles, IMPORT_OPTS);
+    expect((await sync.applyCompleteProviderSnapshot(up.batch, up.reconciliation)).status).toBe("COMPLETED");
+    expect((await sync.applyCompleteProviderSnapshot(fy.batch, fy.reconciliation)).status).toBe("COMPLETED");
+  }
+
+  test("FYERS required segment with zero usable rows: no reconciliation, no catalogue change, FAILED run", async () => {
+    const { dir, handle, repo, sync } = seedBothProviders();
+    try {
+      await seed(sync);
+      const before = (await repo.listInstruments()).map((i) => i.canonicalId).sort();
+      expect((await repo.getMapping("FYERS", "BSE:TCS26DEC4000CE"))?.status).toBe("ACTIVE");
+
+      const files = clone(fyersFiles) as any;
+      files.BSE_FO = {}; // valid JSON, but zero usable in-scope rows
+      const fetchFn: MasterFetch = async (url) => {
+        if (url.includes("NSE_FO")) return Response.json(files.NSE_FO);
+        if (url.includes("BSE_FO")) return Response.json(files.BSE_FO);
+        if (url.includes("NSE_CM")) return Response.json(files.NSE_CM);
+        if (url.includes("BSE_CM")) return Response.json(files.BSE_CM);
+        throw new Error("unexpected url");
+      };
+      const events: string[] = [];
+      const refresh = new CatalogMasterRefresh({
+        catalog: proceedingCatalog(repo, "FYERS"), sync, now: () => CLOCK, fetch: fetchFn,
+        onEvent: (e) => events.push(`${e.provider}:${e.outcome}`)
+      });
+      await (refresh as any).refreshProvider("FYERS");
+
+      expect(events).toContain("FYERS:FAILED");
+      expect((await repo.listInstruments()).map((i) => i.canonicalId).sort()).toEqual(before);
+      // Without the guard this BSE mapping would be marked REMOVED by reconciliation.
+      expect((await repo.getMapping("FYERS", "BSE:TCS26DEC4000CE"))?.status).toBe("ACTIVE");
+      expect((await repo.getMapping("FYERS", "NSE:RELIANCE26DEC3000CE"))?.status).toBe("ACTIVE");
+      const failed = (await repo.listSyncRuns({ provider: "FYERS", status: "FAILED" }))[0];
+      expect(failed).toBeDefined();
+      expect(failed!.error).toContain("EMPTY_REQUIRED_SEGMENT:BSE_FO");
+      expect((await repo.listSyncRuns({ provider: "FYERS", status: "COMPLETED" })).length).toBeGreaterThanOrEqual(1);
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
+
+  test("Upstox unresolved underlying: no reconciliation, no catalogue change, FAILED run", async () => {
+    const { dir, handle, repo, sync } = seedBothProviders();
+    try {
+      await seed(sync);
+      const before = (await repo.listInstruments()).map((i) => i.canonicalId).sort();
+
+      const rows = clone(upstoxRows) as any[];
+      rows.find((r) => r.instrument_key === "NSE_FO|REL-CE-1")!.underlying_key = "NSE_EQ|MISSING";
+      const refresh = new CatalogMasterRefresh({
+        catalog: proceedingCatalog(repo, "UPSTOX"), sync, now: () => CLOCK,
+        fetch: async () => Response.json(rows)
+      });
+      await (refresh as any).refreshProvider("UPSTOX");
+
+      expect((await repo.listInstruments()).map((i) => i.canonicalId).sort()).toEqual(before);
+      expect((await repo.getMapping("UPSTOX", "NSE_FO|REL-CE-1"))?.status).toBe("ACTIVE");
+      const failed = (await repo.listSyncRuns({ provider: "UPSTOX", status: "FAILED" }))[0];
+      expect(failed).toBeDefined();
+      expect(failed!.error).toContain("UNRESOLVED_UNDERLYINGS:1");
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
+
+  test("Upstox invalid option row: no reconciliation, no catalogue change, FAILED run", async () => {
+    const { dir, handle, repo, sync } = seedBothProviders();
+    try {
+      await seed(sync);
+      const before = (await repo.listInstruments()).map((i) => i.canonicalId).sort();
+
+      const rows = clone(upstoxRows) as any[];
+      rows.find((r) => r.instrument_key === "NSE_FO|REL-CE-1")!.strike_price = -1;
+      const refresh = new CatalogMasterRefresh({
+        catalog: proceedingCatalog(repo, "UPSTOX"), sync, now: () => CLOCK,
+        fetch: async () => Response.json(rows)
+      });
+      await (refresh as any).refreshProvider("UPSTOX");
+
+      expect((await repo.listInstruments()).map((i) => i.canonicalId).sort()).toEqual(before);
+      expect((await repo.getMapping("UPSTOX", "NSE_FO|REL-CE-1"))?.status).toBe("ACTIVE");
+      const failed = (await repo.listSyncRuns({ provider: "UPSTOX", status: "FAILED" }))[0];
+      expect(failed).toBeDefined();
+      expect(failed!.error).toContain("INVALID_ROWS:1");
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
   });
 });

@@ -15,11 +15,11 @@ export {
   analyzeSharedDerivativeFields, DERIVATIVE_SHARED_FIELD_CONFLICT, DERIVATIVE_ATTRIBUTES_META_KEY,
   SHARED_DERIVATIVE_FIELDS, buildUpstoxImport, dryRunUpstoxMaster, UPSTOX_MASTER_URL, UPSTOX_SOURCE,
   UPSTOX_COVERAGE, buildFyersImport, dryRunFyersMaster, FYERS_MASTER_URLS, FYERS_SOURCE, FYERS_COVERAGE,
-  CatalogMasterRefresh
+  validateCompleteImportReport, REQUIRED_UPSTOX_SEGMENTS, REQUIRED_FYERS_SEGMENTS, CatalogMasterRefresh
 } from "./sync";
 export type {
   SharedFieldAnalysis, SharedDerivativeField, ProviderImportResult, UpstoxImportOptions,
-  FyersImportOptions, FyersMasterFiles, FyersMasterSegment, ProviderImportReport,
+  FyersImportOptions, FyersMasterFiles, FyersMasterSegment, ProviderImportReport, CompleteImportValidation,
   CatalogMasterRefreshOptions, CatalogRefreshEvent, MasterFetch
 } from "./sync";
 export type {

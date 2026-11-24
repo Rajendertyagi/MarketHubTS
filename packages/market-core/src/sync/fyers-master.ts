@@ -202,6 +202,7 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     });
     if (isActive(row)) activeNativeIdentifiers.add(symTicker);
     report.inScopeUnderlyings++;
+    report.inScopeBySegment[segment] = (report.inScopeBySegment[segment] ?? 0) + 1;
   }
 
   // Pass 2: option contracts, resolved strictly through underFyTok.
@@ -289,6 +290,7 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     });
     if (isActive(row)) activeNativeIdentifiers.add(symTicker);
     report.inScopeOptions++;
+    report.inScopeBySegment[segment] = (report.inScopeBySegment[segment] ?? 0) + 1;
   }
 
   // Source data date = oldest of the per-file newest in-scope lastUpdate dates.

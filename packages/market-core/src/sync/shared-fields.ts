@@ -52,7 +52,17 @@ export interface AnalyzeSharedFieldsArgs {
  * value emits one new warning.
  */
 export function analyzeSharedDerivativeFields(args: AnalyzeSharedFieldsArgs): SharedFieldAnalysis {
+  // Start from the incoming derivative (a valid DerivativeSpec) and restore any
+  // existing populated field the incoming provider omitted. A provider that
+  // omits a shared field must never erase an already-populated canonical value.
   const canonicalDerivative: DerivativeSpec = { ...args.incoming };
+  if (args.existing) {
+    for (const [key, value] of Object.entries(args.existing)) {
+      if (stableValue(value) === undefined) continue;
+      if (stableValue((args.incoming as Record<string, unknown>)[key]) !== undefined) continue;
+      (canonicalDerivative as Record<string, unknown>)[key] = value;
+    }
+  }
   const derivativeAttributes: Record<string, unknown> = { ...(args.lastRecorded ?? {}) };
   const warnings: SyncConflict[] = [];
 

@@ -86,6 +86,20 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
   const nativeOwners = new Map<string, string>();
   const observedAt = isoOrUndefined(options.sourceObservedAt);
 
+  // Pass 0: only underlyings actually referenced by supported option rows are
+  // in scope. Unrelated EQ/INDEX rows are read but never imported (WP4A §3).
+  const referencedUnderlyingKeys = new Set<string>();
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Row;
+    const segment = str(row.segment);
+    if (!segment || !FO_SEGMENTS.has(segment)) continue;
+    const optionType = str(row.option_type) ?? str(row.instrument_type);
+    if (optionType !== "CE" && optionType !== "PE") continue;
+    const underlyingKey = str(row.underlying_key);
+    if (underlyingKey) referencedUnderlyingKeys.add(underlyingKey);
+  }
+
   const addInstrument = (inst: CanonicalInstrument, nativeIdentifier: string): void => {
     const priorIdentity = identityOwners.get(inst.identityKey);
     if (priorIdentity && priorIdentity !== nativeIdentifier) {
@@ -116,6 +130,10 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
     const exchange = exchangeOf(row);
     const instrumentKey = str(row.instrument_key);
     if (!exchange || !instrumentKey) { report.invalidRows++; continue; }
+    if (!referencedUnderlyingKeys.has(instrumentKey)) {
+      report.skippedOutOfScope++; // unrelated EQ/INDEX universe is read but not imported
+      continue;
+    }
 
     const canonicalSymbol = str(row.trading_symbol) ?? str(row.short_name) ?? str(row.name);
     if (!canonicalSymbol) { report.invalidRows++; continue; }
@@ -163,6 +181,7 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
     });
     activeNativeIdentifiers.add(instrumentKey);
     report.inScopeUnderlyings++;
+    report.inScopeBySegment[segment ?? "UNKNOWN"] = (report.inScopeBySegment[segment ?? "UNKNOWN"] ?? 0) + 1;
   }
 
   // Pass 2: option contracts, resolved strictly through underlying_key.
@@ -251,6 +270,7 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
     });
     activeNativeIdentifiers.add(instrumentKey);
     report.inScopeOptions++;
+    report.inScopeBySegment[segment ?? "UNKNOWN"] = (report.inScopeBySegment[segment ?? "UNKNOWN"] ?? 0) + 1;
   }
 
   const batch: CatalogSyncBatch = {

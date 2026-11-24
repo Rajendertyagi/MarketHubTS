@@ -15,6 +15,9 @@ export {
 export type { ProviderImportResult } from "./sync/upstox-master";
 export type { FyersImportOptions, FyersMasterFiles, FyersMasterSegment } from "./sync/fyers-master";
 export type { UpstoxImportOptions } from "./sync/upstox-master";
-export type { ProviderImportReport } from "./sync/import-report";
+export {
+  validateCompleteImportReport, REQUIRED_UPSTOX_SEGMENTS, REQUIRED_FYERS_SEGMENTS
+} from "./sync/import-report";
+export type { ProviderImportReport, CompleteImportValidation } from "./sync/import-report";
 export { CatalogMasterRefresh } from "./sync/refresh";
 export type { CatalogMasterRefreshOptions, CatalogRefreshEvent, MasterFetch } from "./sync/refresh";

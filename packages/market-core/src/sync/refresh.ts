@@ -2,6 +2,7 @@ import { istDateString, type ProviderId } from "@markethub/contracts";
 import type { CatalogRepository } from "../types";
 import { CatalogSyncService } from "./apply";
 import { buildFyersImport, FYERS_MASTER_URLS, FYERS_SOURCE, type FyersMasterSegment } from "./fyers-master";
+import { validateCompleteImportReport, type ProviderImportReport } from "./import-report";
 import { buildUpstoxImport, UPSTOX_MASTER_URL, UPSTOX_SOURCE } from "./upstox-master";
 
 const FETCH_TIMEOUT_MS = 20_000;
@@ -115,11 +116,12 @@ export class CatalogMasterRefresh {
         const rows = JSON.parse(text) as unknown;
         // The BOD schema has no per-row source date. Only a parseable
         // Last-Modified header is reliable; otherwise leave it unknown (STALE).
-        const { batch, reconciliation } = buildUpstoxImport(rows, {
+        const { batch, reconciliation, report } = buildUpstoxImport(rows, {
           now: nowIso,
           sourceVersion: await sha256(text),
           ...(lastModified ? { sourceObservedAt: lastModified } : {})
         });
+        this.assertValidCompleteImport(report, "UPSTOX");
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
       } else {
@@ -131,10 +133,11 @@ export class CatalogMasterRefresh {
         );
         const files = Object.fromEntries(entries) as Record<FyersMasterSegment, unknown>;
         // FYERS derives its source data date from in-scope lastUpdate values.
-        const { batch, reconciliation } = buildFyersImport(files, {
+        const { batch, reconciliation, report } = buildFyersImport(files, {
           now: nowIso,
           sourceVersion: await sha256(JSON.stringify(files))
         });
+        this.assertValidCompleteImport(report, "FYERS");
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
       }
@@ -180,6 +183,20 @@ export class CatalogMasterRefresh {
 
   private emit(event: CatalogRefreshEvent): void {
     try { this.onEvent?.(event); } catch { /* diagnostics must not affect refresh */ }
+  }
+
+  /**
+   * Fail-closed gate before reconciliation. A malformed or unexpectedly empty
+   * master must never reach `applyCompleteProviderSnapshot`: otherwise a
+   * COMPLETE snapshot with silently skipped rows could mark previously active
+   * mappings REMOVED. Throwing here is caught by `doRefresh`, which records a
+   * FAILED run and keeps the last-known-good catalogue untouched.
+   */
+  private assertValidCompleteImport(report: ProviderImportReport, provider: ProviderId): void {
+    const validation = validateCompleteImportReport(report, provider);
+    if (!validation.ok) {
+      throw new Error(`${provider} complete master import failed validation: ${validation.errors.join(", ")}`);
+    }
   }
 }
 

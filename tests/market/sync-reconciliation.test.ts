@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { openDatabase, SqliteCatalogRepository } from "../../packages/database/src/index";
 import {
   CatalogSyncService, buildUpstoxImport, buildFyersImport, DERIVATIVE_SHARED_FIELD_CONFLICT,
-  DERIVATIVE_ATTRIBUTES_META_KEY, serializeProviderCoverageScope
+  DERIVATIVE_ATTRIBUTES_META_KEY, serializeProviderCoverageScope, analyzeSharedDerivativeFields,
+  SHARED_DERIVATIVE_FIELDS
 } from "../../packages/market-core/src/index";
 import type { CatalogRepository, CatalogRepositoryTx, CatalogSyncBatch } from "../../packages/market-core/src/index";
+import type { DerivativeSpec } from "../../packages/contracts/src/index";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
 import { fyersFiles, upstoxRows } from "../fixtures/provider-masters";
 
@@ -203,6 +205,80 @@ describe("WP4A shared-field coverage (all plan-enumerated fields)", () => {
       }
     });
   }
+});
+
+describe("WP4A shared-field omission: incoming provider omits a populated canonical field", () => {
+  const existingDerivative: DerivativeSpec = {
+    underlyingCanonicalId: "cat:underlying",
+    expiryDate: "2026-12-29",
+    strike: 3000,
+    optionType: "CE",
+    lotSize: 250,
+    tickSize: 0.05,
+    quantityFreeze: 10000,
+    contractSource: "UPSTOX_BOD_MASTER",
+    contractObservedAt: "2026-11-24T06:00:00.000Z",
+    contractLifecycleStatus: "ACTIVE"
+  };
+  const baseIncoming: DerivativeSpec = {
+    underlyingCanonicalId: "cat:underlying",
+    expiryDate: "2026-12-29",
+    strike: 3000,
+    optionType: "CE"
+  };
+
+  for (const field of SHARED_DERIVATIVE_FIELDS) {
+    test(`${field}: canonical value preserved, no warning, no false provider value`, () => {
+      const incoming = { ...baseIncoming } as Record<string, unknown>;
+      delete incoming[field];
+      const analysis = analyzeSharedDerivativeFields({
+        existing: existingDerivative,
+        incoming: incoming as DerivativeSpec,
+        lastRecorded: undefined,
+        provider: "FYERS",
+        nativeIdentifier: "NSE:OMIT-TEST",
+        canonicalId: "cat:test",
+        source: "FYERS_SYMBOL_MASTER",
+        preserveLifecycle: true
+      });
+
+      expect((analysis.canonicalDerivative as Record<string, unknown>)[field]).toBe(
+        (existingDerivative as Record<string, unknown>)[field]
+      );
+      expect(analysis.warnings).toEqual([]);
+      expect(analysis.derivativeAttributes[field]).toBeUndefined();
+      // Lifecycle remains canonical-owned even when the incoming row omits it.
+      expect(analysis.canonicalDerivative.contractLifecycleStatus).toBe("ACTIVE");
+    });
+  }
+
+  test("end-to-end: FYERS omits lotSize after Upstox set it; canonical value survives with no warning", async () => {
+    const { dir, handle, repo, sync } = setup();
+    try {
+      const up = buildUpstoxImport(upstoxRows, OPTS);
+      expect((await sync.applyBatch(up.batch)).status).toBe("COMPLETED");
+      const target = up.batch.instruments.find((i) => i.canonicalSymbol === "RELIANCE" && i.derivative?.optionType === "CE")!;
+      expect((await repo.getInstrumentByCanonicalId(target.canonicalId))?.derivative?.lotSize).toBe(250);
+
+      const files = clone(fyersFiles) as any;
+      delete files.NSE_FO["NSE:RELIANCE26DEC3000CE"].minLotSize; // provider omits lotSize
+      const fy = buildFyersImport(files, OPTS);
+      const fyOpt = fy.batch.instruments.find((i) => i.canonicalSymbol === "RELIANCE" && i.derivative?.optionType === "CE")!;
+      expect(fyOpt.derivative?.lotSize).toBeUndefined(); // importer did not invent a value
+
+      const result = await sync.applyBatch(fy.batch);
+      expect(result.status).toBe("COMPLETED");
+      expect(result.conflicts.filter(
+        (c) => c.type === DERIVATIVE_SHARED_FIELD_CONFLICT && (c.details as any)?.field === "lotSize"
+      )).toEqual([]);
+      expect((await repo.getInstrumentByCanonicalId(target.canonicalId))?.derivative?.lotSize).toBe(250);
+      const fyMap = await repo.getMapping("FYERS", "NSE:RELIANCE26DEC3000CE");
+      expect((fyMap?.sourceMeta?.[DERIVATIVE_ATTRIBUTES_META_KEY] as any)?.lotSize).toBeUndefined();
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
 });
 
 describe("WP4A complete-snapshot reconciliation", () => {

@@ -168,6 +168,88 @@ describe("WP4A provider master parsers", () => {
     expect(fy.mappingConflicts).toEqual([]);
   });
 
+  test("Upstox imports only underlyings referenced by in-scope options (WP4A §3)", () => {
+    const rows = [
+      ...upstoxRows,
+      {
+        segment: "NSE_EQ", name: "UNRELATED LTD", exchange: "NSE", isin: "INE999A01020",
+        instrument_type: "EQ", instrument_key: "NSE_EQ|UNRELATED", lot_size: 1,
+        exchange_token: "7777", tick_size: 0.05, trading_symbol: "UNRELATED", short_name: "UNRELATED"
+      },
+      {
+        segment: "NSE_INDEX", name: "UNRELATED INDEX", exchange: "NSE", instrument_type: "INDEX",
+        instrument_key: "NSE_INDEX|Unrelated Index", exchange_token: "7778", tick_size: 0.05,
+        trading_symbol: "UNRELATEDIDX", short_name: "UIDX"
+      }
+    ];
+    const { batch, reconciliation, report } = buildUpstoxImport(rows, OPTS);
+
+    expect(report.inScopeUnderlyings).toBe(4); // unchanged: only the four referenced underlyings
+    expect(report.inScopeOptions).toBe(4);
+    expect(report.skippedOutOfScope).toBe(5); // original 3 + the two unrelated cash/index rows
+    expect(report.unresolvedUnderlyings).toEqual([]);
+
+    const nativeIds = batch.mappings.map((m) => m.nativeIdentifier);
+    expect(nativeIds).not.toContain("NSE_EQ|UNRELATED");
+    expect(nativeIds).not.toContain("NSE_INDEX|Unrelated Index");
+    expect(batch.instruments.some((i) => i.canonicalSymbol === "UNRELATED")).toBe(false);
+    expect(batch.instruments.some((i) => i.canonicalSymbol === "UNRELATEDIDX")).toBe(false);
+    expect(reconciliation.activeNativeIdentifiers.has("NSE_EQ|UNRELATED")).toBe(false);
+    expect(reconciliation.activeNativeIdentifiers.has("NSE_INDEX|Unrelated Index")).toBe(false);
+    // The four genuinely referenced underlyings are still imported and mapped.
+    for (const key of ["NSE_EQ|INE002A01018", "NSE_INDEX|Nifty 50", "BSE_EQ|INE467B01029", "BSE_INDEX|SENSEX"]) {
+      expect(nativeIds).toContain(key);
+      expect(reconciliation.activeNativeIdentifiers.has(key)).toBe(true);
+    }
+  });
+
+  test("index option: each provider resolves its own verified index underlying; no shared index identifier is fabricated", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wp4a-index-"));
+    const handle = openDatabase({ dbPath: join(dir, "test.sqlite"), migrate: true });
+    try {
+      const repo = new SqliteCatalogRepository(handle.db, handle.sqlite);
+      const sync = new CatalogSyncService(repo);
+      const up = buildUpstoxImport(upstoxRows, OPTS);
+      const fy = buildFyersImport(fyersFiles, OPTS);
+      expect((await sync.applyBatch(up.batch)).status).toBe("COMPLETED");
+      expect((await sync.applyBatch(fy.batch)).status).toBe("COMPLETED");
+
+      // Upstox: NSE_INDEX|Nifty 50 (documented Upstox index key) resolves within its own snapshot.
+      const upOpt = up.batch.instruments.find(
+        (i) => i.instrumentCategory === "INDEX_OPTION" && i.exchange === "NSE" && i.derivative?.optionType === "PE"
+      )!;
+      const upUnderlying = up.batch.instruments.find((i) => i.canonicalId === upOpt.derivative!.underlyingCanonicalId)!;
+      expect(upUnderlying.instrumentCategory).toBe("INDEX");
+      expect(upUnderlying.stableIdentifier).toBe("NSE_INDEX|Nifty 50");
+      expect(upUnderlying.exchangeSecurityId).toBe("9999");
+      expect(upOpt.derivative!.underlyingCanonicalId).toBe(upUnderlying.canonicalId);
+      expect((await repo.getMapping("UPSTOX", "NSE_INDEX|Nifty 50"))?.canonicalId).toBe(upUnderlying.canonicalId);
+
+      // FYERS: NSE:NIFTY50-INDEX (documented option-chain symbol) resolves via underFyTok within its own snapshot.
+      const fyOpt = fy.batch.instruments.find(
+        (i) => i.instrumentCategory === "INDEX_OPTION" && i.exchange === "NSE" && i.derivative?.optionType === "PE"
+      )!;
+      const fyUnderlying = fy.batch.instruments.find((i) => i.canonicalId === fyOpt.derivative!.underlyingCanonicalId)!;
+      expect(fyUnderlying.instrumentCategory).toBe("INDEX");
+      expect(fyUnderlying.sourceMeta?.fyToken).toBe("101000000026009");
+      expect(fyOpt.derivative!.underlyingCanonicalId).toBe(fyUnderlying.canonicalId);
+      const fyUnderlyingMap = await repo.getMapping("FYERS", "NSE:NIFTY50-INDEX");
+      expect(fyUnderlyingMap?.canonicalId).toBe(fyUnderlying.canonicalId);
+      expect(fyUnderlyingMap?.sourceMeta?.fyToken).toBe("101000000026009");
+
+      // Honest gap: the two masters carry provider-specific index tokens
+      // (Upstox exchange_token 9999 vs FYERS exToken 26009) and no shared ISIN,
+      // so the index underlyings do NOT converge. Do not fabricate a shared ID.
+      expect(upUnderlying.canonicalId).not.toBe(fyUnderlying.canonicalId);
+      expect(upOpt.canonicalId).not.toBe(fyOpt.canonicalId);
+      expect(await repo.getMapping("UPSTOX", "NSE:NIFTY50-INDEX")).toBeNull();
+      expect(await repo.getMapping("FYERS", "NSE_INDEX|Nifty 50")).toBeNull();
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
+
   test("cross-provider convergence: same stock option -> one canonical ID, two mappings", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wp4a-conv-"));
     const handle = openDatabase({ dbPath: join(dir, "test.sqlite"), migrate: true });
