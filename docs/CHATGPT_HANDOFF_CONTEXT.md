@@ -12,20 +12,21 @@
 
 **Current state (independently verified 2026-11-24):**
 - Repository: `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`).
-- Branch: `develop`. Local HEAD and `origin/develop` both `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0`.
+- Branch: `develop`. Local HEAD and `origin/develop` both `9f99b9a830252335456ef8232a2032ea9b85d6ea` (corrections published). The prior published-plan baseline was `72743cf`; the original inspected implementation baseline was `2ed4c1e`.
 - `main` and `origin/main` both `865d86f393a29bc1ec8d455a51d9efa82d722c48` (unchanged; never modify without separate explicit authorization).
 - Working tree: ` M docs/REFERENCES.md` and `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` — pre-existing user work, preserved, not part of any Phase 4 commit.
 - Metadata-discovery Phase 4 (provider-backed derivative expiry discovery) is **complete, published, and audited KEEP**. The final published baseline is `2ed4c1e`, **not** `85bb8a6` (the baseline named in the handoff request is outdated by three commits).
 - The four technical-lead findings A–D described in section 7 were **fixed in `13826fb` and independently re-audited KEEP**; Finding E (plan close-out) was completed in `1b51427`; the Windows `EBUSY` test flake was root-cause fixed in `2ed4c1e`. Details and evidence are in section 7.
 - Latest independently re-run full suite: **1076 pass / 0 fail** (two consecutive runs by the audit agent). No GitHub CI status checks were reported for these commits — all results are local, not CI.
-- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` exists as a **published planning draft undergoing independent corrections** (planning only, not finally approved or implementation-ready; grants no implementation authorization). **M6-B4, M6-D and M6-E remain not accepted**; M6 is not complete. No M6-B4/D/E implementation was performed in this documentation work.
+- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` exists with **Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized** (planning only, not finally approved or implementation-ready; grants no implementation authorization). **M6-B4, M6-D and M6-E remain not accepted**; M6 is not complete. No M6-B4/D/E implementation was performed in this documentation work.
 
 **Next actions (recommended, not authorized):**
-1. Re-verify live `develop`/`main` SHAs and `git status` before any work.
+1. Re-verify live `develop`/`main` SHAs and `git status` before any work (current published baseline `9f99b9a`; corrections await independent review).
 2. Read `docs/PROJECT_MANAGER_PROTOCOL.md` and `docs/METADATA_DISCOVERY_PHASE_4_PLAN.md` (the canonical Phase 4 plan with §13 close-out record).
 3. Confirm the section 7 findings are closed in current source (paths and evidence provided).
 4. Produce an independent technical disposition. Note the stale documentation entries in section 8.3.
-5. **Do not start Phase 7.** It remains separately gated and not authorized. Obtain explicit product-owner authorization before any code change or publication.
+5. For M6: the four independent-review corrections are published in `9f99b9a` and await independent review; B4/D/E remain not accepted and M6 is not complete. Do not treat the completion plan as implementation-authorized.
+6. **Do not start Phase 7.** It remains separately gated and not authorized. Obtain explicit product-owner authorization before any code change or publication.
 
 ---
 
@@ -36,11 +37,11 @@ All facts in this section were verified directly from the local checkout on 2026
 | Item | Verified value |
 |---|---|
 | Branch | `develop` |
-| Local HEAD / `origin/develop` | `72743cfe68e665dda018a3f4e098208f880a979f` (in sync) — **published planning-document baseline** |
+| Local HEAD / `origin/develop` | `9f99b9a830252335456ef8232a2032ea9b85d6ea` (in sync) — **current published baseline (corrections)**; prior published-plan baseline `72743cfe68e665dda018a3f4e098208f880a979f` |
 | Original inspected implementation baseline | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` — the checkout inspected when this handoff was first created; distinct from the planning-document baseline above |
 | Local `main` / `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync; untouched) |
 | `git status --short` | ` M docs/REFERENCES.md` ; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` (two preserved user-work items) |
-| This handoff file | **Tracked** — added in `1ddf24b` and present at `72743cf`. It did not exist when this document was first created, but it is **not untracked now**; preserve it, do not overwrite or delete it. |
+| This handoff file | **Tracked** — added in `1ddf24b` and present at `72743cf` and at the current baseline `9f99b9a`. It did not exist when this document was first created, but it is **not untracked now**; preserve it, do not overwrite or delete it. |
 
 **Recent commit history (newest first, verified with `git log --oneline -20`):**
 
@@ -320,7 +321,7 @@ These are documentation drift, not code defects. They should be corrected in a f
 
 This document is a **handoff aid only**. It is not a new governing architecture plan and grants no implementation or publication permission.
 
-- **Created only (at original creation time):** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created. **It was subsequently committed in `1ddf24b` and is now tracked at `72743cf` — it is not untracked in the current repository state.**
+- **Created only (at original creation time):** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created. **It was subsequently committed in `1ddf24b` and is now tracked (present at `72743cf` and at the current baseline `9f99b9a`) — it is not untracked in the current repository state.**
 - **Not modified:** `docs/METADATA_DISCOVERY_PHASE_4_PLAN.md`, `docs/PROJECT_STATUS.md`, any code or test file, any other documentation, and any pre-existing user work.
 - **No commit, push, merge, rebase, branch change or other Git write was performed** as part of creating this document. (The later `1ddf24b` commit was a separate, authorized documentation publication.)
 - **Pre-existing user work preserved:** ` M docs/REFERENCES.md` and `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`.
