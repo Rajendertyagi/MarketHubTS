@@ -89,6 +89,12 @@ function isSseResponse(response: Response): boolean {
 /**
  * Wrap a single web-standard Response. Non-SSE responses are returned unchanged.
  * SSE responses get an application-owned actively-drained bounded buffer.
+ *
+ * Scope note: this intentionally applies to ALL `text/event-stream` responses
+ * from the MCP handler, not only `subscriptions/listen`. In the current MCP
+ * 2026-07-28 handler, listen streams are the SSE surface (other responses are
+ * JSON unless a mid-call notification upgrades them, which is not used here).
+ * If a non-listen SSE endpoint is ever added, narrow this gate by route/method.
  */
 export function boundSseResponse(response: Response, options: BoundedSseOptions): Response {
   if (!isSseResponse(response)) return response;

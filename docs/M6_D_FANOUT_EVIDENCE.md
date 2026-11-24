@@ -127,6 +127,7 @@ On overflow the wrapper calls `reader.cancel(SSE_OVERFLOW_REASON)` on the upstre
 - **T1** (sustained unread bounded): buffer high-water ≤ caps; `onUpstreamCancel` observed `slow_consumer_bound_exceeded`; downstream EOF with 0 surviving frames.
 - **T2** (black-box cleanup): after overflow, N=10 further canonical changes produce **0** frames on the bounded stream, while a healthy sibling receives all 146; `handler.close()` completes cleanly. No SDK internals / `openCount` used.
 - **T3** (healthy unaffected): with an unread stream present, a healthy subscriber receives all 20 notifications with p95 < 50 ms, no drops/duplicates.
+- **T4** (canonical publishing unaffected): the bridge's best-effort `onError` is not invoked by the bounded wrapper — overflow is contained in the wrapper's `onOverflow` diagnostic (`mcp_sse_slow_consumer_overflow`), never propagated to `MarketDataService` or the bridge; canonical mutations and `LiveStateStore` are untouched. Covered by T3/T5 delivery assertions plus unchanged `tests/mcp/notification-bridge.test.ts` (publisher-error containment) and the full suite.
 - **T5** (sustained load): table above; 300/300 delivered, publisher not blocked (~52–58 ms for 300), heap Δ ~0 MB.
 - **T6** (regression): `tests/mcp/fanout.test.ts`, `tests/mcp/subscriptions.test.ts`, `tests/mcp/notification-bridge.test.ts` unchanged and passing; full-suite baseline 1095 pass / 0 fail at `7926809` (post-change results recorded in the implementation report).
 
