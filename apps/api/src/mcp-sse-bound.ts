@@ -10,19 +10,34 @@ import type { McpHttpHandler } from "@modelcontextprotocol/server";
  *
  * This module wraps the handler's `fetch` at the composition layer using only
  * public web-standard APIs (no SDK fork, no second event system). For SSE
- * responses it takes `response.body.getReader()` and runs an **application-owned
- * actively-drained bounded pull loop**: upstream chunks are read continuously,
- * independent of downstream pulls, into an explicit bounded buffer; the
- * downstream `ReadableStream` is fed from that buffer only as the consumer pulls.
- * Backpressure from a slow consumer therefore cannot stop the drain, and unread
- * bytes accumulate only in this capped buffer (never in the SDK queue).
+ * responses it takes `response.body.getReader()` and runs an **independent
+ * upstream drain loop** into an application-owned bounded FIFO queue. The
+ * downstream `ReadableStream` is a standard (non-`direct`) Web Stream whose
+ * `pull()` is a **synchronous demand signal**: it sets `pullWanted = true` and
+ * calls `pump()`, which delivers queued chunks with `controller.enqueue()`.
+ *
+ * Why this shape (M6-E Design A): the previous wrapper's `pull()` returned a
+ * pending promise when its buffer was empty, and the drain loop resolved that
+ * promise WITHOUT calling `controller.enqueue()`. Per the WHATWG Streams spec,
+ * fulfilling a pull promise does not re-invoke `pull()` unless `pullAgain` was
+ * set; Bun's response-body sink issues exactly one outstanding read, so the
+ * read request hung with the chunk stranded in the private buffer. Delivering
+ * via `controller.enqueue()` on a synchronous demand signal is the exact fix.
+ *
+ * Backpressure from a slow consumer stops `pull()` from being called, so
+ * `pullWanted` stays false and the queue accumulates up to the cap. Under
+ * healthy demand the queue stays at 0–1 frames. No chunk bypasses the cap: the
+ * check happens BEFORE append in the drain loop, which is the only append path
+ * (there is no direct-delivery path). An oversized individual frame is treated
+ * as overflow even when a consumer is ready.
  *
  * On overflow the wrapper calls `reader.cancel(reason)` on the upstream reader
  * (normative — this triggers the SDK's `cancel()` → `teardown(false)` → bus
- * unsubscribe + keepalive clear + open removal), then ends the downstream
- * response with a plain EOF. No completion frame is synthesized: the SDK owns
- * the subscription id, and the client recovers by re-opening `subscriptions/listen`
- * and re-reading the authoritative snapshot/feed (read-after-notify).
+ * unsubscribe + keepalive clear + open removal), drops queued frames, and ends
+ * the downstream response with a plain EOF. No completion frame is synthesized:
+ * the SDK owns the subscription id, and the client recovers by re-opening
+ * `subscriptions/listen` and re-reading the authoritative snapshot/feed
+ * (read-after-notify).
  *
  * The bound values are derived from sustained-load measurements recorded in
  * `docs/M6_D_FANOUT_EVIDENCE.md`; they are not arbitrary.
@@ -88,7 +103,8 @@ function isSseResponse(response: Response): boolean {
 
 /**
  * Wrap a single web-standard Response. Non-SSE responses are returned unchanged.
- * SSE responses get an application-owned actively-drained bounded buffer.
+ * SSE responses get an application-owned bounded FIFO queue and a standard Web
+ * Streams downstream with a synchronous `pull()` demand signal.
  *
  * Scope note: this intentionally applies to ALL `text/event-stream` responses
  * from the MCP handler, not only `subscriptions/listen`. In the current MCP
@@ -111,19 +127,23 @@ export function boundSseResponse(response: Response, options: BoundedSseOptions)
     try { options.onBuffered?.(sample); } catch { /* diagnostics are best-effort */ }
   };
 
-  let buffer: Uint8Array[] = [];
-  let bufferedBytes = 0;
-  let bufferedFrames = 0;
+  // Application-owned bounded FIFO queue. The drain loop is the ONLY append
+  // path, so every chunk passes the byte/frame cap check before it can be
+  // enqueued downstream — including when a consumer is ready (no bypass).
+  let queue: Uint8Array[] = [];
+  let queuedBytes = 0;
+  let queuedFrames = 0;
   let upstreamDone = false;
   let overflowed = false;
   let downstreamClosed = false;
   let drainStopped = false;
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-  const waiters: Array<() => void> = [];
+  let pullWanted = false;
 
-  const resolveWaiters = (): void => {
-    const pending = waiters.splice(0, waiters.length);
-    for (const resolve of pending) resolve();
+  const dropQueue = (): void => {
+    queue = [];
+    queuedBytes = 0;
+    queuedFrames = 0;
   };
 
   const closeDownstream = (): void => {
@@ -132,6 +152,7 @@ export function boundSseResponse(response: Response, options: BoundedSseOptions)
     try { controller?.close(); } catch { /* already closed/errored */ }
   };
 
+  /** Idempotent: releases the SDK reader/subscription exactly once. */
   const cancelUpstream = (reason: unknown): void => {
     if (drainStopped) return;
     drainStopped = true;
@@ -139,38 +160,55 @@ export function boundSseResponse(response: Response, options: BoundedSseOptions)
     try { void reader.cancel(reason).catch(() => {}); } catch { /* best effort */ }
   };
 
+  /**
+   * Deliver queued chunks only while the consumer has signalled demand. One
+   * enqueue consumes one demand signal; the next consumer `read()` re-invokes
+   * `pull()` and re-arms it. This is the exact stall fix: data is delivered via
+   * `controller.enqueue()`, never by resolving a waiter promise. Safe under
+   * concurrent producer/consumer activity because all state is synchronous and
+   * single-threaded between awaits in the drain loop.
+   */
+  const pump = (): void => {
+    while (pullWanted && queue.length > 0 && !downstreamClosed) {
+      const chunk = queue.shift()!;
+      queuedBytes -= chunk.byteLength;
+      queuedFrames -= 1;
+      pullWanted = false; // one enqueue consumes one demand signal
+      try {
+        controller!.enqueue(chunk);
+      } catch {
+        // Downstream closed/errored between the guard and enqueue (concurrent
+        // cancel): drop everything and stop.
+        downstreamClosed = true;
+        dropQueue();
+        return;
+      }
+    }
+    // Graceful SDK completion: the SDK writes its completion frame upstream,
+    // the drain sees EOF, and the wrapper closes only after every queued byte
+    // has been handed to the consumer (plain EOF, no synthesized frame).
+    if (upstreamDone && queue.length === 0 && !downstreamClosed) closeDownstream();
+  };
+
   const downstream = new ReadableStream<Uint8Array>({
     start(c) {
       controller = c;
     },
-    pull(c) {
-      if (buffer.length > 0) {
-        const chunk = buffer.shift()!;
-        bufferedBytes -= chunk.byteLength;
-        bufferedFrames -= 1;
-        c.enqueue(chunk);
-        return;
-      }
-      if (upstreamDone || overflowed) {
-        closeDownstream();
-        return;
-      }
-      // No buffered data yet: wait for the active drain loop to append or finish.
-      return new Promise<void>((resolve) => { waiters.push(resolve); });
+    pull() {
+      // Synchronous demand signal — NEVER return a pending promise.
+      pullWanted = true;
+      pump();
     },
     cancel(reason) {
-      // Consumer cancelled (client disconnect): propagate to upstream so the SDK
-      // teardown runs, and drop any buffered frames.
-      buffer = [];
-      bufferedBytes = 0;
-      bufferedFrames = 0;
-      resolveWaiters();
+      // Consumer cancelled (client disconnect): drop queued frames and
+      // propagate to upstream so the SDK teardown runs exactly once.
+      dropQueue();
       cancelUpstream(reason);
     }
   });
 
-  // Active drain loop — runs independently of downstream pulls so a slow
-  // consumer cannot stop it via backpressure.
+  // Independent upstream drain loop — runs continuously, not driven by
+  // downstream demand, so a slow consumer cannot stop it via backpressure.
   void (async () => {
     try {
       while (!drainStopped) {
@@ -178,43 +216,38 @@ export function boundSseResponse(response: Response, options: BoundedSseOptions)
         if (drainStopped) break;
         if (done) {
           upstreamDone = true;
-          resolveWaiters();
+          pump(); // deliver any frames still owed, then close on plain EOF
           break;
         }
         if (!value) continue;
 
-        // Check the cap BEFORE appending so the buffer never exceeds it.
-        if (bufferedBytes + value.byteLength > maxBufferedBytes || bufferedFrames + 1 > maxBufferedFrames) {
+        // Cap check BEFORE append — no chunk bypasses this on any path. An
+        // oversized individual frame is overflow even if a consumer is ready.
+        if (queuedBytes + value.byteLength > maxBufferedBytes || queuedFrames + 1 > maxBufferedFrames) {
           overflowed = true;
           reportOverflow({
             reason: SSE_OVERFLOW_REASON,
-            bufferedBytes, bufferedFrames, maxBufferedBytes, maxBufferedFrames, streamId
+            bufferedBytes: queuedBytes, bufferedFrames: queuedFrames,
+            maxBufferedBytes, maxBufferedFrames, streamId
           });
-          // Drop queued frames: overflow ends this listen stream with a plain EOF
-          // and the client re-reads authoritative state (read-after-notify).
-          buffer = [];
-          bufferedBytes = 0;
-          bufferedFrames = 0;
-          // Resolve any in-flight downstream pull so its read() ends with EOF
-          // instead of hanging on a promise that will never be fulfilled.
-          resolveWaiters();
+          dropQueue();
           cancelUpstream(SSE_OVERFLOW_REASON);
-          closeDownstream();
+          closeDownstream(); // plain EOF, no synthesized completion frame
           break;
         }
 
-        buffer.push(value);
-        bufferedBytes += value.byteLength;
-        bufferedFrames += 1;
-        reportBuffered({ bufferedBytes, bufferedFrames, streamId });
-        resolveWaiters();
+        queue.push(value);
+        queuedBytes += value.byteLength;
+        queuedFrames += 1;
+        reportBuffered({ bufferedBytes: queuedBytes, bufferedFrames: queuedFrames, streamId });
+        pump();
       }
     } catch {
       // Upstream read error: end this response cleanly (plain EOF). The SDK's
       // own onerror seam reports enqueue errors; nothing throws into canonical
       // state from here.
       upstreamDone = true;
-      resolveWaiters();
+      dropQueue();
       closeDownstream();
     }
   })();

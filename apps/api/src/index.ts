@@ -20,6 +20,33 @@ import { SubscriptionCoordinator } from "./subscription-coordinator";
 
 type RunningServer = ReturnType<typeof Bun.serve>;
 
+/**
+ * Disable Bun's per-request idle timeout for SSE responses only.
+ *
+ * Bun's default `idleTimeout` (10 s) applies while a response is being
+ * streamed, which would close a quiet `subscriptions/listen` stream before the
+ * 15 s MCP keepalive fires. `server.timeout(req, 0)` disables the idle timeout
+ * for that one request; the global server timeout is left unchanged. The
+ * content-type check is applied to the RESPONSE returned by the handler, so
+ * JSON responses keep the normal timeout. Wrapping at the `Bun.serve` seam is
+ * correct because Hono's `app.fetch` does not forward the Bun server to routes.
+ *
+ * Exported for a focused unit test (spy server) and a real-listener test; the
+ * module only starts the application when it is the entry point.
+ */
+export function withSseIdleTimeout(
+  fetchHandler: (request: Request, server: RunningServer) => Response | Promise<Response>
+): (request: Request, server: RunningServer) => Promise<Response> {
+  return async (request, bunServer) => {
+    const response = await fetchHandler(request, bunServer);
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.toLowerCase().includes("text/event-stream")) {
+      bunServer.timeout(request, 0);
+    }
+    return response;
+  };
+}
+
 let shuttingDown = false;
 let shutdownPromise: Promise<void> | null = null;
 let server: RunningServer | null = null;
@@ -200,7 +227,9 @@ async function main() {
   });
 
   try {
-    server = Bun.serve({ hostname: config.host, port: config.port, fetch: app.fetch });
+    // Per-request idle-timeout override for SSE only (global idleTimeout is
+    // unchanged). See withSseIdleTimeout above.
+    server = Bun.serve({ hostname: config.host, port: config.port, fetch: withSseIdleTimeout(app.fetch) });
     logger.info("listening", { host: config.host, port: server.port, lan: config.lan, env: config.env });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -265,4 +294,7 @@ async function main() {
   }
 }
 
-void main();
+// Only start the application when this module is the entry point. Importing it
+// from a test must not open the database or bind a port; the exported
+// withSseIdleTimeout helper is exercised directly in that case.
+if (import.meta.main) void main();

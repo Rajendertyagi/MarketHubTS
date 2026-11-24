@@ -176,9 +176,13 @@ describe("M6-D slow-consumer mitigation (bounded SSE wrapper, black-box)", () =>
       // Normative upstream cancellation happened with the overflow reason.
       expect(cancels).toContain(SSE_OVERFLOW_REASON);
 
-      // Downstream ends with a plain EOF; queued frames were dropped on overflow.
+      // Downstream ends with a plain EOF. Design A's synchronous pull() may
+      // have handed at most one frame to the downstream stream's own internal
+      // queue before overflow (Bun/stream machinery pulls once on read); that
+      // frame is pre-overflow and cannot be retracted. The application queue
+      // itself is dropped, so nothing beyond that single frame survives.
       const drained = await drain(reader);
-      expect(drained.frames).toBe(0);
+      expect(drained.frames).toBeLessThanOrEqual(1);
     } finally {
       await h.handler.close();
       h.bridge.stop();
@@ -208,9 +212,11 @@ describe("M6-D slow-consumer mitigation (bounded SSE wrapper, black-box)", () =>
       }
       await withTimeout(tracker.first, 3000, "T2: overflow did not occur");
 
-      // Drain the bounded stream fully: plain EOF, no queued frames survive overflow.
+      // Drain the bounded stream fully: plain EOF. At most one frame can have
+      // been handed to the downstream stream's internal queue before overflow
+      // (Design A synchronous pull); the application queue itself is dropped.
       const before = await drain(reader);
-      expect(before.frames).toBe(0);
+      expect(before.frames).toBeLessThanOrEqual(1);
 
       // Publish N more canonical changes after overflow.
       const N = 10;

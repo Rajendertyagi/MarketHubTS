@@ -134,3 +134,40 @@ On overflow the wrapper calls `reader.cancel(SSE_OVERFLOW_REASON)` on the upstre
 ### 7.6 Decision disposition
 
 The named decision **"D slow-consumer residual risk"** (§6) remains **OPEN** pending the independent review gate (plan §7.8 / §10). The mitigation is implemented and all local verification gates pass; closure as **"CLOSED — mitigated by bounded SSE wrapper"** requires the `opencode/iceman-free` KEEP audit, which is outside this implementation session. M6-D acceptance and Phase 3 remain gated.
+
+## 8. Design A wrapper replacement — real-listener verification and memory accounting (2026-11-25)
+
+> **Status:** The M6-E approved Design A (standard Web Streams + application-owned bounded FIFO queue + synchronous `pull()` demand signal + `controller.enqueue()` delivery) replaced the defective pending-promise/waiter wrapper. This section records the real-listener verification and the explicit memory accounting required by the architectural review. It does **not** change the caps, the overflow contract, the §6 decision, or acceptance status.
+
+### 8.1 What changed and what did not
+
+- **Changed:** `apps/api/src/mcp-sse-bound.ts` was replaced (not patched). The downstream `ReadableStream` is now a standard (non-`direct`) stream; `pull()` sets `pullWanted = true` synchronously and calls `pump()`; `pump()` enqueues from the queue while demand exists; an independent drain loop reads the SDK body continuously and calls `pump()` after each append. There are no waiter promises.
+- **Unchanged:** caps (16 KiB / 96 frames), overflow reason `slow_consumer_bound_exceeded`, cap check BEFORE append, plain-EOF overflow contract (no synthesized completion frame), ack-first/filtering/subscription-ID/ordering (transparent byte pass-through), and the full `{fetch, close, notify, bus}` handler shape applied before bridge/app/shutdown capture.
+- **Idle timeout:** `apps/api/src/index.ts` now wraps the `Bun.serve` fetch callback with `withSseIdleTimeout`, calling `server.timeout(req, 0)` **only** when the response content-type is `text/event-stream`. The global `idleTimeout` is unchanged.
+
+### 8.2 Real-listener results (local, not CI)
+
+| Test (all in `tests/mcp/sse-design-a.test.ts` unless noted) | Result |
+|---|---|
+| Healthy subscriber, pinned official client, 200 notifications (>96 cap) | 200/200 delivered, no false overflow, correct URI, ack first, subscription id stamped |
+| Slow subscriber, raw TCP saturation (3000 frames) | overflow exactly once, `slow_consumer_bound_exceeded`, app queue high-water **89 frames / 16,287 bytes**, SDK bus listener removed, heap Δ ~0 MB |
+| Slow subscriber, fetch-no-read (4000 frames) | plain EOF after overflow, 0 frames after overflow, exactly one overflow |
+| Slow but active subscriber (150 frames, controlled reads) | 150/150 delivered, no premature overflow |
+| Disconnect (idle / during notifications / during backpressure) | upstream cancel fired, bus listener returns to baseline in all three |
+| Multiple slow clients (4 simultaneous) | 4/4 overflowed once, all SDK listeners removed, heap Δ ~0 MB |
+| Oversized single frame (>16 KiB) on the demand path | overflow, upstream cancel, plain EOF, oversized chunk never delivered |
+| Pure Web Streams guard | resolving a waiter without enqueue leaves `read()` pending; `controller.enqueue()` resolves it |
+| Idle-timeout override | spy test proves `timeout(req, 0)` is called only for SSE; real listener with `idleTimeout: 1` keeps a quiet stream open past 2.5 s while the 15 s keepalive is pending |
+| No unhandled promise rejections | 0 rejections across overflow + disconnect + shutdown |
+| Existing in-process controls (`slow-consumer.test.ts` T1–T5, E1/E2, conformance, parity) | retained and passing |
+
+### 8.3 Memory accounting (four separate buffers)
+
+The architectural review required the four memory regions to be accounted separately. They are **not** summed into a single "buffer" figure:
+
+1. **Application-owned queue** — a plain array of upstream `Uint8Array` chunks plus `queuedBytes`/`queuedFrames` counters, inside `boundSseResponse`. Hard-capped at 16 KiB / 96 frames per response. Observed high-water under saturation: **89 frames / 16,287 bytes** (byte cap fires first for ~183-byte SDK frames). This is the only region the caps bound.
+2. **Downstream stream queue** — the standard `ReadableStream`'s internal queue (default `CountQueuingStrategy` HWM = 1). At most one chunk can be enqueued-but-unread here; this is why T1/T2 observe at most one pre-overflow frame. It is not part of the application queue accounting.
+3. **One in-flight chunk** — the `Uint8Array` currently held by the drain loop between `reader.read()` resolution and queue append/enqueue. Bounded by the largest upstream frame (well under the cap in practice; an oversized single frame is rejected as overflow before append).
+4. **Bun transport buffer** — bytes already handed to Bun's response-body sink but not yet written to the socket. This is **outside** the application queue and is not bounded by the 16 KiB / 96-frame caps. Measured: a paused raw TCP client received ~236 bytes after headers before backpressure; a `fetch` client left unread buffered ~2,525 frames (~450 KiB) before EOF. This is inherent to Bun's sink and matches the existing contract (E2 already tolerated eagerly-pulled frames).
+
+**Aggregate application-queue ceiling:** 16 KiB × `MCP_MAX_SUBSCRIPTIONS` (64) ≈ **1 MiB** for all listen streams combined. Transport buffers (regions 2–4) are additional and are **not** part of that figure. Heap deltas measured in the saturated and multi-client tests were ~0 MB, consistent with the bounded application queue.
