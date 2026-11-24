@@ -195,4 +195,139 @@ describe("M6-E C1–C21 named wire assertions", () => {
       expect(result.isError).not.toBe(true);
     } finally { await client.close(); await handler.close(); }
   });
+
+  test("C3: modern 2026-07-28 requests never emit -32002 or -32042", async () => {
+    const handler = makeHandler();
+    const missingUri = "markethub://does/not/exist";
+    try {
+      // A representative set of modern requests, including error-producing
+      // ones that historically used the reserved -32002/-32042 codes. This is
+      // scoped to modern 2026-07-28 requests only: older-protocol clients
+      // SHOULD still accept -32002 from earlier servers (legacy-compat.test.ts)
+      // and that compatibility is not prohibited here.
+      const cases: Array<{ headers: Record<string, string>; body: unknown }> = [
+        {
+          headers: { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover" },
+          body: { jsonrpc: "2.0", id: 20, method: "server/discover", params: { _meta: META } }
+        },
+        {
+          headers: { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" },
+          body: { jsonrpc: "2.0", id: 21, method: "tools/list", params: { _meta: META } }
+        },
+        {
+          headers: { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "resources/read", "Mcp-Name": missingUri },
+          body: { jsonrpc: "2.0", id: 22, method: "resources/read", params: { _meta: META, uri: missingUri } }
+        },
+        {
+          headers: { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "no/such/method" },
+          body: { jsonrpc: "2.0", id: 23, method: "no/such/method", params: { _meta: META } }
+        }
+      ];
+      for (const c of cases) {
+        const res = await raw(handler, c.headers, c.body);
+        const text = await res.text();
+        expect(text).not.toContain('"code":-32002');
+        expect(text).not.toContain('"code":-32042');
+      }
+      // The resource-not-found case must use the standard -32602 on the wire,
+      // never the reserved -32002 domain code.
+      const notFound = await raw(handler, {
+        "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "resources/read", "Mcp-Name": missingUri
+      }, { jsonrpc: "2.0", id: 24, method: "resources/read", params: { _meta: META, uri: missingUri } });
+      const body = await notFound.json() as { error: { code: number } };
+      expect(body.error.code).toBe(-32602);
+    } finally { await handler.close(); }
+  });
+
+  test("C6: modern results carry io.modelcontextprotocol/serverInfo in _meta (wire)", async () => {
+    const handler = makeHandler();
+    try {
+      const res = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover" }, {
+        jsonrpc: "2.0", id: 25, method: "server/discover", params: { _meta: META }
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { result: { _meta?: Record<string, unknown> } };
+      const meta = body.result._meta;
+      expect(meta).toBeDefined();
+      // SDK 2.4.0 stamps this SHOULD on every modern result from a Server that
+      // supplies its identity (the shared factory passes markethubts/0.1.0).
+      const serverInfo = meta?.["io.modelcontextprotocol/serverInfo"] as { name?: string; version?: string } | undefined;
+      expect(serverInfo).toBeDefined();
+      expect(serverInfo?.name).toBe("markethubts");
+      expect(typeof serverInfo?.version).toBe("string");
+      // The mandatory subscriptionId requirement is a separate assertion in
+      // M6-D's subscriptions.test.ts and is not conflated with this SHOULD.
+    } finally { await handler.close(); }
+  });
+
+  test("C18: modern server/discover advertises no unsupported extension map", async () => {
+    const handler = makeHandler();
+    try {
+      const res = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover" }, {
+        jsonrpc: "2.0", id: 26, method: "server/discover", params: { _meta: META }
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { result: { capabilities: Record<string, unknown> } };
+      const caps = body.result.capabilities;
+      expect(caps.extensions).toBeUndefined();
+      for (const key of ["tasks", "skills", "logging", "roots", "sampling", "elicitation"]) {
+        expect(caps[key]).toBeUndefined();
+      }
+      for (const key of Object.keys(caps)) {
+        expect(key.startsWith("io.modelcontextprotocol/")).toBe(false);
+      }
+    } finally { await handler.close(); }
+  });
+
+  test("C19: tools/list wire output uses JSON Schema 2020-12 with no network $ref", async () => {
+    const handler = makeHandler();
+    try {
+      const res = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" }, {
+        jsonrpc: "2.0", id: 27, method: "tools/list", params: { _meta: META }
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const body = JSON.parse(text) as { result: { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> } };
+      expect(body.result.tools.length).toBeGreaterThan(0);
+      for (const tool of body.result.tools) {
+        expect(tool.inputSchema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+      }
+      // No auto-dereferenced network $ref anywhere in the actual wire output.
+      expect(text).not.toContain('"$ref"');
+    } finally { await handler.close(); }
+  });
+
+  test("C21: deprecated methods are rejected and deprecated surfaces are not advertised on modern protocol", async () => {
+    const handler = makeHandler();
+    try {
+      // (a) Deprecated methods must be rejected with method-not-found on the
+      // modern protocol. resources.subscribe is intentionally NOT advertised
+      // as a callable method here — modern subscriptions use subscriptions/listen.
+      for (const method of ["ping", "logging/setLevel", "resources/subscribe"]) {
+        const res = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method }, {
+          jsonrpc: "2.0", id: 28, method, params: { _meta: META }
+        });
+        expect(res.status).toBe(404);
+        const body = await res.json() as { error: { code: number } };
+        expect(body.error.code).toBe(-32601);
+      }
+      // (b) Deprecated capability surfaces are not advertised in server/discover.
+      const discover = await raw(handler, { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover" }, {
+        jsonrpc: "2.0", id: 29, method: "server/discover", params: { _meta: META }
+      });
+      const caps = ((await discover.json()) as { result: { capabilities: Record<string, unknown> } }).result.capabilities;
+      for (const key of ["logging", "roots", "sampling", "tasks", "skills", "extensions"]) {
+        expect(caps[key]).toBeUndefined();
+      }
+      // (c) Legacy HTTP+SSE transport is not implemented: a GET carrying
+      // Accept: text/event-stream is rejected (405), not an opened SSE stream.
+      // This is distinct from retained 2025-era Streamable HTTP/STDIO
+      // compatibility. No SSE Last-Event-ID replay is asserted here — it is
+      // already covered by the C11 tests in this file and http-integration.test.ts.
+      const legacyGet = await handler.fetch(new Request("http://test.local/mcp", {
+        method: "GET", headers: { Accept: "text/event-stream" }
+      }));
+      expect(legacyGet.status).toBe(405);
+    } finally { await handler.close(); }
+  });
 });
