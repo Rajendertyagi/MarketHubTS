@@ -85,8 +85,12 @@ describe("mcp stdio modern (M6-A)", () => {
       const discover = await client.getDiscoverResult();
       expect(discover.supportedVersions).toContain("2026-07-28");
       const caps = discover.capabilities as Record<string, Record<string, unknown>>;
+      // §5.3: STDIO is control-plane only — no live relay, so resources.subscribe
+      // must be absent/false and ALL three listChanged bits must be false.
       expect(caps.resources?.subscribe).not.toBe(true); // no live relay on STDIO
       expect(caps.tools?.listChanged).toBe(false);
+      expect(caps.prompts?.listChanged).toBe(false);
+      expect(caps.resources?.listChanged).toBe(false);
 
       // Resource + prompt access over the spawned process.
       const snap = await client.readResource({ uri: "markethub://market/snapshot" });
@@ -97,7 +101,12 @@ describe("mcp stdio modern (M6-A)", () => {
       // subscriptions/listen control-plane: SDK handles it, but the honored
       // filter must NOT claim resourceSubscriptions (no event relay on STDIO).
       const sub = await client.listen({ resourceSubscriptions: ["markethub://market/snapshot"] });
+      // §5.3: the honored filter must omit resourceSubscriptions (no relay) and
+      // ALL three listChanged bits (static inventories) on STDIO too.
       expect(sub.honoredFilter.resourceSubscriptions).toBeUndefined();
+      expect(sub.honoredFilter.toolsListChanged).toBeUndefined();
+      expect(sub.honoredFilter.promptsListChanged).toBeUndefined();
+      expect(sub.honoredFilter.resourcesListChanged).toBeUndefined();
       // C12: client cancellation on STDIO resolves the subscription as 'local'.
       const closed = sub.closed;
       await sub.close();

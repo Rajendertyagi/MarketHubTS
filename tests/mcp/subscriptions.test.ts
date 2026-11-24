@@ -150,8 +150,13 @@ describe("M6-D subscriptions (modern HTTP, in-process)", () => {
       expect(await closed).toBe("local");
 
       handler.notify.resourceUpdated(SNAPSHOT_URI);
-      await Bun.sleep(20);
-      expect(count).toBe(0); // no notification after cancellation
+      // Bounded grace-window poll: assert no notification arrives at any point
+      // after cancellation (stronger than a single fixed-delay snapshot).
+      const graceDeadline = Date.now() + 50;
+      while (Date.now() < graceDeadline) {
+        await Bun.sleep(5);
+        expect(count).toBe(0); // no notification after cancellation
+      }
     } finally {
       await client.close();
       await handler.close();
