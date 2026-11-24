@@ -13,6 +13,7 @@ import { FyersAdapter } from "@markethub/broker-fyers";
 import { createApp } from "./app";
 import { createHttpMcpServices } from "./mcp-services";
 import { createMcpNotificationBridge, type McpNotificationBridge } from "./mcp-notification-bridge";
+import { wrapMcpHandlerFetch, MCP_SSE_MAX_BUFFERED_BYTES, MCP_SSE_MAX_BUFFERED_FRAMES } from "./mcp-sse-bound";
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
@@ -146,7 +147,7 @@ async function main() {
   const runtimeDb = db;
   const runtimeHub = hub;
   const runtimeCatalog = catalog;
-  mcpHandler = createMcpHandler((ctx) =>
+  const rawMcpHandler = createMcpHandler((ctx) =>
     createMcpServer(ctx, createHttpMcpServices(
       config, runtimeDb, runtimeCatalog, runtimeHub, registry, service, historicalService, snapshotService, activityRepo,
       (error) => logger.warn("mcp_activity_write_failed", {
@@ -162,6 +163,23 @@ async function main() {
       })
     }
   );
+
+  // M6-D slow-consumer mitigation: wrap the handler's fetch so SSE listen
+  // streams are bounded by an application-owned actively-drained buffer. The
+  // wrapper preserves the full handler shape (close/notify/bus delegated), and
+  // is applied BEFORE the bridge/app/shutdown capture the handler identity.
+  // Bounds are measurement-derived (docs/M6_D_FANOUT_EVIDENCE.md §7).
+  mcpHandler = wrapMcpHandlerFetch(rawMcpHandler, {
+    maxBufferedBytes: MCP_SSE_MAX_BUFFERED_BYTES,
+    maxBufferedFrames: MCP_SSE_MAX_BUFFERED_FRAMES,
+    onOverflow: (info) => logger.warn("mcp_sse_slow_consumer_overflow", {
+      reason: info.reason,
+      bufferedBytes: info.bufferedBytes,
+      bufferedFrames: info.bufferedFrames,
+      maxBufferedBytes: info.maxBufferedBytes,
+      maxBufferedFrames: info.maxBufferedFrames
+    })
+  });
 
   // M6-D: one process-lifetime bridge from the canonical live-change source to
   // the handler's notifier. Never created per request or per subscription.
