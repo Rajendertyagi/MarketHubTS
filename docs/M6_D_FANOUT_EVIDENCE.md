@@ -82,3 +82,11 @@ The stream is closed gracefully before draining so the queue can be counted. The
 - Measurements are local, in-process, and agent-reported; no CI run exists for these commits.
 - Heap deltas are approximate (GC timing) and recorded as evidence, not as a hard bound.
 - `maxSubscriptions` bounds **stream count only** — it does not bound per-stream queued frames/bytes (verified in SDK v2.4.0 `listenRouter-*.mjs`).
+
+## 6. Named acceptance decision — D slow-consumer residual risk
+
+- **Decision:** "D slow-consumer residual risk"
+- **Owner:** product owner
+- **Status:** **OPEN — product-owner decision required before M6-D acceptance.**
+- **Risk (not mitigated):** the SDK imposes no per-stream frame or byte limit; `maxSubscriptions = 64` bounds stream count only, and the 50 ms budget bounds publish latency only. The slow-consumer evidence in §4 measures only **M = 20 updates** (22 queued frames / 4,126 bytes on one unread stream) and does **not** establish a safe upper bound under sustained load. No custom queue, byte cap or backpressure subsystem was added.
+- **Disposition required:** the product owner must either explicitly accept this residual risk or authorize a separately scoped bounded follow-up. An OPEN decision blocks M6-D acceptance even if every other §8.1 item passes. Do not record the risk as mitigated; do not change `maxSubscriptions = 64` or the 50 ms budget on account of this item.

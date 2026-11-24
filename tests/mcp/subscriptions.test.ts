@@ -70,7 +70,11 @@ describe("M6-D subscriptions (modern HTTP, in-process)", () => {
 
       const sub = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
       expect(sub.honoredFilter.resourceSubscriptions).toEqual([SNAPSHOT_URI]);
+      // §5.3: all three listChanged bits must be absent from the honored filter
+      // (the inventories are static and the capabilities advertise false).
       expect(sub.honoredFilter.toolsListChanged).toBeUndefined();
+      expect(sub.honoredFilter.promptsListChanged).toBeUndefined();
+      expect(sub.honoredFilter.resourcesListChanged).toBeUndefined();
 
       handler.notify.resourceUpdated(SNAPSHOT_URI);
       await Bun.sleep(20);
@@ -125,6 +129,29 @@ describe("M6-D subscriptions (modern HTTP, in-process)", () => {
       await Bun.sleep(20);
       expect(count).toBe(0);
       await sub.close();
+    } finally {
+      await client.close();
+      await handler.close();
+    }
+  });
+
+  test("client cancellation closes the listen stream and stops further notifications", async () => {
+    // §5.5/§7.1: on modern HTTP the client cancels by closing the request SSE
+    // stream. The subscription resolves as 'local' and the server must not
+    // deliver further notifications to the torn-down stream.
+    const handler = makeHandler();
+    const client = await connect(handler);
+    try {
+      let count = 0;
+      client.setNotificationHandler("notifications/resources/updated", () => { count++; });
+      const sub = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      const closed = sub.closed;
+      await sub.close();
+      expect(await closed).toBe("local");
+
+      handler.notify.resourceUpdated(SNAPSHOT_URI);
+      await Bun.sleep(20);
+      expect(count).toBe(0); // no notification after cancellation
     } finally {
       await client.close();
       await handler.close();
