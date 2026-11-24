@@ -131,6 +131,11 @@ describe("M6-D bounded fan-out (synthetic load through the real bridge)", () => 
     expect(evidence.length).toBe(3);
   });
 
+  // NOTE: this test deliberately uses a raw createMcpHandler (via makeHarness)
+  // WITHOUT wrapMcpHandlerFetch, to document the underlying SDK behaviour: an
+  // unread stream queues frames with no per-stream frame/byte bound. Production
+  // wrapped-handler BOUNDED behaviour (16 KiB / 96-frame overflow contract) is
+  // covered by tests/mcp/slow-consumer.test.ts and tests/mcp/sse-design-a.test.ts.
   test("an unread SSE stream does not block the publisher; drain counts queued frames", async () => {
     const h = makeHarness();
     const fast = new Client({ name: "fast", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });

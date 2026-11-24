@@ -3,6 +3,7 @@
 > **Document type:** Handoff aid for a fresh ChatGPT conversation. Not a governing architecture plan, not an implementation authorization, and not a status authority.
 > **Created:** 2026-11-24 by OpenCode from direct repository inspection.
 > **Status of this document:** Independently verified against the local checkout and `origin` at the time of writing. Re-check live SHAs before relying on it.
+> **Reconciliation (2026-11-25):** the "current HEAD `d19d721`" and "awaiting independent review / not accepted" statements below were accurate at creation (2026-11-24) and are **preserved as historical**; see §12 for the current state.
 
 ---
 
@@ -344,3 +345,16 @@ These two blocks are **historical snapshots from the original creation task**. I
 ---
 
 **End of handoff context.**
+
+---
+
+## 12. Reconciliation note (2026-11-25) — current state supersedes historical SHAs
+
+> **Scope:** documentation-only reconciliation. This handoff was written on 2026-11-24 as a snapshot for a fresh ChatGPT conversation. Its recorded SHAs, "current HEAD" labels, "awaiting independent review" wording and "not accepted" status statements were **accurate at that time** and are preserved unchanged above as historical evidence and decisions. They are **not** claims about the current repository. This note corrects the stale references without rewriting the historical record.
+
+- **Current HEAD:** `9b47bdd8d8fafaab138bbff83ebc2cf716617041` on `develop`. The earlier "current HEAD `d19d72120d8dd34a064f63fbe644dc67b61a15a7`" references in §§1, 5, 8 and 11 are **historical**. The closeout documentation and the two new E tests are **uncommitted** in the working tree at this HEAD — nothing here claims they are published. `main` / `origin/main` remain untouched at `865d86f393a29bc1ec8d455a51d9efa82d722c48`.
+- **M6 status correction:** the "Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized" and "B4/D/E not accepted; M6 not complete" statements in §§1, 5 and 8 are **historical**. As of 2026-11-25, **M6-B4, M6-D and M6-E are all ACCEPTED**, the combined §8.3 gate is **PASSED**, and **M6 is accepted and closed**. Acceptance records: [`M6_B_PLAN.md`](M6_B_PLAN.md) §12, [`M6_D_E_PLAN.md`](M6_D_E_PLAN.md) §14/§8.3.1, [`M6_PLAN.md`](M6_PLAN.md) §16, [`PROJECT_STATUS.md`](PROJECT_STATUS.md) §8.
+- **Independent review:** three fresh-context reviews by `opencode/iceman-free`, all verdict **KEEP**, no blockers/majors. Reviewed ranges: B4 — `9b47bdd` committed B4 scope (uncommitted E tests excluded); D — `9b47bdd` committed D scope (uncommitted E/B4 fixes excluded); E — `9b47bdd` plus uncommitted E test changes.
+- **Verification correction:** the historical 1076/0 figure at `2ed4c1e` (§§1, 7, 8) is retained for comparison. The **final** full suite is **1115 pass / 0 fail**, 9164 `expect()` calls, 96 files, exit 0 (baseline 1113/0 at `8291738`, +2 = two new E tests); `bun run typecheck` and `bun run build` exit 0 (pre-existing web chunk >500 kB warning); `git diff --check` clean. **All results are local agent-reported evidence — NOT CI**; GitHub reported zero status checks / workflow runs.
+- **Preserved user work:** `docs/REFERENCES.md`, `docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` and `docs/M6_D_SLOW_CONSUMER_MITIGATION_PLAN.md` remain preserved and untouched by this closeout.
+- **Unchanged gates and decisions:** Stage G, M5 Phase 4B and M7 remain locked; no live provider connection, live REST verification, production activation or provider activation occurred; production drivers remain locked. The LAN scope decision (physical LAN out of revised M6 scope), the CLOSED — MITIGATED slow-consumer decision, the 16 KiB / 96-frame caps, SDK 2.4.0, dependencies, manifests, lockfiles, DB and all application source/tests are unchanged. The section 7 findings A–E dispositions and section 8.2 rejected approaches remain as recorded — this note does not claim they proved more than they did.

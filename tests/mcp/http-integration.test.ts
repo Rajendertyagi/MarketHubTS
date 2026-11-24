@@ -360,6 +360,102 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
     }
   });
 
+  /**
+   * M6-E combined-gap 2 (§8.3): ONE scenario, ONE handler/bridge/listener/client,
+   * proving the entire D+E sequence end to end. This is deliberately a single
+   * test — not a composition of separate tests — so a gap in any step (notify,
+   * read-after-notify by cursor, or graceful close on handler.close()) fails the
+   * combined gate. E1 and E2 below remain unchanged and cover shutdown/overflow
+   * in isolation.
+   */
+  test("combined D+E gate: listen, notify, read snapshot + feed by cursor, graceful close on one handler", async () => {
+    const h = makeHarness();
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let client: Client | null = null;
+    try {
+      // Actual Hono/Bun listener; the SAME wrapped handler the bridge publishes to.
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+
+      // 1) Connect a pinned modern MCP client to the real listener.
+      client = await connect(url, "combined-de-gate");
+      expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
+      const discover = await client.getDiscoverResult();
+      const caps = discover.capabilities as Record<string, Record<string, unknown>>;
+      expect(caps.resources?.subscribe).toBe(true); // modern HTTP owns the bridge
+
+      // 2) Open subscriptions/listen on the SAME handler/bridge/listener.
+      let notifications = 0;
+      const uris = new Set<string>();
+      client.setNotificationHandler("notifications/resources/updated", (note) => {
+        notifications++;
+        const params = note.params as { uri?: string } | undefined;
+        if (params?.uri) uris.add(params.uri);
+      });
+      const sub = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      expect(sub.honoredFilter.resourceSubscriptions).toEqual([SNAPSHOT_URI]);
+
+      // 3) Trigger a synthetic canonical market-state change through the bridge
+      // (no live provider — same canonical service pattern as E1/E2).
+      h.service.track("COMBINED-DE-1");
+
+      // 4) Receive the correct notification: URI-scoped, payload-free signal.
+      const deadline = Date.now() + 2000;
+      while (notifications < 1 && Date.now() < deadline) await Bun.sleep(5);
+      expect(notifications).toBeGreaterThanOrEqual(1);
+      expect([...uris]).toEqual([SNAPSHOT_URI]);
+
+      // 5) Read the updated market snapshot via the SAME client.
+      const snap = await client.readResource({ uri: SNAPSHOT_URI });
+      expect(snap.contents[0]!.mimeType).toBe("application/json");
+      const snapBody = JSON.parse(snap.contents[0]!.text) as { revision: number };
+      expect(snapBody.revision).toBeGreaterThanOrEqual(1);
+
+      // 6) Read the live event feed using its cursor (bootstrap to obtain the
+      // opaque resumeCursor, then an incremental read with that cursor).
+      const feed = await client.readResource({ uri: "markethub://events/live?after=first&limit=100" });
+      expect(feed.contents[0]!.mimeType).toBe("application/json");
+      const feedBody = JSON.parse(feed.contents[0]!.text) as {
+        events: unknown[]; nextCursor: string | null; resumeCursor: string;
+      };
+      expect(feedBody.events.length).toBeGreaterThanOrEqual(1);
+      expect(typeof feedBody.resumeCursor).toBe("string");
+      const incremental = await client.readResource({
+        uri: `markethub://events/live?after=${feedBody.resumeCursor}&limit=100`
+      });
+      expect(incremental.contents[0]!.mimeType).toBe("application/json");
+      const incrementalBody = JSON.parse(incremental.contents[0]!.text) as {
+        events: unknown[]; resumeCursor: string;
+      };
+      expect(Array.isArray(incrementalBody.events)).toBe(true);
+      expect(typeof incrementalBody.resumeCursor).toBe("string");
+
+      // 7) Call handler.close() while the client is still open — do NOT close
+      // the client first. The wrapped handler delegates close() to the raw
+      // handler, whose listenRouter.closeAll() completes active listen streams.
+      const closePromise = h.handler.close();
+
+      // 8) Verify the subscription closes gracefully on the SAME handler.
+      const reason = await withTimeout(
+        sub.closed, 3000, "combined D+E gate: listen stream did not close gracefully"
+      );
+      expect(reason).toBe("graceful");
+      await withTimeout(closePromise, 3000, "combined D+E gate: handler.close() did not complete");
+
+      // Deterministic listener shutdown after the handler is closed.
+      await withTimeout(server.stop(true), 3000, "combined D+E gate: listener stop did not complete");
+      server = null;
+    } finally {
+      if (client) await client.close().catch(() => {});
+      await h.handler.close().catch(() => {});
+      h.bridge.stop();
+      h.hub.stop();
+      if (server) await server.stop(true).catch(() => {});
+      closeDatabaseHandle(h.db);
+      removeTempDir(h.dir);
+    }
+  });
+
   test("missed-event catch-up: >100 events while disconnected, reconnect, page through nextCursor", async () => {
     const h = makeHarness(); // replayMaxEvents=1000 retains the whole workload
     let server: ReturnType<typeof Bun.serve> | null = null;

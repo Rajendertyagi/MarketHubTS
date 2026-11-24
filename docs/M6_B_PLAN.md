@@ -1,7 +1,7 @@
 # M6-B — MCP Capabilities over Shared Services
 
-> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented and published on `develop` at `0d58bbb`**; **M6-B4 implementation is complete** — `tests/mcp/parity.test.ts` (real HTTP/STDIO parity) and the named C3/C6/C18/C19/C21 wire assertions in `tests/mcp/conformance.test.ts` exist and pass, with a source-level independent review verdict **KEEP**. **B4 is not formally accepted**: closeout/acceptance remains a separate product-owner gate. The canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) governs B4/D/E execution (**Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized.**) — **planning only**, not finally approved or implementation-ready; it grants no implementation authorization and does not mark B4 accepted.
-> **Last updated:** 2026-11-24
+> **Status:** Governing plan. **M6-B1 is implemented and published** (`d50b372`, with restart-safe event-feed cursors and always-present `resumeCursor` at `6fd088d`/`be94219`); **M6-B2 is implemented and published** (`0e0ec6d`: nine tools over both transports, HTTP/STDIO adapters, provider-status composition, service sharing; a follow-up HTTP-adapter testability correction is published at `a0e707e`). **M6-B3 is implemented and published on `develop` at `0d58bbb`**; **M6-B4 implementation is complete** — `tests/mcp/parity.test.ts` (real HTTP/STDIO parity) and the named C3/C6/C18/C19/C21 wire assertions in `tests/mcp/conformance.test.ts` exist and pass, with a source-level independent review verdict **KEEP**. **M6-B4 is ACCEPTED (2026-11-25)** — formal acceptance record in §12 below; this B4 acceptance does **not** imply M6-D or M6-E acceptance. The canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) governed B4/D/E execution; its "Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized" wording is **historical** (superseded by the 2026-11-25 acceptance records; see that plan's dated reconciliation note).
+> **Last updated:** 2026-11-25 (B4 formal acceptance record added — §12; status line reconciled)
 > **Depends on:** M6-A (implemented at `7860c7f`: Streamable HTTP at `/mcp`, retained STDIO, one shared factory, `markethub_health` only) and M6-B1 (catalog search + event-feed seams; final implementation baseline `be9421911ad74766a200ef091fcacdcef8448177`).
 > **Governing design:** [`M6_PLAN.md`](M6_PLAN.md) §4.1.2 (McpServices), §4.1.3 (STDIO parity), §5 (inventory), §5.1–§5.3 (catalog search, annotations, capability table), §10 (M6-B), §11–§12 (tests/acceptance). This document adds execution detail; it does not change that design.
 
@@ -191,7 +191,7 @@ Do not start a sub-phase without its own authorization. M6-B is not complete unt
 
 **B4 ownership boundary (see canonical completion plan §4.1/§4.4):** B4 may create `tests/mcp/parity.test.ts` and add missing named assertions only in B4-owned conformance/parity evidence files. Existing tests from previously accepted phases (M6-A/B1/B2/B3) and M6-D-owned tests (for example `tests/mcp/subscriptions.test.ts`) are **evidence-only**; any change to them requires a separately documented fix-forward with its own authorization, not B4 scope.
 
-> **B4 execution reference:** the canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) (**Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized.**; planning only, not approved/implementation-ready) governs the B4 work package and the subsequent D/E work packages; each still requires its own separate authorization. B4 implementation is complete with a source-level KEEP review, but **no B4 acceptance is claimed here** — closeout remains a separate product-owner gate.
+> **B4 execution reference (historical):** the canonical completion plan [`M6_B4_D_E_COMPLETION_PLAN.md`](M6_B4_D_E_COMPLETION_PLAN.md) (**Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized.**; planning only, not approved/implementation-ready) governed the B4 work package and the subsequent D/E work packages; each required its own separate authorization. B4 implementation is complete with a source-level KEEP review; **B4 was formally accepted on 2026-11-25 (§12)** — the earlier "no B4 acceptance claimed" wording is historical and is superseded by §12.
 
 ## 8. Tests
 
@@ -223,3 +223,27 @@ Do not start a sub-phase without its own authorization. M6-B is not complete unt
 ## 11. Reporting format for the implementation assignment
 
 Report: what was implemented; exact files added/modified; dependency changes (expected: none); tests and actual results; parity evidence; acceptance-criteria checklist; remaining issues; exact `git status` and HEAD. Do not claim M6-C/D/E complete. No commit/push without separate authorization.
+
+---
+
+## 12. M6-B4 formal acceptance record (2026-11-25)
+
+> **Scope:** documentation-only closeout. This section records a formal acceptance decision already authorized by the product owner; it does not change application source, tests, manifests, lockfiles, DB or dependencies. Historical statements elsewhere in this document (including the "not formally accepted" and "awaiting independent review" wording) are preserved as historical and are superseded by this record. **B4 acceptance does not imply M6-D or M6-E acceptance.**
+
+- **Verdict:** **ACCEPTED** (2026-11-25).
+- **Reviewer:** `opencode/iceman-free` — three fresh-context independent reviews (B4, M6-D, M6-E), all verdict **KEEP**, with **no blockers and no majors**.
+- **Reviewed range:** `9b47bdd` — the committed B4 scope only. Uncommitted E tests were explicitly excluded from the B4 review range.
+- **Findings and disposition:**
+  - Minor — C3 test name: **FIXED**.
+  - Minor — STDIO parity backend is a stub local API: **recorded as a documented limitation, not a defect** (see below).
+  - Nit — C14 matrix cell: **FIXED**.
+  - Nit — stale C20 command path: no stale reference found; **no change**.
+- **Focused test results (local, not CI):**
+  - `bun test tests/mcp/conformance.test.ts tests/mcp/parity.test.ts` → **17 pass / 0 fail**.
+  - C20 split (`tests/providers/security.test.ts`, `tests/mcp/activity.test.ts`, `tests/mcp/http-integration.test.ts`) → **42 pass / 0 fail**.
+  - `git diff --check` → clean.
+- **C13–C16 / C18–C19 mapping summary:** each row is mapped to a named assertion (C13 standard operations and deterministic `tools/list` order; C14 opaque keyset pagination including snapshot pages; C15 cache hints on all six cacheable results; C16 MRTR not used — no server-initiated requests; C18 no unsupported extensions advertised; C19 JSON Schema 2020-12 with no network `$ref`). `tests/mcp/parity.test.ts` exercises the **real HTTP adapter and a spawned STDIO adapter**; unavailable capabilities (`futures_chain`, `market_information`, `markethub://events/alerts`) are asserted as explicit `unavailable`, not silently omitted. No unsupported extensions and no MRTR/server-initiated requests were found.
+- **Recorded limitation (not a blocker):** the STDIO parity backend is a **stub local API**. Parity evidence therefore proves **transport/adapter parity** (same registration, same response semantics over HTTP and STDIO where the local API exposes a capability) — it is **not** full-stack REST composition parity. This is a documented limitation of the B4 evidence, not a defect and not an acceptance blocker.
+- **Evidence labeling:** all results above are **local agent-reported evidence — NOT CI**. GitHub reported zero CI status checks / workflow runs; no CI pass is claimed.
+- **Working-tree honesty:** the closeout documentation and the two new E tests are **uncommitted** at HEAD `9b47bdd8d8fafaab138bbff83ebc2cf716617041`; nothing in this record claims publication. `main` remains untouched at `865d86f`.
+- **Gates unchanged:** Stage G, M5 Phase 4B and M7 remain locked; no live provider connection, no production activation and no new dependency were introduced.

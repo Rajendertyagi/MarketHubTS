@@ -112,7 +112,7 @@ describe("M6-E C1–C21 named wire assertions", () => {
     } finally { await handler.close(); }
   });
 
-  test("C3: invalid tool params are rejected with -32602", async () => {
+  test("C3: invalid tool params return an in-band isError result (not a protocol -32602)", async () => {
     const handler = makeHandler();
     try {
       const res = await raw(handler, {
