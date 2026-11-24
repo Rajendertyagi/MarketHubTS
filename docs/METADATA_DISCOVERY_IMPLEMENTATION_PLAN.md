@@ -1,6 +1,6 @@
 # Backend-Driven Metadata & Capability Discovery — Detailed Implementation Plan
 
-> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a, Phase 3 WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) have been implemented, tested and published on `develop` (close-outs in the respective Phase 2/3/5 plan §12 and Phase 6 plan §12; all independently audited KEEP); Phase 6 is complete, and Phases 4 and 7 remain planned.
+> **Status:** Planning document plus implementation record. **Documentation only — no application, test, contract, API, migration or configuration change is made by this document.** Every phase requires separate implementation authorization. Phase 1, Phase 3 WP 3a, Phase 3 WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) have been implemented, tested and published on `develop` (close-outs in the respective Phase 2/3/5 plan §12 and Phase 6 plan §12; all independently audited KEEP); Phase 6 is complete. Phase 4 (provider-backed derivative expiry discovery) is complete and published on `develop` (WP4A `03adab1` + fixes `bcec6ab`/`8785670`, WP4B `e99c5f3`, WP4C `9862464` + fix `13061da`, canonical plan `ed967e3`; all independently audited KEEP with no findings); Phase 7 remains planned.
 > **Governing:** [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025, source-verified inventory §10), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4.1 (phase table), [METADATA_DISCOVERY_FIRST_SLICE_PLAN.md](METADATA_DISCOVERY_FIRST_SLICE_PLAN.md) (bounded first slice), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md) §4.1 (Option and Metadata Impact Assessment).
 > **Last updated:** 2026-11-22.
 
@@ -8,7 +8,7 @@
 
 - **Phase numbers are architectural groupings, not implementation order.** The canonical increment order is defined in §1 and matches the roadmap and first-slice plan. Phase 2 is **not** the second implementation task.
 - **Architecture areas A–J** are the source-verified centralization inventory in [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) §10. The coverage matrix in §10 of this plan maps every area to a phase.
-- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) are now implemented and published on `develop`; the descriptor module, read-only metadata endpoint, provider/capability rendering, retention consistency, explicit snapshot provider selection and accurate Overview status exist. Phase 6 is complete. No universal registry or metadata database exists.
+- **"Planned" means not implemented.** Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 4 WP 4A/4B/4C, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) are now implemented and published on `develop`; the descriptor module, read-only metadata endpoint, provider/capability rendering, provider-backed derivative expiry discovery (local Upstox/FYERS masters, bounded expiry API and Snapshot Panel selector), retention consistency, explicit snapshot provider selection and accurate Overview status exist. Phase 4 and Phase 6 are complete. No universal registry or metadata database exists.
 - **Endpoint decision resolved.** Phase 2 WP 2b selected a dedicated read-only `GET /api/mcp/operations` endpoint (the WebUI cannot import server-side `mcp-core`); no HTTP endpoint is a prerequisite for shared contract values, which remain direct contract imports.
 - **Boundaries:** no M6-C/M6-D/E/B4 ownership change, no physical LAN testing, no universal registry/metadata database/microservice/generic form framework, no dynamic provider claim before contract/registry support, no hardcoded expiry or computed contracts.
 
@@ -29,7 +29,7 @@
 1. **First implementation milestone** — Phase 1 shared-contract consistency + Phase 3 WP 3a (historical interval selector from `candleIntervalSchema`).
 2. Phase 3 WP 3b–3c — reusable instrument picker using existing `GET /api/catalog/search` — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_3_PLAN.md](METADATA_DISCOVERY_PHASE_3_PLAN.md) §12).
 3. Phase 2 — MCP Activity Operation selector, after the descriptor-delivery decision (WP 2b) — **implemented, tested and published on `develop`** (see [METADATA_DISCOVERY_PHASE_2_PLAN.md](METADATA_DISCOVERY_PHASE_2_PLAN.md) §12).
-4. Phase 4 (blocked on catalog population) as its prerequisites clear; Phase 6 is complete and published on `develop` (WP6A/WP6B/WP6C all implemented, audited KEEP); Phase 7 last. Phase 5 is complete and published.
+4. Phase 4 (provider-backed derivative expiry discovery) is complete and published on `develop` (WP4A `03adab1` + fixes `bcec6ab`/`8785670`, WP4B `e99c5f3`, WP4C `9862464` + fix `13061da`, canonical plan `ed967e3`; all audited KEEP); Phase 6 is complete and published on `develop` (WP6A/WP6B/WP6C all implemented, audited KEEP); Phase 7 last. Phase 5 is complete and published.
 
 ## 2. Phase 0 — Architecture & contract design
 
@@ -99,7 +99,7 @@
 **Work packages:**
 - **3a — Historical interval selector (area C, first milestone).** Remove `HistoricalPanel.tsx:12` local `INTERVALS`; derive from `candleIntervalSchema.options` (`contracts/src/historical.ts:7–11`, 16 values). Fix the `30m` focus-value mismatch (`historicalFocusToForm` at `:38–49`). No API.
 - **3b — Catalog client + picker (area E).** New `web/src/lib/catalog.ts` (typed fetch, Zod parse, typed error, reuse `lib/activity.ts:40–54` pattern) and `web/src/components/InstrumentPicker.tsx` (value `canonicalId`, label `displayName`/`canonicalSymbol` + exchange). Debounce, `AbortController` cancellation, bounded `limit` ≤100, optional cursor. No faceted filters without repository support; no full-catalogue download.
-- **3c — Panel adoption.** Replace manual IDs in `SubscriptionPanel.tsx:84–91`, `HistoricalPanel.tsx:181`, `SnapshotPanel.tsx:105`; keep existing submit/config request shapes unchanged. Snapshot expiry stays manual (no authoritative source).
+- **3c — Panel adoption.** Replace manual IDs in `SubscriptionPanel.tsx:84–91`, `HistoricalPanel.tsx:181`, `SnapshotPanel.tsx:105`; keep existing submit/config request shapes unchanged. Snapshot expiry stayed manual at Phase 3 time (no authoritative source then); Phase 4 later added a provider-backed expiry selector with the manual input retained as a clearly-marked-unverified fallback.
 
 **Expected files:** `HistoricalPanel.tsx`, `web/src/lib/catalog.ts` (new), `web/src/components/InstrumentPicker.tsx` (new), three panels, tests (`tests/web/historical.test.ts`, `subscriptions.test.ts`, `snapshots.test.ts`, new `instrument-picker.test.ts`).
 
@@ -109,25 +109,25 @@
 
 **Risks:** faceted filters need repo/API extension; bounded Load More pagination is implemented (single-flight, 100-result cap); no-DOM test approach.
 
-## 6. Phase 4 — Derivative domain discovery
+## 6. Phase 4 — Derivative domain discovery — COMPLETE (WP4A/WP4B/WP4C published on `develop`)
 
-**Objective:** expiry read API from real derivative records.
+**Objective:** provider-backed expiry discovery from local provider master files.
 
-**Prerequisites:** a populated catalog and a bounded query — **currently absent** (DB has 0 rows; `findDerivativeContracts` uses unbounded `q.all()` at `database/src/repositories/catalog.ts:313`; no production sync). **Implementation order:** deferred/blocked.
+**Prerequisites:** resolved by importing public Upstox BOD and FYERS Symbol Master files into a local catalogue (no credentials, no live calls) and adding a bounded query. **Implementation order:** completed.
 
-**Work packages:**
-- **4a — Unblock data.** Establish an authoritative population path (catalog sync or verified source). No weekday-derived expiries, no hardcoded dates.
-- **4b — Bounded query.** Add limit/order/cursor to `findDerivativeContracts` (`market-core/src/types.ts:52`, `catalog.ts:307–315`).
-- **4c — Read API.** New read-only expiry endpoint from real records; contract availability/filtering; strikes/exact contracts only where data supports them.
-- **4d — WebUI expiry selector.** Replace manual `SnapshotPanel.tsx:106` expiry field when authoritative data exists; honest empty/unavailable state until then.
+**Work packages (all implemented, independently audited KEEP and published on `develop`):**
+- **4A — Import provider masters:** `03adab1` with audit fixes `bcec6ab` (refresh, fixtures and conflict tests) and `8785670` (provider source dates derived from master data, not fetch time). Builds a local catalogue from public Upstox BOD + FYERS Symbol Master files; no credentials and no live provider calls.
+- **4B — Bounded expiry API:** `e99c5f3`. Adds `GET /api/catalog/derivative-expiries`, a bounded, provider-aware read API with honest FRESH/STALE/UNKNOWN freshness.
+- **4C — Snapshot Panel expiry selector:** `9862464` with fix `13061da` (drop stale Catalogue provenance when expiry fetch fails). Expiry selector backed by the local expiry API, with a manual fallback clearly marked unverified.
+- **Canonical plan:** `ed967e3` (`METADATA_DISCOVERY_PHASE_4_PLAN.md`, retained unchanged as the implementation record).
 
 **Expected files:** `market-core` repository/service, new read-only API module, `SnapshotPanel.tsx`, tests.
 
-**Tests:** expiry options from real records; bounded query; honest empty/unavailable state.
+**Tests:** expiry options from real master records; bounded query; honest empty/unavailable state. Full suite 1061 pass / 2 fail (2 pre-existing Windows EBUSY temp-dir cleanup flakes in untouched supervisor tests, 45/45 pass in isolation); typecheck, build and diff-check clean (local/agent-reported, not CI).
 
-**Acceptance:** no invented expiry data; bounded responses; no speculative strikes.
+**Acceptance:** no invented expiry data; bounded responses; no speculative strikes; provider identity fixed `UPSTOX`/`FYERS` (no Automatic option, no FYERS default); no live provider connection or activation; no full exchange catalogue claim (broker-available coverage only); Stage G untouched.
 
-**Risks:** DB empty; unbounded query; no population path; authoritative data unverified. **Do not start this phase until prerequisites clear.**
+**Risks / resolution:** all three work packages independently audited KEEP with no findings (code by `opencode/hy4-flash-free`, audit by `opencode/iceman-free`).
 
 ## 7. Phase 5 — Provider & capability extensibility — IMPLEMENTED (WP 5A/5B/5C.1/5C.2; published on `develop`)
 
@@ -167,7 +167,7 @@
 
 **Acceptance:** no silent service-order change; no invented fallback; honest status messaging.
 
-**Risks:** explicit vs omitted provider semantics resolved in WP6B (explicit-only, no Automatic option); WP6C delivered as a presentation-only mapping using the existing status field. Phase 4 remains blocked on catalog population and Phase 7 remains separately gated.
+**Risks:** explicit vs omitted provider semantics resolved in WP6B (explicit-only, no Automatic option); WP6C delivered as a presentation-only mapping using the existing status field. Phase 4 is complete and published on `develop` (see §6) and Phase 7 remains separately gated.
 
 ## 9. Phase 7 — Cross-system acceptance
 
@@ -224,15 +224,15 @@ An audit was performed against the governing documents and actual source. Result
 | Ownership model unchanged | **Pass** — five categories preserved; no universal registry/DB/microservice/form framework |
 | Provider identity fixed | **Pass** — WP 5a keeps UPSTOX/FYERS until contract/registry extended |
 | Catalog search bounded | **Pass** — WP 3b uses existing bounded API; no full-catalogue download |
-| Derivative expiry blocked | **Pass** — Phase 4 explicitly deferred on populated data + bounded query |
+| Derivative expiry complete | **Pass** — Phase 4 (WP4A/4B/4C) implemented, audited KEEP and published on `develop`; provider-backed expiry discovery from local Upstox/FYERS masters with a bounded query |
 | M6 scope / LAN untouched | **Pass** — no M6 ownership change; no physical LAN testing |
-| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) are marked implemented/published; Phase 6 is complete, and Phases 4 and 7 remain planned |
+| Proposed vs implemented | **Pass** — Phase 1, Phase 3 WP 3a/WP 3b–3c, Phase 2 WP 2a–2c, Phase 4 WP 4A/4B/4C, Phase 5 WP 5A/5B/5C.1/5C.2 and all three Phase 6 work packages (WP6A/WP6B/WP6C) are marked implemented/published; Phase 4 and Phase 6 are complete, and Phase 7 remains planned |
 | Area coverage A–J | **Pass** — §10 matrix covers all ten areas |
-| Dependencies acyclic | **Pass** — §1 graph has no cycles; Phase 4 blocked, not looping |
+| Dependencies acyclic | **Pass** — §1 graph has no cycles; Phase 4 complete, not looping |
 | File paths plausible | **Pass** — all paths match source verified in architecture doc §10 |
 
 **Findings requiring attention during implementation (not plan defects):**
-1. Phase 4 cannot start until a catalog population path and bounded query exist — treat as a hard gate, not a scheduling preference.
+1. Phase 4's prerequisites (a catalog population path and bounded query) were resolved by importing public Upstox BOD + FYERS Symbol Master files into a local catalogue and adding a bounded query; Phase 4 is now complete and published on `develop`.
 2. Phase 2 WP 2b recorded its evidence and selected a dedicated read-only endpoint; it is now implemented and published.
 3. Phase 6 WP 6b's product decision on automatic vs explicit provider preference is **resolved**: explicit-only selection, no "Automatic" option, no FYERS default, options derived from `providerIdSchema`. Implemented and published in WP6B (`d132894`). WP6C (`b37fa67`) completed the phase with a presentation-only OverviewStatus component; all three WPs audited KEEP and Phase 6 is complete.
 4. No-DOM test approach for debounce/cancellation must be validated in Phase 3 (pure helpers + `renderToStaticMarkup` pattern already used in `tests/web/`).

@@ -205,7 +205,7 @@ Do not add exchange/category/segment filters. Do not search alias or ISIN fields
 
 **SnapshotPanel.tsx**
 - Replace only the underlying canonical-ID text input with the picker.
-- Keep the expiry text input manual. Expiry discovery is Phase 4 and is currently blocked by missing authoritative populated derivative data and an unbounded derivative query.
+- Keep the expiry text input manual as a fallback. Expiry discovery now exists (Phase 4, complete: WP4C provider-backed expiry selector from local Upstox BOD + FYERS Symbol Master files via bounded `GET /api/catalog/derivative-expiries`, with the manual fallback clearly marked unverified); this plan's manual input is retained as that fallback.
 - Keep the current explicit provider selector/default and the exact capture-config/capture request shapes. Do not change provider preference/fallback semantics (architecture area I is separately unresolved).
 - Keep focused snapshot, saved configs, stored snapshots, capture error handling and provider-unavailable messaging unchanged.
 

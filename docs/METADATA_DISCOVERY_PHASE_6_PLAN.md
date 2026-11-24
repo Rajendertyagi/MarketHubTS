@@ -82,7 +82,7 @@ The design and limits below were checked against:
 At the reviewed baseline:
 
 - Metadata discovery Phases 1, 2, 3 and 5 are recorded as implemented and published on `develop`.
-- Phase 4 derivative expiry discovery remains blocked on a real catalog population path and a bounded query. It is not part of Phase 6.
+- Phase 4 derivative expiry discovery is complete and published on `develop` (WP4A `03adab1` + fixes `bcec6ab`/`8785670`, WP4B `e99c5f3`, WP4C `9862464` + fix `13061da`, canonical plan `ed967e3`; all audited KEEP with no findings — local Upstox BOD + FYERS Symbol Master catalogue, bounded `GET /api/catalog/derivative-expiries`, Snapshot Panel expiry selector with manual fallback marked unverified; no live provider connection or full exchange catalogue claim). It is not part of Phase 6.
 - Phase 6 is complete: WP6A (retention consistency), WP6B (snapshot provider selection) and WP6C (Overview accuracy) are all implemented, independently audited KEEP and published on `develop`.
 - Phase 7 is the final cross-system acceptance phase and depends on previous phases.
 - M6-D/E source and tests are present on `develop`, but neither phase is accepted or complete. M6-B4 remains separately owned and not accepted.
@@ -712,7 +712,7 @@ Phase 6 is complete only when all of the following are true:
 
 **Current status (2026-11-23):** All three work packages have KEEP dispositions from independent review and are published on `develop` — WP6A (`f25d514` implementation, `128e44a` audit fix, `2866bae` technical-lead loading-state race fix; independent audit KEEP after fix cycles, technical-lead final KEEP), WP6B (`d132894`; independent audit KEEP, no code defects) and WP6C (`b37fa67`; independent audit KEEP with two optional non-blocking nits). All §11 exit-gate criteria are met and Phase 6 is complete. Final verification (local/agent-reported, not CI): full suite 975 pass / 0 fail (8247 assertions); typecheck, build and `git diff --check` clean.
 
-Phase 6 completion does not complete Phase 4, Phase 7, M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates.
+Phase 6 completion does not complete Phase 7, M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates. Phase 4 (derivative expiry discovery) is now complete and published on `develop` under its own plan (canonical plan `ed967e3`), independently of Phase 6.
 
 ---
 
@@ -728,7 +728,7 @@ This document is now an implementation record as well as the original plan. Phas
 
 All §11 Phase 6 exit-gate criteria are met. Final verification (local/agent-reported, not CI): full suite **975 pass / 0 fail (8247 assertions)**; `bun run typecheck`, `bun run build` and `git diff --check` clean. No live provider verification; production drivers remain locked.
 
-Phase 6 completion does **not** complete Phase 4 (derivative expiry, blocked on catalog population), Phase 7 (cross-system acceptance), M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates.
+Phase 6 completion does **not** complete Phase 7 (cross-system acceptance), M6-D/E, M6-B4 or Stage G. Those retain their existing separate gates. Phase 4 (derivative expiry discovery) is now complete and published on `develop` under its own plan (canonical plan `ed967e3`), independently of Phase 6 — it was not completed by Phase 6.
 
 ---
 
