@@ -14,6 +14,15 @@ import { healthStatusSchema } from "../../packages/contracts/src/index";
 import { loadConfig, resetConfigCache } from "../../packages/config/src/index";
 import { defaultMigrationsFolder, openDatabase, runMigrations } from "../../packages/database/src/index";
 import { closeDatabaseHandle, removeTempDir } from "../helpers/fs-cleanup";
+import {
+  wrapMcpHandlerFetch,
+  MCP_SSE_MAX_BUFFERED_BYTES,
+  MCP_SSE_MAX_BUFFERED_FRAMES,
+  SSE_OVERFLOW_REASON,
+  type BoundedSseOptions,
+  type SseBufferSample,
+  type SseOverflowInfo
+} from "../../apps/api/src/mcp-sse-bound";
 
 const HEALTH = healthStatusSchema.parse({
   status: "ok", service: "markethub-api", timestamp: "2026-01-01T00:00:00.000Z",
@@ -21,7 +30,18 @@ const HEALTH = healthStatusSchema.parse({
 });
 const SNAPSHOT_URI = "markethub://market/snapshot";
 
-function makeHarness() {
+interface HarnessOptions {
+  /** Override individual services (e.g. a blocking getHealth for shutdown tests). */
+  servicesOverride?: Partial<McpServices>;
+  /** Diagnostic hooks forwarded to the production SSE wrapper (test-only). */
+  onOverflow?: BoundedSseOptions["onOverflow"];
+  onBuffered?: BoundedSseOptions["onBuffered"];
+  onUpstreamCancel?: BoundedSseOptions["onUpstreamCancel"];
+  /** Best-effort bridge publisher error hook (test-only). */
+  bridgeOnError?: (error: unknown) => void;
+}
+
+function makeHarness(options: HarnessOptions = {}) {
   resetConfigCache();
   const dir = mkdtempSync(join(tmpdir(), "markethub-m6e-http-"));
   const dbPath = join(dir, "test.sqlite");
@@ -59,14 +79,26 @@ function makeHarness() {
     getSnapshot: async (id) => ({ ok: true, value: { id } as never }),
     captureSnapshot: async () => ({ ok: true, value: { snapshot: null, error: "no provider available" } }),
     startActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured" } }),
-    completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured" } })
+    completeActivity: async () => ({ ok: false, error: { category: "unavailable", message: "not configured" } }),
+    ...options.servicesOverride
   };
 
-  const handler = createMcpHandler((ctx) => createMcpServer(ctx, services), { maxSubscriptions: 64 });
-  const bridge = createMcpNotificationBridge(service, handler.notify);
+  // Production composition: the raw handler is wrapped with the SAME bounded
+  // SSE fetch wrapper and measurement-derived caps used by apps/api/src/index.ts.
+  // The wrapper preserves close/notify/bus, so the bridge, app and shutdown all
+  // use the same handler identity. Diagnostic hooks are test-only.
+  const rawHandler = createMcpHandler((ctx) => createMcpServer(ctx, services), { maxSubscriptions: 64 });
+  const handler = wrapMcpHandlerFetch(rawHandler, {
+    maxBufferedBytes: MCP_SSE_MAX_BUFFERED_BYTES,
+    maxBufferedFrames: MCP_SSE_MAX_BUFFERED_FRAMES,
+    onOverflow: options.onOverflow,
+    onBuffered: options.onBuffered,
+    onUpstreamCancel: options.onUpstreamCancel
+  });
+  const bridge = createMcpNotificationBridge(service, handler.notify, options.bridgeOnError);
   bridge.start();
   const app = createApp({ config, db, logger: createLogger("error"), startedAt: Date.now(), mcpHandler: handler });
-  return { dir, db, config, service, hub, handler, bridge, app };
+  return { dir, db, config, service, hub, handler, bridge, app, services };
 }
 
 async function connect(url: string, name: string) {
@@ -130,6 +162,64 @@ function sseFrames(res: Response) {
     },
     async close(): Promise<void> { try { await reader.cancel(); } catch { /* best effort */ } }
   };
+}
+
+/** First-overflow tracker using the wrapper's public test-only diagnostic seam. */
+function overflowTracker() {
+  const infos: SseOverflowInfo[] = [];
+  let resolve!: (info: SseOverflowInfo) => void;
+  const first = new Promise<SseOverflowInfo>((r) => { resolve = r; });
+  const onOverflow = (info: SseOverflowInfo): void => { infos.push(info); resolve(info); };
+  return { infos, first, onOverflow };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(label)), ms))
+  ]);
+}
+
+function highWater(samples: SseBufferSample[]) {
+  return {
+    frames: samples.reduce((m, s) => Math.max(m, s.bufferedFrames), 0),
+    bytes: samples.reduce((m, s) => Math.max(m, s.bufferedBytes), 0)
+  };
+}
+
+/**
+ * Healthy subscriber on the SAME wrapped handler, driven in-process (the proven
+ * slow-consumer.test.ts pattern). The deliberately unread stream below is the
+ * one that must traverse the real Bun listener; an in-process healthy control
+ * avoids a Bun HTTP-client interaction that stalls a wrapped SSE stream after
+ * its first couple of frames (recorded as a separate concern).
+ */
+async function connectHealthyInProcess(handler: ReturnType<typeof makeHarness>["handler"], name: string) {
+  const client = new Client({ name, version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+  await client.connect(new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
+    fetch: (url, init) => handler.fetch(new Request(url, init))
+  }));
+  let count = 0;
+  client.setNotificationHandler("notifications/resources/updated", () => { count++; });
+  await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+  return { client, count: () => count };
+}
+
+/** Drain an SSE reader to EOF, counting message frames; `done` distinguishes EOF from timeout. */
+async function drainSseReader(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs = 2000) {
+  const decoder = new TextDecoder();
+  let frames = 0;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await Promise.race([
+      reader.read().then((r) => ({ ...r, timedOut: false })),
+      new Promise<{ done: boolean; value?: Uint8Array; timedOut: boolean }>((r) =>
+        setTimeout(() => r({ done: false, timedOut: true }), Math.max(1, deadline - Date.now())))
+    ]);
+    if (result.timedOut) return { frames, done: false };
+    if (result.done) return { frames, done: true };
+    frames += (decoder.decode(result.value).match(/event: message/g) ?? []).length;
+  }
 }
 
 describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
@@ -405,6 +495,127 @@ describe("M6-E real HTTP integration (actual listener + pinned client)", () => {
       h.bridge.stop();
       h.hub.stop();
       if (server) await server.stop(true);
+      closeDatabaseHandle(h.db);
+      removeTempDir(h.dir);
+    }
+  });
+
+  test("E1: server-side handler.close() gracefully completes an active listen stream on the real listener (client left open)", async () => {
+    let release: (() => void) | null = null;
+    const blocking = new Promise<void>((resolve) => { release = resolve; });
+    const h = makeHarness({
+      servicesOverride: {
+        getHealth: async () => { await blocking; return { ok: true, value: HEALTH }; }
+      }
+    });
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let client: Client | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+      client = await connect(url, "e1-shutdown");
+
+      // Active subscription + in-flight request, both left open.
+      const sub = await client.listen({ resourceSubscriptions: [SNAPSHOT_URI] });
+      const inFlight = client.callTool({ name: "markethub_health", arguments: {} });
+      await Bun.sleep(20); // let the request reach the blocking service
+
+      // Server-side shutdown FIRST — do not close the client first.
+      const closePromise = h.handler.close();
+      const reason = await withTimeout(sub.closed, 3000, "E1: listen stream did not close gracefully");
+      expect(reason).toBe("graceful");
+
+      // The in-flight request is aborted, never reported as a successful result.
+      let rejected = false;
+      try { await inFlight; } catch { rejected = true; }
+      expect(rejected).toBe(true);
+      await withTimeout(closePromise, 3000, "E1: handler.close() did not complete");
+
+      // Deterministic listener shutdown after the handler is closed.
+      await withTimeout(server.stop(true), 3000, "E1: listener stop did not complete");
+      server = null;
+    } finally {
+      release?.();
+      if (client) await client.close().catch(() => {});
+      await h.handler.close().catch(() => {});
+      h.bridge.stop();
+      h.hub.stop();
+      if (server) await server.stop(true).catch(() => {});
+      closeDatabaseHandle(h.db);
+      removeTempDir(h.dir);
+    }
+  });
+
+  test("E2: bounded SSE through the real listener — slow stream capped, upstream cancelled, healthy subscriber unaffected", async () => {
+    const tracker = overflowTracker();
+    const cancels: unknown[] = [];
+    const samples: SseBufferSample[] = [];
+    const bridgeErrors: unknown[] = [];
+    const h = makeHarness({
+      onOverflow: tracker.onOverflow,
+      onBuffered: (s) => samples.push(s),
+      onUpstreamCancel: (reason) => cancels.push(reason),
+      bridgeOnError: (error) => bridgeErrors.push(error)
+    });
+    let server: ReturnType<typeof Bun.serve> | null = null;
+    let healthy: Awaited<ReturnType<typeof connectHealthyInProcess>> | null = null;
+    try {
+      server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: h.app.fetch });
+      const url = `http://127.0.0.1:${server.port}/mcp`;
+
+      // Healthy subscriber on the same wrapped handler (in-process control).
+      healthy = await connectHealthyInProcess(h.handler, "e2-healthy");
+
+      // Deliberately unread SSE subscription through the REAL Bun listener.
+      const slow = await openListenStream(url);
+      expect(slow.status).toBe(200);
+      expect(slow.headers.get("content-type")).toContain("text/event-stream");
+
+      // Publish enough canonical changes to exceed the production frame cap.
+      const firstBatch = MCP_SSE_MAX_BUFFERED_FRAMES + 40;
+      for (let i = 0; i < firstBatch; i++) {
+        h.service.track(`E2a-${i}`);
+        if (i % 5 === 0) await Bun.sleep(1);
+      }
+      const info = await withTimeout(tracker.first, 3000, "E2: slow stream did not overflow");
+      expect(info.reason).toBe(SSE_OVERFLOW_REASON);
+      expect(info.bufferedFrames).toBeLessThanOrEqual(MCP_SSE_MAX_BUFFERED_FRAMES);
+      expect(info.bufferedBytes).toBeLessThanOrEqual(MCP_SSE_MAX_BUFFERED_BYTES);
+      const hw = highWater(samples);
+      expect(hw.frames).toBeLessThanOrEqual(MCP_SSE_MAX_BUFFERED_FRAMES);
+      expect(hw.bytes).toBeLessThanOrEqual(MCP_SSE_MAX_BUFFERED_BYTES);
+      expect(cancels).toContain(SSE_OVERFLOW_REASON);
+
+      // Slow downstream terminates with the documented plain EOF. A real Bun
+      // listener may eagerly pull a couple of pre-overflow frames into its own
+      // buffer; what matters is that the stream reaches EOF and that nothing
+      // further is delivered after overflow.
+      const slowReader = slow.body!.getReader();
+      const drained = await drainSseReader(slowReader);
+      expect(drained.done).toBe(true);
+
+      // Queued frames do not continue after overflow; healthy subscriber keeps up.
+      const N = 10;
+      for (let i = 0; i < N; i++) h.service.track(`E2b-${i}`);
+      const target = firstBatch + N;
+      const deadline = Date.now() + 2000;
+      while (healthy.count() < target && Date.now() < deadline) await Bun.sleep(2);
+      expect(healthy.count()).toBe(target);
+      const after = await drainSseReader(slowReader, 300);
+      expect(after.done).toBe(true);
+      expect(after.frames).toBe(0);
+
+      // Canonical publishing unaffected: no bridge publisher error was raised.
+      expect(bridgeErrors).toHaveLength(0);
+
+      // SDK subscription resources cleaned up (black-box proxy): close completes.
+      await withTimeout(h.handler.close(), 3000, "E2: handler.close() did not complete after overflow");
+    } finally {
+      if (healthy) await healthy.client.close().catch(() => {});
+      await h.handler.close().catch(() => {});
+      h.bridge.stop();
+      h.hub.stop();
+      if (server) await server.stop(true).catch(() => {});
       closeDatabaseHandle(h.db);
       removeTempDir(h.dir);
     }

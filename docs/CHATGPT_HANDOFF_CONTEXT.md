@@ -12,20 +12,20 @@
 
 **Current state (independently verified 2026-11-24):**
 - Repository: `Rajendertyagi/MarketHubTS`, remote `origin` (`https://github.com/Rajendertyagi/MarketHubTS.git`).
-- Branch: `develop`. Local HEAD and `origin/develop` both `9f99b9a830252335456ef8232a2032ea9b85d6ea` (corrections published). The prior published-plan baseline was `72743cf`; the original inspected implementation baseline was `2ed4c1e`.
+- Branch: `develop`. Local HEAD and `origin/develop` both `d19d72120d8dd34a064f63fbe644dc67b61a15a7` (current). Historical baselines: corrections published at `9f99b9a`, prior published-plan baseline `72743cf`, original inspected implementation baseline `2ed4c1e`.
 - `main` and `origin/main` both `865d86f393a29bc1ec8d455a51d9efa82d722c48` (unchanged; never modify without separate explicit authorization).
-- Working tree: ` M docs/REFERENCES.md` and `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` — pre-existing user work, preserved, not part of any Phase 4 commit.
+- Working tree: ` M docs/REFERENCES.md`, `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` and `?? docs/M6_D_SLOW_CONSUMER_MITIGATION_PLAN.md` — pre-existing user work, preserved, not part of any Phase 4 commit.
 - Metadata-discovery Phase 4 (provider-backed derivative expiry discovery) is **complete, published, and audited KEEP**. The final published baseline is `2ed4c1e`, **not** `85bb8a6` (the baseline named in the handoff request is outdated by three commits).
 - The four technical-lead findings A–D described in section 7 were **fixed in `13826fb` and independently re-audited KEEP**; Finding E (plan close-out) was completed in `1b51427`; the Windows `EBUSY` test flake was root-cause fixed in `2ed4c1e`. Details and evidence are in section 7.
 - Latest independently re-run full suite: **1076 pass / 0 fail** (two consecutive runs by the audit agent). No GitHub CI status checks were reported for these commits — all results are local, not CI.
-- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` exists with **Corrections published in `9f99b9a`; awaiting independent review; not implementation-authorized** (planning only, not finally approved or implementation-ready; grants no implementation authorization). **M6-B4, M6-D and M6-E remain not accepted**; M6 is not complete. No M6-B4/D/E implementation was performed in this documentation work.
+- The canonical M6 completion plan `docs/M6_B4_D_E_COMPLETION_PLAN.md` exists with **Corrections published in `9f99b9a` (historical); awaiting independent review; not implementation-authorized** (planning only, not finally approved or implementation-ready; grants no implementation authorization). **M6-B4 implementation is complete** (`tests/mcp/parity.test.ts` + named C3/C6/C18/C19/C21 assertions in `tests/mcp/conformance.test.ts`, source-level review KEEP) but **not formally accepted**; M6-D and M6-E remain not accepted; M6 is not complete. The M6-D slow-consumer bounded SSE mitigation is also implemented and published (`9728397`/`d19d721`), with its product-owner decision still OPEN.
 
 **Next actions (recommended, not authorized):**
-1. Re-verify live `develop`/`main` SHAs and `git status` before any work (current published baseline `9f99b9a`; corrections await independent review).
+1. Re-verify live `develop`/`main` SHAs and `git status` before any work (current HEAD `d19d721`; corrections published at `9f99b9a` await independent review).
 2. Read `docs/PROJECT_MANAGER_PROTOCOL.md` and `docs/METADATA_DISCOVERY_PHASE_4_PLAN.md` (the canonical Phase 4 plan with §13 close-out record).
 3. Confirm the section 7 findings are closed in current source (paths and evidence provided).
 4. Produce an independent technical disposition. Note the stale documentation entries in section 8.3.
-5. For M6: the four independent-review corrections are published in `9f99b9a` and await independent review; B4/D/E remain not accepted and M6 is not complete. Do not treat the completion plan as implementation-authorized.
+5. For M6: the four independent-review corrections were published in `9f99b9a` (historical) and await independent review; B4 implementation is complete with a source-level KEEP review but B4/D/E remain not accepted and M6 is not complete. Do not treat the completion plan as implementation-authorized.
 6. **Do not start Phase 7.** It remains separately gated and not authorized. Obtain explicit product-owner authorization before any code change or publication.
 
 ---
@@ -37,11 +37,11 @@ All facts in this section were verified directly from the local checkout on 2026
 | Item | Verified value |
 |---|---|
 | Branch | `develop` |
-| Local HEAD / `origin/develop` | `9f99b9a830252335456ef8232a2032ea9b85d6ea` (in sync) — **current published baseline (corrections)**; prior published-plan baseline `72743cfe68e665dda018a3f4e098208f880a979f` |
+| Local HEAD / `origin/develop` | `d19d72120d8dd34a064f63fbe644dc67b61a15a7` (in sync) — **current HEAD**; historical: corrections published at `9f99b9a830252335456ef8232a2032ea9b85d6ea`, prior published-plan baseline `72743cfe68e665dda018a3f4e098208f880a979f` |
 | Original inspected implementation baseline | `2ed4c1ef767462f8aa78be5cc29fd3e91006e5a0` — the checkout inspected when this handoff was first created; distinct from the planning-document baseline above |
 | Local `main` / `origin/main` | `865d86f393a29bc1ec8d455a51d9efa82d722c48` (in sync; untouched) |
-| `git status --short` | ` M docs/REFERENCES.md` ; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` (two preserved user-work items) |
-| This handoff file | **Tracked** — added in `1ddf24b` and present at `72743cf` and at the current baseline `9f99b9a`. It did not exist when this document was first created, but it is **not untracked now**; preserve it, do not overwrite or delete it. |
+| `git status --short` | ` M docs/REFERENCES.md` ; `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md` ; `?? docs/M6_D_SLOW_CONSUMER_MITIGATION_PLAN.md` (three preserved user-work items) |
+| This handoff file | **Tracked** — added in `1ddf24b` and present at `72743cf`, `9f99b9a` and current HEAD `d19d721`. It did not exist when this document was first created, but it is **not untracked now**; preserve it, do not overwrite or delete it. |
 
 **Recent commit history (newest first, verified with `git log --oneline -20`):**
 
@@ -162,7 +162,7 @@ All items below are **independently verified from repository documentation** unl
 - **M1–M3 (foundation, catalog, provider auth):** implemented. M1 = validated config, SQLite/migrations, Hono API, WebUI shell, LAN operation. M2 = canonical contracts, identity, catalog persistence, transactional sync. M3 = encrypted credential store, independent Upstox/FYERS auth adapters, provider registry.
 - **M4 Stages A/B/D/E/F:** implemented; D and E accepted; F passed independent review and was integrated into `main` by authorized fast-forward to `865d86f`. Stage C (FYERS Data Socket adapter) implemented at final reviewed state `e8ce409` (adapter-only). Stage G (real streaming verification) remains locked and separately gated.
 - **M5 (offline historical/snapshot persistence):** offline implementation complete and published (Phases 1–4A): five-table persistence, derived coverage, first-write-wins conflicts, fail-closed retention, offline Upstox/FYERS REST adapters (mocked fetch), local API/WebUI. **M5 Phase 4B (provider-backed historical/option-chain activation) is NOT activated and remains Stage-G gated.** M5 Stage G REST verification is distinct from M4 Stage G streaming verification; success in one does not satisfy the other.
-- **M6:** M6-A (Streamable HTTP + retained STDIO, shared factory), M6-B1 (catalog-search/event-feed read seams), M6-B2 (nine tools over both transports), M6-B3 (resources/prompts/cache hints, snapshot pagination at `0d58bbb`) implemented and published. M6-C (durable activity history/WebUI inspection) accepted and closed at `32b034a`. **M6-D/E source and tests present but not accepted** (independent review gate in `docs/M6_D_E_PLAN.md` §8.1–§8.3). **M6-B4 separately owned, not accepted.**
+- **M6:** M6-A (Streamable HTTP + retained STDIO, shared factory), M6-B1 (catalog-search/event-feed read seams), M6-B2 (nine tools over both transports), M6-B3 (resources/prompts/cache hints, snapshot pagination at `0d58bbb`) implemented and published. M6-C (durable activity history/WebUI inspection) accepted and closed at `32b034a`. **M6-D/E source and tests present but not accepted** (independent review gate in `docs/M6_D_E_PLAN.md` §8.1–§8.3). **M6-B4 implementation complete with a source-level KEEP review, separately owned and not formally accepted.**
 - **Metadata & Capability Discovery Phases 1–6:** Phases 1, 2, 3, 5 and 6 complete and published. Phase 4 (this work) complete and published. **Phase 7 (cross-system acceptance) planned, not implemented, separately gated.**
 - **Phase 6 detail:** WP6A retention consistency (`f25d514`/`128e44a`/`2866bae`), WP6B explicit snapshot provider selection (`d132894`; no Automatic option, no FYERS default), WP6C Overview accuracy (`b37fa67`). Documentation close-out `cbb4e44`. All audited KEEP.
 
@@ -272,7 +272,7 @@ One does not unlock another. Phase 4 completion does not activate providers or s
 ### 8.1 Test evidence — label carefully
 - **Agent-reported at the `85bb8a6` baseline (from the handoff request):** WP4A focused 83, WP4B focused 27, WP4C focused 38; full suite 1061 pass / 2 fail (reported as Windows `EBUSY` temp-dir cleanup flakes in untouched supervisor tests, 45/45 in isolation); typecheck/build/diff-check reportedly passed. These are **agent-reported local results**, not CI.
 - **Independently re-run by the audit agent after `13826fb`:** focused suites 118/0 and 52/0; full suite 1073 pass / 1 fail (one `EBUSY` flake, 19/19 in isolation); typecheck/build/diff-check clean.
-- **Independently re-run by the audit agent after `2ed4c1e` (current HEAD):** full suite **1076 pass / 0 fail** on two consecutive runs; typecheck/build/diff-check clean. This is the newest evidence and is **independently verified by the audit agent, still local — not CI**.
+- **Independently re-run by the audit agent after `2ed4c1e` (then-current HEAD; current HEAD is `d19d721`):** full suite **1076 pass / 0 fail** on two consecutive runs; typecheck/build/diff-check clean. This is historical evidence and is **independently verified by the audit agent, still local — not CI**.
 - **CI:** GitHub status checks were empty when the user checked the Phase 4 commits. Do not call any of the above CI results. A fresh ChatGPT should re-run the suite and re-check GitHub before making claims.
 
 ### 8.2 Rejected approaches (preserve the reasoning)
@@ -321,7 +321,7 @@ These are documentation drift, not code defects. They should be corrected in a f
 
 This document is a **handoff aid only**. It is not a new governing architecture plan and grants no implementation or publication permission.
 
-- **Created only (at original creation time):** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created. **It was subsequently committed in `1ddf24b` and is now tracked (present at `72743cf` and at the current baseline `9f99b9a`) — it is not untracked in the current repository state.**
+- **Created only (at original creation time):** `docs/CHATGPT_HANDOFF_CONTEXT.md` (this file). It did not previously exist; no duplicate or numbered copy was created. **It was subsequently committed in `1ddf24b` and is now tracked (present at `72743cf`, `9f99b9a` and current HEAD `d19d721`) — it is not untracked in the current repository state.**
 - **Not modified:** `docs/METADATA_DISCOVERY_PHASE_4_PLAN.md`, `docs/PROJECT_STATUS.md`, any code or test file, any other documentation, and any pre-existing user work.
 - **No commit, push, merge, rebase, branch change or other Git write was performed** as part of creating this document. (The later `1ddf24b` commit was a separate, authorized documentation publication.)
 - **Pre-existing user work preserved:** ` M docs/REFERENCES.md` and `?? docs/PENDING_REQUIREMENT_PREBUILT_OPTIONS.md`.
