@@ -14,6 +14,7 @@ import {
   MCP_SSE_MAX_BUFFERED_BYTES,
   MCP_SSE_MAX_BUFFERED_FRAMES,
   SSE_OVERFLOW_REASON,
+  SSE_ENQUEUE_FAILED_REASON,
   type BoundedSseOptions,
   type SseBufferSample,
   type SseOverflowInfo
@@ -314,6 +315,85 @@ describe("M6-E Design A — standard Web Streams bounded SSE wrapper", () => {
       delivered.push(r.value);
     }
     expect(delivered).toHaveLength(0);
+  });
+
+  test("downstream enqueue failure cancels upstream once with a distinct reason (no spurious overflow)", async () => {
+    const tracker = overflowTracker();
+    const cancels: unknown[] = [];
+    const samples: SseBufferSample[] = [];
+    const sentinel = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let upstreamCancelCount = 0;
+
+    // Upstream emits the sentinel synchronously in start(), then keeps producing
+    // small chunks on a timer. The sentinel is enqueued BEFORE the patch below is
+    // installed, so only the wrapper's downstream enqueue of that same chunk is
+    // forced to throw.
+    const upstream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(sentinel);
+        let i = 0;
+        timer = setInterval(() => c.enqueue(new Uint8Array([i++ & 0xff])), 5);
+      },
+      cancel() {
+        upstreamCancelCount++;
+        if (timer) clearInterval(timer);
+      }
+    });
+
+    const wrapped = boundSseResponse(
+      new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
+      {
+        maxBufferedBytes: MCP_SSE_MAX_BUFFERED_BYTES,
+        maxBufferedFrames: MCP_SSE_MAX_BUFFERED_FRAMES,
+        onOverflow: tracker.onOverflow,
+        onBuffered: (s) => samples.push(s),
+        onUpstreamCancel: (reason) => cancels.push(reason)
+      }
+    );
+
+    // Force controller.enqueue() to throw ONLY for the sentinel chunk. This
+    // deterministically exercises pump()'s enqueue-throw catch path in the real
+    // production wrapper; every other stream in the process is unaffected.
+    const proto = ReadableStreamDefaultController.prototype as unknown as {
+      enqueue: (chunk: unknown) => void;
+    };
+    const originalEnqueue = proto.enqueue;
+    proto.enqueue = function (this: unknown, chunk: unknown) {
+      if (chunk === sentinel) throw new Error("forced downstream enqueue failure");
+      return Reflect.apply(originalEnqueue, this, [chunk]);
+    };
+
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    try {
+      reader = wrapped.body!.getReader();
+      // Trigger pull() -> pump() -> enqueue(sentinel) -> forced throw.
+      const first = await withTimeout(reader.read(), 1000, "downstream read hung after enqueue failure");
+      expect(first.done).toBe(true); // plain EOF from closeDownstream()
+
+      // Upstream released exactly once with the DISTINCT reason, never overflow.
+      expect(cancels).toEqual([SSE_ENQUEUE_FAILED_REASON]);
+      const cancelDeadline = Date.now() + 1000;
+      while (upstreamCancelCount === 0 && Date.now() < cancelDeadline) await Bun.sleep(2);
+      expect(upstreamCancelCount).toBe(1);
+      expect(tracker.infos).toHaveLength(0); // no slow_consumer_bound_exceeded
+
+      // Queue does not regrow: the drain loop has stopped, so no further appends
+      // are reported even though the upstream timer kept firing before cancel.
+      await Bun.sleep(20);
+      const samplesAtFailure = samples.length;
+      await Bun.sleep(60);
+      expect(samples.length).toBe(samplesAtFailure);
+
+      // Downstream stays closed.
+      const after = await withTimeout(reader.read(), 500, "post-failure read hung");
+      expect(after.done).toBe(true);
+      expect(after.value).toBeUndefined();
+    } finally {
+      proto.enqueue = originalEnqueue;
+      if (timer) clearInterval(timer);
+      try { await reader?.cancel(); } catch { /* best effort */ }
+    }
   });
 
   test("healthy real-listener subscriber: ack first, >96 notifications in order, no false overflow, correct IDs/filtering", async () => {

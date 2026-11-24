@@ -47,6 +47,13 @@ import type { McpHttpHandler } from "@modelcontextprotocol/server";
 export const SSE_OVERFLOW_REASON = "slow_consumer_bound_exceeded" as const;
 
 /**
+ * Reason string used when the downstream controller rejects an `enqueue()`
+ * (already closed/errored). Distinct from the overflow reason so a downstream
+ * failure is never misreported as a slow-consumer bound breach.
+ */
+export const SSE_ENQUEUE_FAILED_REASON = "downstream_enqueue_failed" as const;
+
+/**
  * Per-subscription application-owned buffer caps. Derived from the sustained
  * healthy-burst envelope measured in `tests/mcp/slow-consumer.test.ts` (T5) and
  * recorded in `docs/M6_D_FANOUT_EVIDENCE.md` §7. Frames are counted as upstream
@@ -177,9 +184,15 @@ export function boundSseResponse(response: Response, options: BoundedSseOptions)
       try {
         controller!.enqueue(chunk);
       } catch {
-        // Downstream closed/errored between the guard and enqueue (concurrent
-        // cancel): drop everything and stop.
-        downstreamClosed = true;
+        // The downstream controller rejected the enqueue (already closed or
+        // errored). This is a DOWNSTREAM failure, not a slow-consumer overflow:
+        // stop the drain and cancel upstream immediately with a distinct reason
+        // so the drain loop cannot later re-append chunks and report a spurious
+        // `slow_consumer_bound_exceeded`. closeDownstream() sets downstreamClosed
+        // and ends the response with a plain EOF; cancelUpstream() sets
+        // drainStopped (idempotently) so the drain loop exits.
+        closeDownstream();
+        cancelUpstream(SSE_ENQUEUE_FAILED_REASON);
         dropQueue();
         return;
       }
