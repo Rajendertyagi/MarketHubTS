@@ -82,6 +82,12 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
   const mappings: ProviderInstrumentMapping[] = [];
   const activeNativeIdentifiers = new Set<string>();
   const underlyingIdByInstrumentKey = new Map<string, string>();
+  // Canonical-ID-keyed view of the in-scope underlyings, built once in pass 1.
+  // First-write-wins deliberately mirrors the previous `instruments.find(...)`
+  // scan, which returned the first instrument with a given canonical ID; duplicate
+  // underlying rows resolving to the same canonical keep the first row's symbol
+  // deterministically (WP1-B).
+  const underlyingByCanonicalId = new Map<string, CanonicalInstrument>();
   const identityOwners = new Map<string, string>();
   const nativeOwners = new Map<string, string>();
   const observedAt = isoOrUndefined(options.sourceObservedAt);
@@ -168,6 +174,7 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
     };
     addInstrument(inst, instrumentKey);
     underlyingIdByInstrumentKey.set(instrumentKey, inst.canonicalId);
+    if (!underlyingByCanonicalId.has(inst.canonicalId)) underlyingByCanonicalId.set(inst.canonicalId, inst);
     mappings.push({
       provider: "UPSTOX",
       nativeIdentifier: instrumentKey,
@@ -212,7 +219,7 @@ export function buildUpstoxImport(rows: unknown, options: UpstoxImportOptions): 
     if (!expiry.ok) { report.invalidRows++; continue; }
     const strike = num(row.strike_price);
     if (strike === undefined || strike <= 0) { report.invalidRows++; continue; }
-    const underlying = instruments.find((i) => i.canonicalId === underlyingCanonicalId);
+    const underlying = underlyingByCanonicalId.get(underlyingCanonicalId);
     const canonicalSymbol = underlying?.canonicalSymbol ?? str(row.name) ?? "OPTION";
 
     const identityKey = computeIdentityKey({

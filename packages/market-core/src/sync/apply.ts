@@ -411,18 +411,26 @@ export class CatalogSyncService {
 
       // identifier history: derived + explicit
       const derived = deriveIdentifiers(merged, batch.source, startedAt);
-      // supersede previous CURRENT identifiers of same type/namespace/scope for this canonical when value changes
+      // Supersede previous CURRENT identifiers of the same type/namespace/scope for
+      // THIS canonical only. Use the existing canonical-ID-indexed access path so
+      // unrelated canonical instruments sharing the same scope are never
+      // materialized (WP1-A). `merged.canonicalId` is final here: the merge branch
+      // above pins it to the resolved existing canonical ID (or the resolved
+      // incoming canonical ID for a new instrument) before this point.
+      const canonicalHistory = derived.some((id) => id.status === "CURRENT")
+        ? await tx.listIdentifiersByCanonicalId(merged.canonicalId)
+        : [];
       for (const id of derived) {
         if (id.status === "CURRENT") {
-          const currents = await tx.findIdentifiers({
-            identifierType: id.identifierType,
-            identifierNamespace: id.identifierNamespace,
-            exchangeScope: id.exchangeScope,
-            segmentScope: id.segmentScope,
-            status: "CURRENT"
-          });
-          for (const cur of currents) {
-            if (cur.canonicalId === merged.canonicalId && cur.identifierNormalized !== id.identifierNormalized) {
+          for (const cur of canonicalHistory) {
+            if (
+              cur.identifierType === id.identifierType &&
+              cur.identifierNamespace === id.identifierNamespace &&
+              cur.exchangeScope === id.exchangeScope &&
+              cur.segmentScope === id.segmentScope &&
+              cur.status === "CURRENT" &&
+              cur.identifierNormalized !== id.identifierNormalized
+            ) {
               await tx.upsertIdentifier({ ...cur, status: "SUPERSEDED", validTo: cur.validTo ?? startedAt, updatedAt: startedAt });
               identifiersUpserted++;
             }

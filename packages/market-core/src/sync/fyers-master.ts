@@ -144,6 +144,12 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
   }
 
   const underlyingIdByFyToken = new Map<string, string>();
+  // Canonical-ID-keyed view of the in-scope underlyings, built once in pass 1.
+  // First-write-wins deliberately mirrors the previous `instruments.find(...)`
+  // scan, which returned the first instrument with a given canonical ID; duplicate
+  // underlying rows resolving to the same canonical keep the first row's symbol
+  // and category deterministically (WP1-B).
+  const underlyingByCanonicalId = new Map<string, CanonicalInstrument>();
   for (const { segment, row } of tagged) {
     if (segment !== "NSE_CM" && segment !== "BSE_CM") continue;
     const fyToken = str(row.fyToken);
@@ -189,6 +195,7 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     addInstrument(inst, symTicker);
     recordSourceDate(segment, row);
     underlyingIdByFyToken.set(fyToken, inst.canonicalId);
+    if (!underlyingByCanonicalId.has(inst.canonicalId)) underlyingByCanonicalId.set(inst.canonicalId, inst);
     mappings.push({
       provider: "FYERS",
       nativeIdentifier: symTicker,
@@ -226,7 +233,7 @@ export function buildFyersImport(files: FyersMasterFiles, options: FyersImportOp
     if (!expiry.ok) { report.invalidRows++; continue; }
     const strike = num(row.strikePrice);
     if (strike === undefined || strike <= 0) { report.invalidRows++; continue; }
-    const underlying = instruments.find((i) => i.canonicalId === underlyingCanonicalId);
+    const underlying = underlyingByCanonicalId.get(underlyingCanonicalId);
     const canonicalSymbol = underlying?.canonicalSymbol ?? str(row.exSymbol) ?? "OPTION";
     const category: InstrumentCategory = underlying?.instrumentCategory === "INDEX" ? "INDEX_OPTION" : "STOCK_OPTION";
     // Per-record source observation only; never fall back to a local fetch time.
