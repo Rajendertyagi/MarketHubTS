@@ -5,7 +5,7 @@ import { sanitizeError } from "@markethub/market-core";
 import { UPSTOX_TOKEN_CREDENTIAL } from "./constants";
 import { upstoxComponentUpdates } from "./components";
 
-// createRequire selects the full CommonJS build of the SDK under Bun 1.4.4.
+// createRequire selects the full CommonJS build of the SDK under Bun 1.4.5.
 const require = createRequire(import.meta.url);
 const sdk = require("upstox-js-sdk") as {
   ApiClient: { instance: { authentications: Record<string, { accessToken?: string }> } };

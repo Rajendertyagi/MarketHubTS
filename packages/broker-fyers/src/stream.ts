@@ -14,7 +14,7 @@ import type {
 import type { NormalizeObservationInput } from "@markethub/market-core";
 import { sanitizeError } from "@markethub/market-core";
 
-// createRequire selects the CommonJS build of the SDK under Bun 1.4.4. The
+// createRequire selects the CommonJS build of the SDK under Bun 1.4.5. The
 // module is loaded lazily inside the default factory so injected fakes never
 // touch the process-wide SDK singleton.
 const require = createRequire(import.meta.url);

@@ -7,7 +7,7 @@
       "devDependencies": {
         "@modelcontextprotocol/client": "2.4.0",
         "@modelcontextprotocol/server": "2.4.0",
-        "bun-types": "1.4.4",
+        "bun-types": "1.4.5",
         "typescript": "7.0.2",
       },
     },
@@ -29,7 +29,7 @@
         "zod": "4.6.7",
       },
       "devDependencies": {
-        "bun-types": "1.4.4",
+        "bun-types": "1.4.5",
         "typescript": "7.0.2",
       },
     },
@@ -43,7 +43,7 @@
         "zod": "4.6.7",
       },
       "devDependencies": {
-        "bun-types": "1.4.4",
+        "bun-types": "1.4.5",
         "typescript": "7.0.2",
       },
     },
@@ -487,7 +487,7 @@
 
     "buffer-from": ["buffer-from@1.1.2", "", {}, "sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ=="],
 
-    "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
+    "bun-types": ["bun-types@1.4.5", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-ECHn+9dhL3wv0G6u0+7dQvrnaimXiRDxxerYBmhTaLyJEEuvTPWk2Fye3XIf5Y++JIIiHKfQw4Z7V5D8KuiXbg=="],
 
     "call-bind-apply-helpers": ["call-bind-apply-helpers@1.0.2", "", { "dependencies": { "es-errors": "^1.3.0", "function-bind": "^1.1.2" } }, "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ=="],
 

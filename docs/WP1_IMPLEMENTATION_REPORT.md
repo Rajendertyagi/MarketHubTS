@@ -1,7 +1,11 @@
 # WP1 Implementation Report — Catalog Refresh Remediation
 
-**Repository:** `D:\Temp\MarketHubTS` · **Branch:** `develop` · **HEAD:** `4c018e0574b097f624ab8afecb2ecdb87e52b253` (unchanged) · **Bun:** 1.4.5 (a7733435c) · **Date:** 2026-11-25
-**Authorization:** WP1 ONLY (WP0/WP2/WP3/WP4 explicitly not implemented). No commit/push/stage/merge/rebase/amend performed.
+> **Post-publication reconciliation note (2026-11-25):** This report was authored against the **pre-publication** `develop` HEAD `4c018e0574b097f624ab8afecb2ecdb87e52b253` (`4c018e0`). WP1 was subsequently committed and pushed to `develop` at `50461888977d6b5dfc6ab866f5f7cf2ed7581419` (`5046188`) — 5 files, 584 insertions, 12 deletions — while `main` remained unchanged at `865d86f393a29bc1ec8d455a51d9efa82d722c48` (`865d86f`). The HEAD/status lines below are the original **pre-publication snapshot (2026-11-25)**, retained verbatim for provenance; they are not the current repository state.
+>
+> **Verification distinction (local agent-reported evidence, NOT CI):** the implementer's full-suite run recorded **1122 pass / 2 fail** — both environmental flakes: `tests/runtime.test.ts` (5 s listener-shutdown timeout, passed on rerun) and `tests/market/stage-f-timeout.test.ts` (Windows `EBUSY` in the untouched `tests/helpers/fs-cleanup.ts:27`). The independent auditor's clean run recorded **1124 pass / 0 fail** from the exact command `bun test` (full suite, exit 0, 9270 expect() calls, 97 files, 31.57 s). Both are local agent-reported results; GitHub reports **zero status checks / workflow runs**, so CI passing is **not** claimed.
+
+**Repository:** `D:\Temp\MarketHubTS` · **Branch:** `develop` · **HEAD:** `4c018e0574b097f624ab8afecb2ecdb87e52b253` (pre-publication snapshot, 2026-11-25 — see reconciliation note above; WP1 subsequently published at `5046188`) · **Bun:** 1.4.5 (a7733435c) · **Date:** 2026-11-25
+**Authorization (pre-publication snapshot, 2026-11-25):** WP1 ONLY (WP0/WP2/WP3/WP4 explicitly not implemented). No commit/push/stage/merge/rebase/amend performed (as of authoring; see reconciliation note above for subsequent publication).
 
 ---
 

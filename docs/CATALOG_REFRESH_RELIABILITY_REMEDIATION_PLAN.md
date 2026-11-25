@@ -306,9 +306,8 @@ If a later, separately authorized work package implements caching, the following
 
 ### 6.3 Data-completeness and field-coverage compatibility reference (WP2 / WP4)
 
-The refactor must preserve existing instrument fields, relationships, identifiers, specifications and provider mappings. The following are the authoritative compatibility references; this plan does **not** duplicate them or expand product scope.
+The refactor must preserve existing instrument fields, relationships, identifiers, specifications and provider mappings. The following tracked, authoritative documents and artifacts are the compatibility references; this plan does **not** duplicate them or expand product scope.
 
-- **Authoritative field-by-field checklist:** `docs/M4_STAGE_G_M5_PHASE_4B_DATA_COMPLETION_PLAN.md` §3 (field-by-field coverage checklist) and §6 (provider-by-provider coverage and missing fields). Note: that document is a **proposal**, its coverage statuses are `V-doc`/`UNVERIFIED` (documented, not live-proven), and its table primarily covers live streaming/REST fields. It is the closest field-coverage checklist in the repository, but it is **not** a catalog-master-import-specific checklist.
 - **Canonical model and identity rules:** `docs/MARKET_DATA_AND_CATALOG.md` §3.1 (required canonical information), §3.2 (identity rules), §3.3 (provider mappings and aliases), §3.4 (transactional sync/evolution), §1.3 (dynamic catalog rule), §1.5 (four-way scope distinction) and §6 (current implementation status: local catalogue import covers NSE/BSE **option** contracts CE/PE plus referenced cash/index underlyings; futures and the full cash-index catalogue are not imported).
 - **Product scope boundaries:** `docs/PRODUCT_REQUIREMENTS.md` and `docs/MARKET_DATA_AND_CATALOG.md` §1.1–§1.2 (six approved NSE index F&O underlyings; BSE restricted to SENSEX + SENSEX F&O). Do not broaden scope because a broker file supplies more rows.
 - **Discovery/UI boundary:** `docs/METADATA_AND_CAPABILITY_DISCOVERY.md` (AD-025: backend-owned options; no duplicated frontend lists) and `docs/WEBUI_AND_CONFIGURATION.md` (user-enabled selections are separate from source data). This remediation adds no selector or option.
@@ -319,7 +318,7 @@ The refactor must preserve existing instrument fields, relationships, identifier
   - `packages/market-core/src/sync/{upstox-master,fyers-master,apply,normalize}.ts` — current field mapping and relationship construction.
   - `tests/market/catalog.test.ts`, `tests/market/catalog-refresh.test.ts`, `tests/market/catalog-routes.test.ts` — regression fixtures and assertions.
 
-**Statement on absence of a dedicated checklist:** there is **no single field-by-field checklist dedicated specifically to the catalog master import**. The artifacts above are the minimum authoritative compatibility reference. WP2/WP4 must prove preservation by comparing normalized import output (fields, relationships, identifiers, specifications, provider mappings, counts and conflicts) against the WP0 baseline fixtures using these artifacts. Any field not present in these references is out of scope and must not be invented.
+**Statement on absence of a dedicated checklist:** in the published/tracked repository there is **no dedicated, tracked field-by-field checklist specifically for the catalog master import** — no single tracked document enumerates every imported field and its coverage status. The tracked documents and artifacts above are the minimum authoritative compatibility reference. WP2/WP4 must prove preservation by comparing normalized import output (fields, relationships, identifiers, specifications, provider mappings, counts and conflicts) against the WP0 baseline fixtures using these artifacts. Any field not present in these references is out of scope and must not be invented.
 
 ### 6.4 Official source verification and download-source decision (Upstox / FYERS)
 

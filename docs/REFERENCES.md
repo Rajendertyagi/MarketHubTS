@@ -129,7 +129,7 @@ These facts were studied to ground the catalog model. Official sources above are
 
 | Technology | Source | Notes |
 |---|---|---|
-| Bun | https://bun.sh/ , https://bun.com/docs | Runtime, `bun:sqlite`, workspaces, test/build tooling; installed 1.4.4 verified locally |
+| Bun | https://bun.sh/ , https://bun.com/docs | Runtime, `bun:sqlite`, workspaces, test/build tooling; installed 1.4.5 verified locally (declared baseline aligned to 1.4.5 on 2026-11-25) |
 | Hono | https://hono.dev/ | Web framework (API) |
 | Zod | https://zod.dev/ | Schema validation/contracts |
 | Drizzle ORM / Kit | https://orm.drizzle.team/ | ORM, migrations, `bun:sqlite` integration |
@@ -141,7 +141,7 @@ These facts were studied to ground the catalog model. Official sources above are
 | shadcn/ui | https://ui.shadcn.com/ | Component patterns (generation/integration pending) |
 | Vela (candidate) | https://www.npmjs.com/package/@luxalgo/vela , https://github.com/luxalgo/vela , https://velacharts.dev/ | Charting library candidate; verify compatibility/features/licensing/attribution before final adoption |
 
-### 9.1 Bun runtime notes (verified 2026-11-16, installed 1.4.4)
+### 9.1 Bun runtime notes (verified 2026-11-16, installed 1.4.5; declared baseline aligned to 1.4.5 on 2026-11-25)
 
 Official pages: [SQLite](https://bun.com/docs/runtime/sqlite), [WebSockets](https://bun.com/docs/runtime/http/websockets), [Web APIs](https://bun.com/docs/runtime/web-apis), [Secrets](https://bun.com/docs/runtime/secrets), [Bun APIs](https://bun.com/docs/runtime/bun-apis).
 

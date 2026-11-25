@@ -1,15 +1,15 @@
 # Dependencies
 
 > **Status:** Verified baseline for Phase 1 scaffold; some selections provisional/pending validation. Authoritative cross-references: [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md), [REFERENCES.md](REFERENCES.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md).
-> **Last updated:** 2026-11-15 (verified for Bun 1.4.4 on Windows)
+> **Last updated:** 2026-11-25 (verified for Bun 1.4.5 on Windows; declared baseline aligned from 1.4.4 to 1.4.5 on 2026-11-25 to match the installed runtime and WP0 benchmark environment)
 
 ## 1. Runtime / tooling (installed)
 
 | Dependency | Version | Role | Status |
 |---|---|---|---|
-| Bun | 1.4.4 | Runtime, package manager, test runner, bundler | Installed/verified |
+| Bun | 1.4.5 | Runtime, package manager, test runner, bundler | Installed/verified |
 | TypeScript | 7.0.2 | Language/type checking | Installed (latest major; scaffold checks passed) |
-| bun-types | 1.4.4 | Bun type definitions | Installed |
+| bun-types | 1.4.5 | Bun type definitions | Installed |
 
 ## 2. Core libraries (installed)
 

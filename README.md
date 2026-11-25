@@ -34,7 +34,7 @@ Not an automated trading platform, not an AI trading recommendation/prediction/s
 
 ## Prerequisites
 
-- [Bun](https://bun.sh/) 1.4.4+
+- [Bun](https://bun.sh/) 1.4.5+
 
 ## Quick start (Windows)
 
