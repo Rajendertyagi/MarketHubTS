@@ -3,7 +3,7 @@
 > **Status:** Authoritative architecture requirement (owner-approved). **Documentation only — no metadata API, registry, WebUI component or application change is implemented by this document.** Implementation requires separate authorization.
 > **Decision:** [AD-025](ARCHITECTURE_DECISIONS.md) (backend/domain-owned metadata is authoritative).
 > **Governing:** [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [PROJECT_MANAGER_PROTOCOL.md](PROJECT_MANAGER_PROTOCOL.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [MCP_INTERFACE.md](MCP_INTERFACE.md).
-> **Last updated:** 2026-11-22 (project-wide centralization inventory added: provider identity, SSE events, duplicated contract values, MCP operations, catalog/derivative discovery, capabilities, configuration, snapshot provider selection, WebUI status).
+> **Last updated:** 2026-11-25 (reconciled implemented discovery status; startup catalog-refresh defect recorded; four-way scope distinction cross-referenced).
 
 ## 1. Requirement
 
@@ -37,7 +37,7 @@ Ownership stays with the module that already owns the values. Do **not** create 
 | Persisted user configuration | Read and modify through its owning backend service/API. |
 | Presentation-only values | May remain frontend-owned. |
 
-This table is the delivery rule: a shared contract value is consumed directly, not fetched. A discovery endpoint is justified only for runtime metadata that cannot be derived from a shared contract or an existing domain API.
+This table is the delivery rule: a shared contract value is consumed directly, not fetched. A discovery endpoint is justified only for runtime metadata that cannot be derived from a shared contract or an existing domain API. Ownership stays with the module that already owns the values — fixed enums in `@markethub/contracts`, runtime capabilities in the owning backend registry/module, dynamic market entities in the canonical catalogue plus bounded paginated domain APIs, user selections/preferences in the owning backend service/repository plus API, and presentation-only choices in the WebUI. Never duplicate a backend-owned list in React. Do not introduce a universal metadata database, a generic configuration framework, an unnecessary registry/microservice, or a second source of truth (AD-025).
 
 ### A. Shared contract metadata
 
@@ -68,6 +68,7 @@ Instruments, canonical identifiers, exchanges, segments, derivative contracts, e
 - Use query-based, bounded, paginated APIs for large or dynamic datasets. `GET /api/catalog/search` (`apps/api/src/catalog-routes.ts:25–55`) is the existing model: `text` (required), `limit` (1–100, default 25), `cursor`; response `{ instruments, nextCursor }`.
 - Never copy exchange/provider data into frontend constants. AD-009 already forbids permanent hardcoding of changing contracts, expiries, strikes, lot sizes and freezes.
 - Where no authoritative source exists (for example live provider capability or entitlement values in the offline build), the UI must say so — it must not invent values to fill a selector. Expiry lists now have an authoritative local source via the imported Upstox BOD + FYERS Symbol Master files (Phase 4).
+- Keep the four-way distinction in [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md) §1.5: exchange-discovered instruments, MarketHubTS-supported product scope, user-enabled selections, and actual provider capability/data availability. The six approved NSE index F&O underlyings are a product-scope decision, not the complete NSE cash-index catalogue; BSE scope stays SENSEX + SENSEX F&O.
 
 ### D. User-managed configuration
 
@@ -200,8 +201,9 @@ For each candidate: current definition → owner → duplicators/consumers → e
 - **Decision:** reusable searchable selector backed by the existing bounded API. Context-aware filters (exchange/category/segment/underlying/product scope/lifecycle) require a repository/API extension first — they are **not** available today; do not add filters for appearance. Never load the full catalogue into the browser.
 
 ### F. Derivative expiry and contract discovery
-- **Current:** `findDerivativeContracts({ underlyingCanonicalId?, expiryDate?, derivativeClass? })` exists (`packages/market-core/src/types.ts:52`; `packages/database/src/repositories/catalog.ts:307–315`) but is **unbounded** (`q.all()`, no limit/order/cursor). `DerivativeContractRecord` (`market-core/src/types.ts:12–32`) stores `expiryDate`, `derivativeClass`, per-strike `strikeNormalized`/`strikeKey`. Write paths exist in catalog sync (`catalog.ts:45–71`, `sync/apply.ts:219–221,301–322`) but **no production/offline catalog sync runs**; the current DB has **0 derivative and 0 instrument rows**. No expiry API, MCP operation or WebUI flow exists; `SnapshotPanel.tsx:106` uses a manual expiry text field.
-- **Decision:** distinguish implemented data model / current empty offline state / missing bounded read API / unverified authoritative data. Plan an expiry read API from real derivative records only after (a) a population path exists and (b) the query is made bounded. Never compute expiries from weekdays or hardcode dates. Strikes/exact contracts only where actual data supports them.
+- **Resolved (Phase 4, complete and published on `develop`):** a local catalogue is built from public Upstox BOD + FYERS Symbol Master files (no credentials, no live calls) via `packages/market-core/src/sync/{upstox-master,fyers-master}.ts`; a bounded, provider-aware `GET /api/catalog/derivative-expiries` (`apps/api/src/derivative-routes.ts`) returns expiries with honest FRESH/STALE/UNKNOWN freshness derived from source data dates; the Snapshot Panel expiry selector is backed by that API with a manual fallback clearly marked unverified. Provider identity stays fixed `UPSTOX`/`FYERS` (no Automatic option, no FYERS default); no live provider connection or activation and no full exchange catalogue claim. See [PROJECT_STATUS.md](PROJECT_STATUS.md) §3.15.
+- **Historical baseline (superseded):** the original inventory recorded an unbounded `findDerivativeContracts` query, no population path, 0 rows and a manual expiry text field. That baseline is closed by Phase 4; do not describe expiry discovery as missing.
+- **Decision:** never compute expiries from weekdays or hardcode dates; strikes/exact contracts only where actual data supports them. The startup catalog refresh that populates the catalogue is currently OPEN/defective ([CATALOG_REFRESH_STARTUP_DEFECT.md](CATALOG_REFRESH_STARTUP_DEFECT.md)) — do not claim startup refresh works correctly.
 
 ### G. Provider capability and availability metadata
 - **Current:** three vocabularies — `capabilityStateSchema` (`provider.ts:75`), `capabilityStatusSchema` (`live-components.ts:159`), `availabilityStateSchema` (`market.ts:36`). Adapters emit `SUPPORTED`/`LIMITED`/`UNSUPPORTED` with `reason` and `entitlementUnverified` (`broker-upstox/src/components.ts:203–224`, `broker-fyers/src/stream.ts:376–393`). `capabilitySourceSchema` (`provider.ts:78`) separates `API` (verified) from `DOCUMENTATION`/`USER`/`UNKNOWN`.

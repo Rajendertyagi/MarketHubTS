@@ -1,7 +1,7 @@
 # Product Requirements
 
 > **Status:** Confirmed product requirements and boundaries (authoritative). Items marked **(verify)** require official-source verification before implementation.
-> **Last updated:** 2026-11-22 (metadata centralization architecture)
+> **Last updated:** 2026-11-25 (reconciled discovery requirements and implemented status; startup refresh defect recorded)
 > **Related:** [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md), [MCP_INTERFACE.md](MCP_INTERFACE.md), [WEBUI_AND_CONFIGURATION.md](WEBUI_AND_CONFIGURATION.md), [DATA_LIFECYCLE_AND_STORAGE.md](DATA_LIFECYCLE_AND_STORAGE.md)
 
 ## 1. Product identity
@@ -57,8 +57,9 @@ These are **phased priorities, not unwanted features**, and must not be forgotte
 **Explicitly out of scope (BSE):** BANKEX derivatives, SENSEX50 derivatives, other BSE stock derivatives, other unsupported BSE derivatives. Do not broaden supported universe simply because a broker supplies additional instruments.
 
 ### 4.3 Catalog dynamics
-- Catalog must dynamically follow official exchange instrument and contract information.
-- Do not permanently hardcode changing contract lists, lot sizes, expiries, strike schemes, or quantity freezes.
+- Catalog must dynamically follow official exchange instrument and contract information. The backend discovers available data from authoritative sources (official exchange definitions and public provider master files), not from manually maintained lists.
+- Discovery must cover the NSE cash-index catalogue by official category, current NSE F&O stock eligibility, cash instruments for F&O stocks, stock/index futures and options, expiries/strikes/lot sizes/tick sizes, and BSE SENSEX plus SENSEX derivatives. Changing exchange membership or contract information must not require a source-code or frontend-list edit.
+- Do not permanently hardcode changing contract lists, lot sizes, expiries, strike schemes, tick sizes, or quantity freezes. Keep the four-way distinction in [MARKET_DATA_AND_CATALOG.md](MARKET_DATA_AND_CATALOG.md) §1.5 (discovered instruments vs product scope vs user-enabled selections vs actual provider availability); the six approved NSE index F&O underlyings are a product-scope decision, not the complete cash-index catalogue.
 
 ### 4.4 Market-wide information (retain where applicable)
 - India VIX.
@@ -161,7 +162,7 @@ Details: [MCP_INTERFACE.md](MCP_INTERFACE.md).
 ## 10. WebUI and operational configuration
 
 - WebUI is human-facing interface and **operational control centre**. Keep simple to configure; avoid hidden fixed policies/unnecessary complexity.
-- **Configurable areas:** broker credentials/connections, provider enable/disable, startup/background, LAN access/app address, streaming selections, historical sync selections/schedules, option-chain snapshot config (underlying/expiry/strikes/capture/streaming), retention, provider preferences, alert delivery, scanner operation, dashboard layout, chart preferences, table columns/sorting, watchlist layout, logging/diagnostics, backup/restore. Sensible defaults, configurable behavior.
+- **Configurable areas:** broker credentials/connections, provider enable/disable, startup/background, LAN access/app address, exchanges and instrument categories, indices/groups, F&O underlyings and expiries, streaming selections, historical sync selections/schedules, option-chain snapshot config (underlying/expiry/strikes/capture/streaming), retention, provider preferences and data components, alert delivery, scanner operation, dashboard layout, chart preferences, table columns/sorting, watchlist layout, logging/diagnostics, backup/restore. Sensible defaults, configurable behavior — not permanent restrictions. Selections persist in the owning backend service/repository and survive restarts; provider restrictions/limits are exposed clearly and never silently change user selections.
 - Provider restrictions exposed clearly; never silently change user selections because an API limit was exceeded.
 - **Backend-owned values have one authoritative source.** WebUI and MCP must reuse shared contracts or discover runtime values from the owning backend registry/API rather than maintain duplicate lists. Fixed enums are consumed directly from `@markethub/contracts`; large or changing domain data uses bounded, paginated domain APIs; runtime registrations use read-only metadata only where a consumer need is demonstrated. Presentation-only UI values remain local. See [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025).
 - **Customization:** dashboard widgets/layout, rearrangeable panels, show/hide modules, custom table columns, sorting/filtering, saved layouts, watchlist views, charts/drawing tools, multiple timeframes.
@@ -180,6 +181,6 @@ Details: [MCP_INTERFACE.md](MCP_INTERFACE.md).
 
 ## 12. Current implementation status
 
-M1–M3, M4 Stages A/B/C/D/E/F and the M5 offline implementation (Phases 1–4A) are published; M6-A, M6-B1, M6-B2 and M6-B3 are implemented and published, and M6-C is accepted and closed. M6-D/E source and tests are present but not accepted; M6-B4 remains separately owned. No live provider connection, real feed, Stage G verification, watchlists/alerts/scanners, charts, or backup/restore is implemented. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verified current state.
+M1–M3, M4 Stages A/B/C/D/E/F and the M5 offline implementation (Phases 1–4A) are published; M6-A, M6-B1, M6-B2 and M6-B3 are implemented and published, and M6-C is accepted and closed. M6-B4, M6-D and M6-E are accepted (2026-11-25) and M6 is complete and closed; see [PROJECT_STATUS.md](PROJECT_STATUS.md) §8 and [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) §4. No live provider connection, real feed, Stage G verification, watchlists/alerts/scanners, charts, or backup/restore is implemented. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verified current state.
 
-WebUI selectable options, capabilities and domain entities must be discovered from the backend and shared contracts rather than duplicated as frontend lists; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025). This is an architecture requirement, not implemented behavior.
+WebUI selectable options, capabilities and domain entities must be discovered from the backend and shared contracts rather than duplicated as frontend lists; see [METADATA_AND_CAPABILITY_DISCOVERY.md](METADATA_AND_CAPABILITY_DISCOVERY.md) (AD-025). This is implemented for the delivered increments (shared-contract options, instrument picker, MCP operation selector, provider status/capability rendering, derivative expiry discovery, explicit-only snapshot provider selection) and remains an architecture requirement for all future modules. The startup catalog refresh is currently OPEN/defective ([CATALOG_REFRESH_STARTUP_DEFECT.md](CATALOG_REFRESH_STARTUP_DEFECT.md)); do not treat it as working.
