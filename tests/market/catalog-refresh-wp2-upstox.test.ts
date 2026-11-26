@@ -10,6 +10,7 @@
  *  - provider isolation is preserved.
  */
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,29 @@ import { fyersFiles, upstoxRows } from "../fixtures/provider-masters";
 const CLOCK = new Date("2026-11-24T10:00:00.000Z");
 const NOW = CLOCK.toISOString();
 const OPTS = { now: NOW, sourceVersion: "wp2-fixture-v1", sourceObservedAt: NOW };
+
+/**
+ * Independent PRE-WP2 golden values, captured from commit `905ac1e` via
+ * `git archive` and executed outside the working tree (see
+ * `D:\Coding\OpenCode\user\tmp\opencode\wp2-golden\golden-fingerprints.ts`).
+ * These are NOT derived from the current accumulator. The hash is a
+ * key-order-independent SHA-256 over instruments, mappings, active native
+ * identifiers and the import report.
+ */
+const GOLDEN_UPSTOX = {
+  instruments: 8,
+  mappings: 8,
+  batchIdentifiers: 0,
+  activeNativeIdentifiers: 8,
+  invalidRows: 0,
+  unresolvedUnderlyings: 0,
+  duplicateIdentities: 0,
+  mappingConflicts: 0,
+  skippedOutOfScope: 3,
+  inScopeOptions: 4,
+  inScopeUnderlyings: 4,
+  hash: "65d847cfeb4a9a03b31ce3be70337aafe62a8420d790612dff5308e6adaa9d5a"
+};
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -92,6 +116,24 @@ function fingerprint(result: ReturnType<typeof buildUpstoxImport>) {
     activeNativeIdentifiers: [...result.reconciliation.activeNativeIdentifiers].sort(),
     report: result.report
   };
+}
+
+/** Deterministic, key-order-independent canonical serialization (golden hash). */
+function stable(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stable(obj[k])}`).join(",")}}`;
+}
+
+/** SHA-256 over the canonical normalized output; compared to the PRE-WP2 golden. */
+function normalizedHash(result: ReturnType<typeof buildUpstoxImport>): string {
+  return createHash("sha256").update(stable({
+    instruments: result.batch.instruments.map((i) => stable(i)).sort(),
+    mappings: result.batch.mappings.map((m) => stable(m)).sort(),
+    activeNativeIdentifiers: [...result.reconciliation.activeNativeIdentifiers].sort(),
+    report: result.report
+  }), "utf8").digest("hex");
 }
 
 /**
@@ -453,5 +495,130 @@ describe("WP2-A Upstox bounded ingestion", () => {
       closeDatabaseHandle(handle);
       removeTempDir(dir);
     }
+  });
+
+  test("current output matches the independent PRE-WP2 golden fingerprints", () => {
+    const result = buildUpstoxImport(upstoxRows, OPTS);
+    expect(result.batch.instruments.length).toBe(GOLDEN_UPSTOX.instruments);
+    expect(result.batch.mappings.length).toBe(GOLDEN_UPSTOX.mappings);
+    expect(result.batch.identifiers.length).toBe(GOLDEN_UPSTOX.batchIdentifiers);
+    expect(result.reconciliation.activeNativeIdentifiers.size).toBe(GOLDEN_UPSTOX.activeNativeIdentifiers);
+    expect(result.report.invalidRows).toBe(GOLDEN_UPSTOX.invalidRows);
+    expect(result.report.unresolvedUnderlyings.length).toBe(GOLDEN_UPSTOX.unresolvedUnderlyings);
+    expect(result.report.duplicateIdentities.length).toBe(GOLDEN_UPSTOX.duplicateIdentities);
+    expect(result.report.mappingConflicts.length).toBe(GOLDEN_UPSTOX.mappingConflicts);
+    expect(result.report.skippedOutOfScope).toBe(GOLDEN_UPSTOX.skippedOutOfScope);
+    expect(result.report.inScopeOptions).toBe(GOLDEN_UPSTOX.inScopeOptions);
+    expect(result.report.inScopeUnderlyings).toBe(GOLDEN_UPSTOX.inScopeUnderlyings);
+    expect(normalizedHash(result)).toBe(GOLDEN_UPSTOX.hash);
+  });
+
+  test("missing, leading and repeated commas fail closed at the parser (same and split chunks)", async () => {
+    const streamError = async (body: BodyInit): Promise<string> => {
+      const acc = new UpstoxImportAccumulator();
+      const refresh = new CatalogMasterRefresh({
+        catalog: makeCatalog(), sync: makeSync().sync, now: () => CLOCK,
+        fetch: async () => new Response(body)
+      });
+      try {
+        await (refresh as any).streamUpstoxInto(acc, "https://example.invalid/complete.json", undefined);
+        return "";
+      } catch (e) {
+        return String(e);
+      }
+    };
+
+    // Same chunk.
+    expect(await streamError('[{"a":1}{"b":2}]')).toContain("missing comma between elements");
+    expect(await streamError('[,{"a":1}]')).toContain("leading comma");
+    expect(await streamError('[{"a":1},,{"b":2}]')).toContain("repeated comma");
+
+    // Across chunk boundaries: a separator must not hide at a chunk edge.
+    const splitError = async (parts: string[]): Promise<string> => {
+      const bytes = new TextEncoder().encode(parts.join(""));
+      const cuts: number[] = [];
+      let accLen = 0;
+      for (const p of parts) { accLen += p.length; cuts.push(accLen); }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let from = 0;
+          for (const cut of cuts) { controller.enqueue(bytes.slice(from, cut)); from = cut; }
+          controller.close();
+        }
+      });
+      return streamError(body);
+    };
+    expect(await splitError(['[{"a":1}', '{"b":2}]'])).toContain("missing comma between elements");
+    expect(await splitError(['[', ',{"a":1}]'])).toContain("leading comma");
+    expect(await splitError(['[{"a":1},', ',{"b":2}]'])).toContain("repeated comma");
+  });
+
+  test("missing/leading/repeated commas: FAILED, no reconciliation, no partial snapshot", async () => {
+    const bodies = ['[{"a":1}{"b":2}]', '[,{"a":1}]', '[{"a":1},,{"b":2}]'];
+    const dir = mkdtempSync(join(tmpdir(), "wp2a-sep-"));
+    const handle = openDatabase({ dbPath: join(dir, "test.sqlite"), migrate: true });
+    try {
+      const repo = new SqliteCatalogRepository(handle.db, handle.sqlite);
+      const realSync = new CatalogSyncService(repo);
+      const seed = buildUpstoxImport(upstoxRows, OPTS);
+      expect((await realSync.applyCompleteProviderSnapshot(seed.batch, seed.reconciliation)).status).toBe("COMPLETED");
+      const before = (await repo.listInstruments()).map((i) => i.canonicalId).sort();
+
+      for (const body of bodies) {
+        let applyCalls = 0;
+        const spySync = {
+          applyCompleteProviderSnapshot: (b: any, r: any) => {
+            applyCalls++;
+            return realSync.applyCompleteProviderSnapshot(b, r);
+          }
+        } as unknown as CatalogSyncService;
+        const events: string[] = [];
+        const refresh = new CatalogMasterRefresh({
+          catalog: proceedingCatalog(repo, "UPSTOX"), sync: spySync, now: () => CLOCK,
+          fetch: async () => new Response(body),
+          onEvent: (e) => events.push(`${e.provider}:${e.outcome}`)
+        });
+        await (refresh as any).refreshProvider("UPSTOX");
+        expect(events).toContain("UPSTOX:FAILED");
+        expect(applyCalls).toBe(0); // no reconciliation
+        expect((await repo.listInstruments()).map((i) => i.canonicalId).sort()).toEqual(before); // no partial snapshot
+      }
+    } finally {
+      closeDatabaseHandle(handle);
+      removeTempDir(dir);
+    }
+  });
+
+  test("unreferenced cash row missing all symbol fields is skipped, not counted invalid", async () => {
+    const rows = clone(upstoxRows) as any[];
+    rows.push({
+      segment: "NSE_EQ", exchange: "NSE", instrument_key: "NSE_EQ|UNREFERENCED",
+      isin: "INEUNREF0001", exchange_token: "999999", instrument_type: "EQ"
+    });
+    const acc = new UpstoxImportAccumulator();
+    for (const row of rows) acc.addRow(row);
+    const result = acc.finish(OPTS);
+    const baseline = buildUpstoxImport(upstoxRows, OPTS);
+    // Valid output is unchanged; only the out-of-scope counter moves.
+    expect(result.batch.instruments.map((i) => JSON.stringify(i)).sort())
+      .toEqual(baseline.batch.instruments.map((i) => JSON.stringify(i)).sort());
+    expect(result.batch.mappings.map((m) => JSON.stringify(m)).sort())
+      .toEqual(baseline.batch.mappings.map((m) => JSON.stringify(m)).sort());
+    expect([...result.reconciliation.activeNativeIdentifiers].sort())
+      .toEqual([...baseline.reconciliation.activeNativeIdentifiers].sort());
+    expect(result.report.invalidRows).toBe(baseline.report.invalidRows);
+    expect(result.report.skippedOutOfScope).toBe(baseline.report.skippedOutOfScope + 1);
+
+    // End to end: the out-of-scope row must not fail the refresh.
+    const { sync, applied, batches } = makeSync();
+    const events: string[] = [];
+    const refresh = new CatalogMasterRefresh({
+      catalog: makeCatalog(), sync, now: () => CLOCK, fetch: async () => Response.json(rows),
+      onEvent: (e) => events.push(`${e.provider}:${e.outcome}`)
+    });
+    await (refresh as any).refreshProvider("UPSTOX");
+    expect(applied).toEqual(["UPSTOX"]);
+    expect(events).toContain("UPSTOX:REFRESHED");
+    expect(batches[0].instruments.length).toBe(baseline.batch.instruments.length);
   });
 });

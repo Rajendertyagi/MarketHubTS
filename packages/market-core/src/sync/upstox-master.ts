@@ -48,7 +48,8 @@ interface CashCandidate {
   segment: string;
   exchange: Exchange;
   instrumentKey: string;
-  canonicalSymbol: string;
+  /** May be absent: validated only after the referenced-underlying filter (pre-WP2 order). */
+  canonicalSymbol: string | undefined;
 }
 
 interface OptionCandidate {
@@ -133,8 +134,11 @@ export class UpstoxImportAccumulator {
       const exchange = exchangeOf(row);
       const instrumentKey = str(row.instrument_key);
       if (!exchange || !instrumentKey) { this.report.invalidRows++; return; }
+      // Pre-WP2 order: `canonicalSymbol` is validated only AFTER the
+      // referenced-underlying filter in `finish()`. An unrelated EQ/INDEX row
+      // missing every symbol field is out of scope, not an invalid row, and
+      // must not fail the whole refresh. Defer the check to preserve that.
       const canonicalSymbol = str(row.trading_symbol) ?? str(row.short_name) ?? str(row.name);
-      if (!canonicalSymbol) { this.report.invalidRows++; return; }
       this.cashCandidates.push({ row, segment: segment!, exchange, instrumentKey, canonicalSymbol });
       return;
     }
@@ -194,7 +198,12 @@ export class UpstoxImportAccumulator {
         report.skippedOutOfScope++; // unrelated EQ/INDEX universe is read but not imported
         continue;
       }
-      const { row, segment, exchange, instrumentKey, canonicalSymbol } = c;
+      const { row, segment, exchange, instrumentKey } = c;
+      // Validated here, after the scope filter, exactly as in the pre-WP2
+      // array importer: only a referenced underlying with no usable symbol is
+      // an invalid row.
+      const canonicalSymbol = c.canonicalSymbol;
+      if (!canonicalSymbol) { report.invalidRows++; continue; }
       const category = CASH_SEGMENTS[segment]!;
       const isin = str(row.isin);
       const exchangeSecurityId = str(row.exchange_token);

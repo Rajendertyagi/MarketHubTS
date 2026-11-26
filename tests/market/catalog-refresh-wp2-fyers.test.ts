@@ -32,6 +32,29 @@ const CLOCK = new Date("2026-11-24T10:00:00.000Z");
 const NOW = CLOCK.toISOString();
 const OPTS = { now: NOW, sourceVersion: "wp2-fixture-v1" };
 
+/**
+ * Independent PRE-WP2 golden values, captured from commit `905ac1e` via
+ * `git archive` and executed outside the working tree (see
+ * `D:\Coding\OpenCode\user\tmp\opencode\wp2-golden\golden-fingerprints.ts`).
+ * These are NOT derived from the current accumulator. The hash is a
+ * key-order-independent SHA-256 over instruments, mappings, active native
+ * identifiers and the import report.
+ */
+const GOLDEN_FYERS = {
+  instruments: 9,
+  mappings: 9,
+  batchIdentifiers: 0,
+  activeNativeIdentifiers: 8,
+  invalidRows: 0,
+  unresolvedUnderlyings: 0,
+  duplicateIdentities: 0,
+  mappingConflicts: 0,
+  skippedOutOfScope: 2,
+  inScopeOptions: 5,
+  inScopeUnderlyings: 4,
+  hash: "089e56e56ed605b5ff298e8b4aff6e5821d4739fd83abad2e06f4eefa4444af4"
+};
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -115,6 +138,24 @@ function fingerprint(result: ReturnType<typeof buildFyersImport>) {
     activeNativeIdentifiers: [...result.reconciliation.activeNativeIdentifiers].sort(),
     report: result.report
   };
+}
+
+/** Deterministic, key-order-independent canonical serialization (golden hash). */
+function stable(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stable(obj[k])}`).join(",")}}`;
+}
+
+/** SHA-256 over the canonical normalized output; compared to the PRE-WP2 golden. */
+function normalizedHash(result: ReturnType<typeof buildFyersImport>): string {
+  return createHash("sha256").update(stable({
+    instruments: result.batch.instruments.map((i) => stable(i)).sort(),
+    mappings: result.batch.mappings.map((m) => stable(m)).sort(),
+    activeNativeIdentifiers: [...result.reconciliation.activeNativeIdentifiers].sort(),
+    report: result.report
+  }), "utf8").digest("hex");
 }
 
 /**
@@ -581,5 +622,21 @@ describe("WP2-B FYERS bounded ingestion", () => {
     expect(events).toContain("FYERS:FAILED");
     expect(events).toContain("UPSTOX:REFRESHED");
     expect(applied).toEqual(["UPSTOX"]);
+  });
+
+  test("current output matches the independent PRE-WP2 golden fingerprints", () => {
+    const result = buildFyersImport(fyersFiles as any, OPTS);
+    expect(result.batch.instruments.length).toBe(GOLDEN_FYERS.instruments);
+    expect(result.batch.mappings.length).toBe(GOLDEN_FYERS.mappings);
+    expect(result.batch.identifiers.length).toBe(GOLDEN_FYERS.batchIdentifiers);
+    expect(result.reconciliation.activeNativeIdentifiers.size).toBe(GOLDEN_FYERS.activeNativeIdentifiers);
+    expect(result.report.invalidRows).toBe(GOLDEN_FYERS.invalidRows);
+    expect(result.report.unresolvedUnderlyings.length).toBe(GOLDEN_FYERS.unresolvedUnderlyings);
+    expect(result.report.duplicateIdentities.length).toBe(GOLDEN_FYERS.duplicateIdentities);
+    expect(result.report.mappingConflicts.length).toBe(GOLDEN_FYERS.mappingConflicts);
+    expect(result.report.skippedOutOfScope).toBe(GOLDEN_FYERS.skippedOutOfScope);
+    expect(result.report.inScopeOptions).toBe(GOLDEN_FYERS.inScopeOptions);
+    expect(result.report.inScopeUnderlyings).toBe(GOLDEN_FYERS.inScopeUnderlyings);
+    expect(normalizedHash(result)).toBe(GOLDEN_FYERS.hash);
   });
 });

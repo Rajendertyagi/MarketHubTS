@@ -668,12 +668,38 @@ class JsonArrayElementParser {
   private inString = false;
   private escaped = false;
   private elementStart = -1;
-  /** Set when a comma is skipped at array level; cleared when the next element starts. */
-  private sawCommaAtArrayLevel = false;
+  /**
+   * Array-level separator state (meaningful while `phase === "array"` and
+   * `depth === 0`): "first" before the first element (or an empty array),
+   * "value" after a separator comma (an element must follow), "separator"
+   * after a completed element (a comma or `]` must follow). This fails closed
+   * on missing, leading and repeated commas while preserving valid arrays.
+   */
+  private arrayExpect: "first" | "value" | "separator" = "first";
   private maxBufferChars = 0;
 
   /** Diagnostic high-water mark of retained (unparsed) text. */
   get maxBufferedChars(): number { return this.maxBufferChars; }
+
+  /**
+   * Validate comma separators in array-level text (whitespace/commas only).
+   * Called for both inter-element skipped text and the trailing chunk tail so
+   * a leading/repeated comma cannot hide across a chunk boundary.
+   */
+  private noteArrayLevelText(text: string): void {
+    const commas = text.match(/,/g);
+    if (!commas) return;
+    if (this.arrayExpect === "first") {
+      throw new Error("Malformed Upstox master array: leading comma");
+    }
+    if (this.arrayExpect === "value") {
+      throw new Error("Malformed Upstox master array: repeated comma");
+    }
+    if (commas.length > 1) {
+      throw new Error("Malformed Upstox master array: repeated comma");
+    }
+    this.arrayExpect = "value";
+  }
 
   push(chunk: string): unknown[] {
     this.buffer += chunk;
@@ -713,7 +739,7 @@ class JsonArrayElementParser {
           if (/[^\s,]/.test(skipped)) {
             throw new Error("Malformed Upstox master array: unexpected token at array level");
           }
-          if (skipped.includes(",")) this.sawCommaAtArrayLevel = true;
+          this.noteArrayLevelText(skipped);
         }
         this.pos = idx;
       }
@@ -738,6 +764,7 @@ class JsonArrayElementParser {
           if (this.depth === 0 && this.elementStart >= 0) {
             out.push(JSON.parse(this.buffer.slice(this.elementStart, idx + 1)));
             this.elementStart = -1;
+            this.arrayExpect = "separator";
           }
         }
         this.pos = idx + 1;
@@ -746,8 +773,10 @@ class JsonArrayElementParser {
       }
       if (ch === '"') {
         if (this.depth === 0 && this.elementStart < 0) {
+          if (this.arrayExpect === "separator") {
+            throw new Error("Malformed Upstox master array: missing comma between elements");
+          }
           this.elementStart = idx;
-          this.sawCommaAtArrayLevel = false;
         }
         this.inString = true;
         this.pos = idx + 1;
@@ -756,8 +785,10 @@ class JsonArrayElementParser {
       }
       if (ch === "{" || ch === "[") {
         if (this.depth === 0) {
+          if (this.arrayExpect === "separator") {
+            throw new Error("Malformed Upstox master array: missing comma between elements");
+          }
           this.elementStart = idx;
-          this.sawCommaAtArrayLevel = false;
         }
         this.depth++;
         this.pos = idx + 1;
@@ -771,7 +802,7 @@ class JsonArrayElementParser {
       }
       if (this.depth === 0) {
         if (ch !== "]") throw new Error("Malformed Upstox master array: unexpected '}'");
-        if (this.sawCommaAtArrayLevel) {
+        if (this.arrayExpect === "value") {
           throw new Error("Malformed Upstox master array: trailing comma");
         }
         this.phase = "done";
@@ -783,6 +814,7 @@ class JsonArrayElementParser {
       if (this.depth === 0) {
         out.push(JSON.parse(this.buffer.slice(this.elementStart, idx + 1)));
         this.elementStart = -1;
+        this.arrayExpect = "separator";
       }
       this.pos = idx + 1;
       interesting.lastIndex = this.pos;
@@ -798,9 +830,9 @@ class JsonArrayElementParser {
       if (/[^\s,]/.test(tail)) {
         throw new Error("Malformed Upstox master array: unexpected token at array level");
       }
-      // A separator comma can land at a chunk boundary; remember it so a `]`
-      // in the next chunk is still recognised as a trailing comma.
-      if (tail.includes(",")) this.sawCommaAtArrayLevel = true;
+      // A separator comma can land at a chunk boundary; validate it here so a
+      // leading/repeated comma cannot hide across chunks.
+      this.noteArrayLevelText(tail);
     }
     this.pos = this.buffer.length;
     this.compact();
