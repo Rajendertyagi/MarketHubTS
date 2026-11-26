@@ -1,24 +1,136 @@
+import { createHash } from "node:crypto";
 import { istDateString, type ProviderId } from "@markethub/contracts";
 import type { CatalogRepository } from "../types";
 import { CatalogSyncService } from "./apply";
-import { buildFyersImport, FYERS_MASTER_URLS, FYERS_SOURCE, type FyersMasterSegment } from "./fyers-master";
+import {
+  FyersImportAccumulator, FYERS_MASTER_URLS, FYERS_SOURCE, type FyersMasterSegment
+} from "./fyers-master";
 import { validateCompleteImportReport, type ProviderImportReport } from "./import-report";
-import { buildUpstoxImport, UPSTOX_MASTER_URL, UPSTOX_SOURCE } from "./upstox-master";
+import { UpstoxImportAccumulator, UPSTOX_MASTER_URL, UPSTOX_SOURCE } from "./upstox-master";
 
 const FETCH_TIMEOUT_MS = 20_000;
 const PROVIDERS: ProviderId[] = ["UPSTOX", "FYERS"];
 /** Small app-owned daily trigger: 30 minutes, well inside the 15–60 min range. */
 const DEFAULT_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
+/**
+ * Bounded sanity limits for the Upstox streaming pipeline (WP2-A). These are
+ * deliberately generous relative to the verified baseline (64,158,142 B
+ * decompressed / 136,631 rows) so a legitimate future master still imports;
+ * they exist to fail closed on runaway or malicious sources, not to cap the
+ * supported catalogue. They are module constants, not a new configuration
+ * surface (plan §WP2-C).
+ */
+const UPSTOX_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+const UPSTOX_MAX_ROWS = 1_000_000;
+const UPSTOX_MAX_ELEMENT_CHARS = 4 * 1024 * 1024;
+
+/**
+ * Bounded sanity limits for the FYERS streaming pipeline (WP2-B). Deliberately
+ * generous relative to the verified baseline (NSE_FO 90,878,119 B / 87,577
+ * rows; BSE_FO 10,556,944 B / 9,875; NSE_CM 11,268,482 B / 10,210; BSE_CM
+ * 14,698,626 B / 13,019 — 127,402,171 B / 120,681 rows in total) so a
+ * legitimate future master still imports; they exist to fail closed on runaway
+ * or malicious sources, not to cap the supported catalogue. Module constants,
+ * not a new configuration surface (plan §WP2-C).
+ */
+const FYERS_MAX_SEGMENT_BYTES = 256 * 1024 * 1024;
+const FYERS_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+const FYERS_MAX_ROWS = 1_000_000;
+const FYERS_MAX_ELEMENT_CHARS = 4 * 1024 * 1024;
+
+/**
+ * Combine a per-run cancellation signal with the unconditional fetch timeout.
+ * `AbortSignal.any` is available in the supported Bun 1.4.5 runtime (verified);
+ * the manual fallback keeps the helper safe on any runtime that lacks it.
+ * Without this, a run-owned controller would silently drop the 20 s timeout.
+ */
+function combinedFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  if (!signal) return timeout;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, timeout]);
+  const combined = new AbortController();
+  const abort = () => combined.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  timeout.addEventListener("abort", abort, { once: true });
+  if (signal.aborted || timeout.aborted) combined.abort();
+  return combined.signal;
+}
+
+/**
+ * Explicit refresh-owner lifecycle (WP3-A). `RUNNING` accepts starts; `STOPPING`
+ * is entered atomically at the first stop call and rejects new work; `STOPPED`
+ * is reached only after every active task has settled. Exposed for tests and
+ * diagnostics via `CatalogMasterRefresh.state`.
+ */
+export type CatalogRefreshState = "RUNNING" | "STOPPING" | "STOPPED";
+
 export interface CatalogRefreshEvent {
   provider: ProviderId;
-  outcome: "SKIPPED" | "REFRESHED" | "FAILED" | "DIAGNOSTIC";
+  /** `CANCELLED` is distinct from `FAILED`: shutdown cancellation never means a
+   * provider failure and is never recorded as a successful refresh. */
+  outcome: "SKIPPED" | "REFRESHED" | "FAILED" | "DIAGNOSTIC" | "CANCELLED";
   reason?: string;
   status?: string;
   counts?: Record<string, number>;
 }
 
 export type MasterFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Diagnostic high-water marks for the most recent Upstox streaming ingestion.
+ * Test/diagnostic only — not part of the public package API and not exposed to
+ * any consumer. `maxParserBufferChars` is the largest *transient* decompressed
+ * text fragment held by the parser: a partial element plus the most recently
+ * appended chunk, measured on buffer growth before compaction. It is bounded
+ * by one source row plus one stream chunk, never by the full source.
+ */
+export interface UpstoxStreamMetrics {
+  maxParserBufferChars: number;
+  maxDecompressedBytes: number;
+  rowsStreamed: number;
+}
+
+let lastUpstoxStreamMetrics: UpstoxStreamMetrics | null = null;
+
+/** Returns the most recent Upstox streaming metrics (diagnostic only). */
+export function getLastUpstoxStreamMetrics(): UpstoxStreamMetrics | null {
+  return lastUpstoxStreamMetrics;
+}
+
+/**
+ * Diagnostic high-water marks for the most recent FYERS streaming ingestion.
+ * Test/diagnostic only — not part of the public package API and not exposed to
+ * any consumer. `maxParserBufferChars` is the largest *transient* text fragment
+ * held by the keyed-object parser (a partial pair plus the most recently
+ * appended chunk, measured on buffer growth before compaction). It is bounded
+ * by one source row plus one stream chunk, never by the full source.
+ *
+ * The `retained*` counters describe a different, unavoidable working set: the
+ * in-scope candidate objects the importer must keep until `finish()` can resolve
+ * underlyings and emit the final snapshot. They are deterministic row counts
+ * (not allocation accounting and not an RSS claim); the retained population is
+ * bounded by the supported catalogue, not by the full source size.
+ */
+export interface FyersStreamMetrics {
+  maxParserBufferChars: number;
+  maxSegmentBytes: number;
+  totalBytes: number;
+  rowsStreamed: number;
+  /** In-scope FO option rows retained by the accumulator at stream end. */
+  retainedOptionCandidates: number;
+  /** Referenced CM rows retained by the accumulator at stream end. */
+  retainedCashCandidates: number;
+  /** Peak combined retained candidate rows across the whole ingestion. */
+  maxRetainedCandidates: number;
+}
+
+let lastFyersStreamMetrics: FyersStreamMetrics | null = null;
+
+/** Returns the most recent FYERS streaming metrics (diagnostic only). */
+export function getLastFyersStreamMetrics(): FyersStreamMetrics | null {
+  return lastFyersStreamMetrics;
+}
 
 export interface CatalogMasterRefreshOptions {
   catalog: CatalogRepository;
@@ -43,8 +155,12 @@ export class CatalogMasterRefresh {
   private readonly onEvent: ((event: CatalogRefreshEvent) => void) | undefined;
   private readonly refreshIntervalMs: number;
   private readonly inFlight = new Map<ProviderId, Promise<void>>();
+  /** One controller per active run; aborted on STOPPING (WP3-A item 4). */
+  private readonly controllers = new Map<ProviderId, AbortController>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private stopped = false;
+  private lifecycleState: CatalogRefreshState = "RUNNING";
+  /** Shared drain promise so `stop()` and `stopAndWait()` are idempotent. */
+  private drainPromise: Promise<void> | null = null;
 
   constructor(options: CatalogMasterRefreshOptions) {
     this.catalog = options.catalog;
@@ -55,43 +171,112 @@ export class CatalogMasterRefresh {
     this.refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
   }
 
-  /**
-   * Non-blocking: starts the single app-owned daily trigger (once) and fires
-   * an immediate refresh attempt for each provider.
-   */
-  startIfNeeded(): void {
-    if (this.stopped) return;
-    this.ensureTimer();
-    for (const provider of PROVIDERS) void this.refreshProvider(provider);
+  /** Observable lifecycle state (WP3-A item 1). */
+  get state(): CatalogRefreshState {
+    return this.lifecycleState;
   }
 
+  /**
+   * Non-blocking: starts the single app-owned daily trigger (once) and fires
+   * an immediate refresh attempt for each provider. Rejected once STOPPING or
+   * STOPPED (WP3-A item 2).
+   */
+  startIfNeeded(): void {
+    if (this.lifecycleState !== "RUNNING") return;
+    this.ensureTimer();
+    for (const provider of PROVIDERS) this.kickOff(provider);
+  }
+
+  /**
+   * Fire-and-forget with observable error handling: `refreshProvider` resolves
+   * on every internal path, but a defensive catch guarantees no unhandled
+   * rejection can escape the scheduling seam (WP3 listener-first constraint).
+   */
+  private kickOff(provider: ProviderId): void {
+    void this.refreshProvider(provider).catch((error: unknown) => {
+      this.emit({
+        provider,
+        outcome: "FAILED",
+        reason: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
+      });
+    });
+  }
+
+  /**
+   * Legacy synchronous stop. Enters STOPPING atomically, clears timers and
+   * aborts active runs, then drains in the background. The public contract is
+   * unchanged (void, non-blocking); callers that must wait use `stopAndWait`.
+   */
   stop(): void {
-    this.stopped = true;
+    this.beginStop();
+    void this.drainPromise?.catch(() => { /* observable via stopAndWait */ });
+  }
+
+  /**
+   * Explicit drain guarantee (WP3-A item 8): resolves only after every active
+   * refresh task has settled. Idempotent — repeated calls await the same drain.
+   */
+  async stopAndWait(): Promise<void> {
+    this.beginStop();
+    if (this.drainPromise) await this.drainPromise;
+  }
+
+  /** Steps 1, 3, 4 and 8 of the shutdown contract; safe to call repeatedly. */
+  private beginStop(): void {
+    if (this.lifecycleState !== "RUNNING") return;
+    // 1) Atomic, observable transition. All later steps run from STOPPING.
+    this.lifecycleState = "STOPPING";
+    // 3) Clear every future timer so no scheduled refresh can fire again.
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    // 4) Abort every active run's controller; cancellation propagates through
+    // fetch/decompress/parse/staging via the signal threaded into doRefresh.
+    for (const controller of this.controllers.values()) {
+      try { controller.abort(); } catch { /* best effort */ }
+    }
+    // 8) Start the single drain; new tasks are impossible once STOPPING.
+    this.drainPromise = this.drain();
+  }
+
+  private async drain(): Promise<void> {
+    while (this.inFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight.values()]);
+    }
+    // 9/10) Only now is it safe for the owner to report STOPPED; the caller
+    // closes the database after stopAndWait resolves.
+    this.lifecycleState = "STOPPED";
   }
 
   /** One small in-process timer; every tick reuses the same single-flight path. */
   private ensureTimer(): void {
-    if (this.stopped || this.timer !== null) return;
+    if (this.lifecycleState !== "RUNNING" || this.timer !== null) return;
     this.timer = setInterval(() => {
-      if (this.stopped) return;
-      for (const provider of PROVIDERS) void this.refreshProvider(provider);
+      if (this.lifecycleState !== "RUNNING") return;
+      for (const provider of PROVIDERS) this.kickOff(provider);
     }, this.refreshIntervalMs);
     // Do not keep the process alive solely for this diagnostic refresh.
     (this.timer as { unref?: () => void } | null)?.unref?.();
   }
 
   private async refreshProvider(provider: ProviderId): Promise<void> {
-    if (this.stopped || this.inFlight.has(provider)) return;
-    const task = this.doRefresh(provider).finally(() => this.inFlight.delete(provider));
+    if (this.lifecycleState !== "RUNNING" || this.inFlight.has(provider)) return;
+    const controller = new AbortController();
+    this.controllers.set(provider, controller);
+    const task = this.doRefresh(provider, controller.signal).finally(() => {
+      this.inFlight.delete(provider);
+      this.controllers.delete(provider);
+    });
     this.inFlight.set(provider, task);
     await task;
   }
 
-  private async doRefresh(provider: ProviderId): Promise<void> {
+  private async doRefresh(provider: ProviderId, signal: AbortSignal): Promise<void> {
+    // Cancellation is checked only at well-defined boundaries. Once the atomic
+    // DB transaction starts it is never abandoned mid-flight (WP3-A item 7).
+    if (signal.aborted) return this.emitCancelled(provider);
+
     const today = istDateString(this.now().getTime());
     try {
       const runs = await this.catalog.listSyncRuns({ provider, status: "COMPLETED", limit: 1 });
@@ -108,40 +293,60 @@ export class CatalogMasterRefresh {
       // evidence of a successful refresh today, so still attempt the refresh.
       this.emit({ provider, outcome: "DIAGNOSTIC", reason: "FRESHNESS_LOOKUP_FAILED" });
     }
+    if (signal.aborted) return this.emitCancelled(provider);
 
     const nowIso = this.now().toISOString();
     try {
       if (provider === "UPSTOX") {
-        const { text, lastModified } = await this.download(UPSTOX_MASTER_URL);
-        const rows = JSON.parse(text) as unknown;
-        // The BOD schema has no per-row source date. Only a parseable
-        // Last-Modified header is reliable; otherwise leave it unknown (STALE).
-        const { batch, reconciliation, report } = buildUpstoxImport(rows, {
+        // WP2-A: bounded streaming ingestion. The response body is consumed as
+        // a stream, gzip is decompressed incrementally, the JSON array is parsed
+        // one element at a time, and the hash is accumulated over decompressed
+        // bytes. No full compressed buffer, full decompressed string or full
+        // parsed array is ever materialised. FYERS remains on its existing path.
+        const accumulator = new UpstoxImportAccumulator();
+        const { sourceVersion, lastModified } = await this.streamUpstoxInto(
+          accumulator, UPSTOX_MASTER_URL, signal
+        );
+        if (signal.aborted) return this.emitCancelled(provider);
+        const { batch, reconciliation, report } = accumulator.finish({
           now: nowIso,
-          sourceVersion: await sha256(text),
+          sourceVersion,
           ...(lastModified ? { sourceObservedAt: lastModified } : {})
         });
         this.assertValidCompleteImport(report, "UPSTOX");
+        // Last cancellation boundary before the atomic DB transaction.
+        if (signal.aborted) return this.emitCancelled(provider);
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
+        // The transaction reached its existing commit/rollback boundary. Do not
+        // abandon it or force-close the DB; report cancellation distinctly if a
+        // shutdown was requested while it ran.
+        if (signal.aborted) return this.emitCancelled(provider);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
       } else {
-        const entries = await Promise.all(
-          (Object.keys(FYERS_MASTER_URLS) as FyersMasterSegment[]).map(async (segment) => {
-            const { text } = await this.download(FYERS_MASTER_URLS[segment]);
-            return [segment, JSON.parse(text) as unknown] as const;
-          })
-        );
-        const files = Object.fromEntries(entries) as Record<FyersMasterSegment, unknown>;
-        // FYERS derives its source data date from in-scope lastUpdate values.
-        const { batch, reconciliation, report } = buildFyersImport(files, {
-          now: nowIso,
-          sourceVersion: await sha256(JSON.stringify(files))
-        });
+        // WP2-B: bounded streaming ingestion. The four segment files are
+        // fetched and parsed strictly sequentially (no concurrent full object
+        // graphs), each keyed JSON object is parsed one key/value pair at a
+        // time, and the legacy `sha256(JSON.stringify(files))` source-version
+        // contract is reproduced incrementally without ever building the second
+        // full JSON string. Only in-scope candidates are retained by the shared
+        // accumulator. No temporary files are used.
+        const accumulator = new FyersImportAccumulator();
+        const { sourceVersion } = await this.streamFyersInto(accumulator, signal);
+        if (signal.aborted) return this.emitCancelled(provider);
+        // FYERS derives its source data date from in-scope lastUpdate values;
+        // a local fetch time must never be substituted (sourceObservedAt is
+        // intentionally not passed).
+        const { batch, reconciliation, report } = accumulator.finish({ now: nowIso, sourceVersion });
         this.assertValidCompleteImport(report, "FYERS");
+        if (signal.aborted) return this.emitCancelled(provider);
         const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
+        if (signal.aborted) return this.emitCancelled(provider);
         this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
       }
     } catch (e) {
+      // Cancellation is never a provider failure: no DB write, no reconciliation,
+      // no success record. It is recorded only as a distinct diagnostic event.
+      if (signal.aborted) return this.emitCancelled(provider);
       // Keep last-known-good data. Record a concise failure run without tokens/raw files.
       const message = e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
       try {
@@ -165,20 +370,238 @@ export class CatalogMasterRefresh {
     }
   }
 
-  private async download(url: string): Promise<{ text: string; lastModified?: string }> {
-    const response = await this.fetchFn(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  /** Distinct cancellation record — never FAILED, never REFRESHED, no DB touch. */
+  private emitCancelled(provider: ProviderId): void {
+    this.emit({ provider, outcome: "CANCELLED", reason: "SHUTDOWN_CANCELLED" });
+  }
+
+  /**
+   * WP2-A bounded Upstox ingestion. Streams the response body, incrementally
+   * decompresses gzip, incrementally parses the top-level JSON array into one
+   * element at a time, hashes the decompressed bytes incrementally, and feeds
+   * each element into the shared importer accumulator.
+   *
+   * Failure paths (all fail closed — no partial snapshot reaches reconciliation):
+   *  - non-2xx (including an unexpected 304): HTTP error;
+   *  - HTML/other clearly wrong content type: rejected before parsing;
+   *  - empty body, truncated gzip, malformed/truncated JSON, unexpected shapes:
+   *    parser/decompressor error;
+   *  - decompressed byte / row / element limits exceeded: explicit error;
+   *  - cancellation via `signal`: checked between chunks and passed to fetch.
+   */
+  private async streamUpstoxInto(
+    accumulator: UpstoxImportAccumulator,
+    url: string,
+    signal: AbortSignal | undefined
+  ): Promise<{ sourceVersion: string; lastModified?: string }> {
+    const response = await this.fetchFn(url, {
+      signal: combinedFetchSignal(signal)
+    });
     if (!response.ok) throw new Error(`Master download failed: HTTP ${response.status}`);
-    const lastModified = sourceDateFromHeader(response.headers.get("last-modified"));
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length === 0) throw new Error("Master download was empty");
-    let text: string;
-    if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-      text = await new Response(stream).text();
-    } else {
-      text = new TextDecoder().decode(bytes);
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType.includes("text/html")) {
+      throw new Error("Master download returned an unexpected content type");
     }
-    return { text, ...(lastModified ? { lastModified } : {}) };
+    const lastModified = sourceDateFromHeader(response.headers.get("last-modified"));
+    if (!response.body) throw new Error("Master download had no body");
+
+    const reader = response.body.getReader();
+    const first = await reader.read().catch((e: unknown) => {
+      try { reader.releaseLock(); } catch { /* best effort */ }
+      throw e;
+    });
+    if (first.done || !first.value || first.value.length === 0) {
+      try { reader.releaseLock(); } catch { /* best effort */ }
+      throw new Error("Master download was empty");
+    }
+    const isGzip = first.value[0] === 0x1f && first.value[1] === 0x8b;
+    const firstChunk = first.value;
+
+    // Replay the already-read first chunk, then the remainder of the body.
+    // `pull`-driven construction preserves fetch backpressure: no chunk is
+    // buffered ahead of the consumer.
+    async function* rawChunks(): AsyncGenerator<Uint8Array<ArrayBuffer>> {
+      yield firstChunk;
+      while (true) {
+        const r = await reader.read();
+        if (r.done) return;
+        yield r.value;
+      }
+    }
+
+    let byteStream: ReadableStream<Uint8Array<ArrayBuffer>> = toReadableStream(rawChunks());
+    if (isGzip) {
+      // TS 7 types DecompressionStream's readable as Uint8Array<ArrayBufferLike>;
+      // its runtime chunks are Uint8Array<ArrayBuffer>. Narrow with a local cast.
+      byteStream = byteStream.pipeThrough(new DecompressionStream("gzip")) as ReadableStream<Uint8Array<ArrayBuffer>>;
+    }
+
+    const hasher = new IncrementalSha256();
+    // Fatal decoding: invalid UTF-8 is a malformed source and must fail closed.
+    // For valid UTF-8 (the only case that can produce a successful import) the
+    // decompressed bytes are exactly TextEncoder.encode(text), so the hash is
+    // byte-identical to the previous sha256(decompressed text) contract.
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const parser = new JsonArrayElementParser();
+    let decompressedBytes = 0;
+    let rows = 0;
+
+    const consume = (element: unknown): void => {
+      rows++;
+      if (rows > UPSTOX_MAX_ROWS) throw new Error("Upstox master exceeded row limit");
+      accumulator.addRow(element);
+    };
+
+    try {
+      for await (const chunk of byteStream) {
+        if (signal?.aborted) throw new Error("Upstox master download cancelled");
+        decompressedBytes += chunk.byteLength;
+        if (decompressedBytes > UPSTOX_MAX_DECOMPRESSED_BYTES) {
+          throw new Error("Upstox master exceeded decompressed byte limit");
+        }
+        hasher.update(chunk);
+        const text = decoder.decode(chunk, { stream: true });
+        for (const element of parser.push(text)) consume(element);
+      }
+      const tail = decoder.decode();
+      if (tail) for (const element of parser.push(tail)) consume(element);
+      parser.finish();
+      lastUpstoxStreamMetrics = {
+        maxParserBufferChars: parser.maxBufferedChars,
+        maxDecompressedBytes: decompressedBytes,
+        rowsStreamed: rows
+      };
+    } finally {
+      try { reader.releaseLock(); } catch { /* best effort */ }
+    }
+
+    return { sourceVersion: hasher.digest(), ...(lastModified ? { lastModified } : {}) };
+  }
+
+  /**
+   * WP2-B bounded FYERS ingestion. Fetches the four official segment files
+   * strictly sequentially, consumes each response body as a stream, parses the
+   * top-level keyed JSON object one key/value pair at a time, and feeds each
+   * value into the shared importer accumulator. The legacy source-version
+   * contract (`sha256(JSON.stringify(files))`, where `files` is the object of
+   * four parsed segment objects in `FYERS_MASTER_URLS` order) is reproduced
+   * incrementally: the outer/inner braces, segment keys and each pair's
+   * `JSON.stringify(key) + ":" + JSON.stringify(value)` are hashed as they are
+   * parsed, so no second full JSON string is ever materialised.
+   *
+   * Failure paths (all fail closed — no partial snapshot reaches reconciliation):
+   *  - non-2xx (including an unexpected 304): HTTP error;
+   *  - HTML/other clearly wrong content type: rejected before parsing;
+   *  - empty body, truncated gzip, malformed/truncated JSON, unexpected shapes
+   *    (non-object top level, primitive pair values): parser/decompressor error;
+   *  - segment byte / total byte / row / element limits exceeded: explicit error;
+   *  - cancellation via `signal`: checked between chunks and passed to fetch.
+   */
+  private async streamFyersInto(
+    accumulator: FyersImportAccumulator,
+    signal: AbortSignal | undefined
+  ): Promise<{ sourceVersion: string }> {
+    const hasher = new IncrementalSha256();
+    const encoder = new TextEncoder();
+    const segments = Object.keys(FYERS_MASTER_URLS) as FyersMasterSegment[];
+    let totalBytes = 0;
+    let maxSegmentBytes = 0;
+    let rows = 0;
+    let maxParserBufferChars = 0;
+
+    for (let si = 0; si < segments.length; si++) {
+      if (signal?.aborted) throw new Error("FYERS master download cancelled");
+      const segment = segments[si]!;
+      const response = await this.fetchFn(FYERS_MASTER_URLS[segment], {
+        signal: combinedFetchSignal(signal)
+      });
+      if (!response.ok) throw new Error(`FYERS ${segment} download failed: HTTP ${response.status}`);
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      if (contentType.includes("text/html")) {
+        throw new Error(`FYERS ${segment} download returned an unexpected content type`);
+      }
+      if (!response.body) throw new Error(`FYERS ${segment} download had no body`);
+
+      const reader = response.body.getReader();
+      const first = await reader.read().catch((e: unknown) => {
+        try { reader.releaseLock(); } catch { /* best effort */ }
+        throw e;
+      });
+      if (first.done || !first.value || first.value.length === 0) {
+        try { reader.releaseLock(); } catch { /* best effort */ }
+        throw new Error(`FYERS ${segment} download was empty`);
+      }
+      const isGzip = first.value[0] === 0x1f && first.value[1] === 0x8b;
+      const firstChunk = first.value;
+
+      // Replay the already-read first chunk, then the remainder of the body.
+      // `pull`-driven construction preserves fetch backpressure: no chunk is
+      // buffered ahead of the consumer.
+      async function* rawChunks(): AsyncGenerator<Uint8Array<ArrayBuffer>> {
+        yield firstChunk;
+        while (true) {
+          const r = await reader.read();
+          if (r.done) return;
+          yield r.value;
+        }
+      }
+
+      let byteStream: ReadableStream<Uint8Array<ArrayBuffer>> = toReadableStream(rawChunks());
+      if (isGzip) {
+        byteStream = byteStream.pipeThrough(new DecompressionStream("gzip")) as ReadableStream<Uint8Array<ArrayBuffer>>;
+      }
+
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      const parser = new JsonObjectPairParser();
+      let segmentBytes = 0;
+
+      // Reproduce `JSON.stringify(files)` byte-for-byte, incrementally.
+      // `segment` is a trusted constant key from `FYERS_MASTER_URLS`; using
+      // JSON.stringify keeps the key fragment correct even if that ever changes.
+      const segmentKey = JSON.stringify(segment);
+      hasher.update(encoder.encode(si === 0 ? `{${segmentKey}:{` : `,${segmentKey}:{`));
+      let firstPair = true;
+      const consume = (pair: { key: string; value: unknown }): void => {
+        rows++;
+        if (rows > FYERS_MAX_ROWS) throw new Error("FYERS master exceeded row limit");
+        if (!firstPair) hasher.update(encoder.encode(","));
+        firstPair = false;
+        hasher.update(encoder.encode(JSON.stringify(pair.key) + ":" + JSON.stringify(pair.value)));
+        accumulator.addRow(segment, pair.value);
+      };
+
+      try {
+        for await (const chunk of byteStream) {
+          if (signal?.aborted) throw new Error("FYERS master download cancelled");
+          segmentBytes += chunk.byteLength;
+          totalBytes += chunk.byteLength;
+          if (segmentBytes > FYERS_MAX_SEGMENT_BYTES) {
+            throw new Error(`FYERS ${segment} exceeded decompressed byte limit`);
+          }
+          if (totalBytes > FYERS_MAX_TOTAL_BYTES) {
+            throw new Error("FYERS master exceeded total byte limit");
+          }
+          const text = decoder.decode(chunk, { stream: true });
+          for (const pair of parser.push(text)) consume(pair);
+        }
+        const tail = decoder.decode();
+        if (tail) for (const pair of parser.push(tail)) consume(pair);
+        parser.finish();
+        hasher.update(encoder.encode("}"));
+        if (parser.maxBufferedChars > maxParserBufferChars) maxParserBufferChars = parser.maxBufferedChars;
+        if (segmentBytes > maxSegmentBytes) maxSegmentBytes = segmentBytes;
+      } finally {
+        try { reader.releaseLock(); } catch { /* best effort */ }
+      }
+    }
+    hasher.update(encoder.encode("}"));
+    lastFyersStreamMetrics = {
+      maxParserBufferChars, maxSegmentBytes, totalBytes, rowsStreamed: rows,
+      retainedOptionCandidates: accumulator.retainedOptionCandidates,
+      retainedCashCandidates: accumulator.retainedCashCandidates,
+      maxRetainedCandidates: accumulator.maxRetainedCandidates
+    };
+    return { sourceVersion: hasher.digest() };
   }
 
   private emit(event: CatalogRefreshEvent): void {
@@ -208,7 +631,447 @@ function sourceDateFromHeader(value: string | null): string | undefined {
   return new Date(ms).toISOString();
 }
 
-async function sha256(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+/** Incremental SHA-256 over decompressed bytes; preserves the existing hash contract. */
+class IncrementalSha256 {
+  private readonly hash = createHash("sha256");
+  update(bytes: Uint8Array): void { this.hash.update(bytes); }
+  digest(): string { return this.hash.digest("hex"); }
+}
+
+/** Pull-driven adapter: exposes an async generator as a backpressure-aware ReadableStream. */
+function toReadableStream(gen: AsyncGenerator<Uint8Array<ArrayBuffer>>): ReadableStream<Uint8Array<ArrayBuffer>> {
+  return new ReadableStream<Uint8Array<ArrayBuffer>>({
+    async pull(controller) {
+      try {
+        const { value, done } = await gen.next();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (e) {
+        controller.error(e);
+      }
+    }
+  });
+}
+
+/**
+ * Incremental parser for a top-level JSON array of objects. Emits one element
+ * per `push` as soon as it is complete, tracks string/escape state so braces
+ * inside string values cannot confuse nesting, and fails closed on malformed,
+ * truncated or trailing input. The buffer is compacted after every chunk so a
+ * large source never accumulates as a single string.
+ */
+class JsonArrayElementParser {
+  private buffer = "";
+  private pos = 0;
+  private phase: "start" | "array" | "done" = "start";
+  private depth = 0;
+  private inString = false;
+  private escaped = false;
+  private elementStart = -1;
+  /** Set when a comma is skipped at array level; cleared when the next element starts. */
+  private sawCommaAtArrayLevel = false;
+  private maxBufferChars = 0;
+
+  /** Diagnostic high-water mark of retained (unparsed) text. */
+  get maxBufferedChars(): number { return this.maxBufferChars; }
+
+  push(chunk: string): unknown[] {
+    this.buffer += chunk;
+    // Record the true peak on growth, before parsing/compaction. `compact()`
+    // only observes the post-slice buffer and would otherwise understate the
+    // transient high-water mark (§7.4.4 instrumentation).
+    if (this.buffer.length > this.maxBufferChars) this.maxBufferChars = this.buffer.length;
+    const out: unknown[] = [];
+    // Jump between structurally significant characters with a native regex
+    // instead of iterating every byte of a ~64 MB source in JS. Backslashes
+    // are included so escaped quotes inside string values stay correct.
+    const interesting = /["{}\[\]\\]/g;
+    interesting.lastIndex = this.pos;
+    let match: RegExpExecArray | null;
+    while ((match = interesting.exec(this.buffer)) !== null) {
+      const idx = match.index;
+      if (idx > this.pos) {
+        const skipped = this.buffer.slice(this.pos, idx);
+        if (this.phase === "start" || this.phase === "done") {
+          if (/[^\s]/.test(skipped)) {
+            throw new Error(this.phase === "start"
+              ? "Upstox master must be a JSON array"
+              : "Unexpected trailing content after Upstox master array");
+          }
+        } else if (this.inString) {
+          // An escape payload that is not itself "interesting" (e.g. the `n`
+          // in `\n` or the `u` in `\u0041`) is skipped by the regex. Consume
+          // exactly one such char as the escaped payload and clear the flag;
+          // otherwise the next interesting char (usually the closing quote)
+          // would be mistaken for the payload and the string would never close.
+          if (this.escaped) {
+            this.escaped = false;
+            this.pos += 1;
+          }
+        } else if (this.depth === 0) {
+          // A bare primitive at array level is not a valid Upstox row.
+          if (/[^\s,]/.test(skipped)) {
+            throw new Error("Malformed Upstox master array: unexpected token at array level");
+          }
+          if (skipped.includes(",")) this.sawCommaAtArrayLevel = true;
+        }
+        this.pos = idx;
+      }
+      const ch = match[0]!;
+      if (this.phase === "start") {
+        if (ch !== "[") throw new Error("Upstox master must be a JSON array");
+        this.phase = "array";
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (this.phase === "done") {
+        throw new Error("Unexpected trailing content after Upstox master array");
+      }
+      if (this.inString) {
+        if (this.escaped) this.escaped = false;
+        else if (ch === "\\") this.escaped = true;
+        else if (ch === '"') {
+          this.inString = false;
+          // A top-level string element is not a valid Upstox row, but emit it
+          // so the importer counts it as invalid rather than silently dropping it.
+          if (this.depth === 0 && this.elementStart >= 0) {
+            out.push(JSON.parse(this.buffer.slice(this.elementStart, idx + 1)));
+            this.elementStart = -1;
+          }
+        }
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === '"') {
+        if (this.depth === 0 && this.elementStart < 0) {
+          this.elementStart = idx;
+          this.sawCommaAtArrayLevel = false;
+        }
+        this.inString = true;
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === "{" || ch === "[") {
+        if (this.depth === 0) {
+          this.elementStart = idx;
+          this.sawCommaAtArrayLevel = false;
+        }
+        this.depth++;
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === "\\") { // stray backslash outside a string: JSON.parse will reject it
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (this.depth === 0) {
+        if (ch !== "]") throw new Error("Malformed Upstox master array: unexpected '}'");
+        if (this.sawCommaAtArrayLevel) {
+          throw new Error("Malformed Upstox master array: trailing comma");
+        }
+        this.phase = "done";
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      this.depth--;
+      if (this.depth === 0) {
+        out.push(JSON.parse(this.buffer.slice(this.elementStart, idx + 1)));
+        this.elementStart = -1;
+      }
+      this.pos = idx + 1;
+      interesting.lastIndex = this.pos;
+    }
+    const tail = this.buffer.slice(this.pos);
+    if (this.phase === "start" || this.phase === "done") {
+      if (/[^\s]/.test(tail)) {
+        throw new Error(this.phase === "start"
+          ? "Upstox master must be a JSON array"
+          : "Unexpected trailing content after Upstox master array");
+      }
+    } else if (this.depth === 0 && !this.inString) {
+      if (/[^\s,]/.test(tail)) {
+        throw new Error("Malformed Upstox master array: unexpected token at array level");
+      }
+      // A separator comma can land at a chunk boundary; remember it so a `]`
+      // in the next chunk is still recognised as a trailing comma.
+      if (tail.includes(",")) this.sawCommaAtArrayLevel = true;
+    }
+    this.pos = this.buffer.length;
+    this.compact();
+    return out;
+  }
+
+  finish(): void {
+    if (this.phase !== "done") throw new Error("Truncated Upstox master array");
+    if (this.inString || this.depth !== 0 || this.elementStart >= 0) {
+      throw new Error("Truncated Upstox master array element");
+    }
+  }
+
+  private compact(): void {
+    if (this.elementStart >= 0) {
+      if (this.elementStart > 0) {
+        this.buffer = this.buffer.slice(this.elementStart);
+        this.pos -= this.elementStart;
+        this.elementStart = 0;
+      }
+    } else if (this.pos > 0) {
+      this.buffer = this.buffer.slice(this.pos);
+      this.pos = 0;
+    }
+    if (this.buffer.length > this.maxBufferChars) this.maxBufferChars = this.buffer.length;
+    if (this.buffer.length > UPSTOX_MAX_ELEMENT_CHARS) {
+      throw new Error("Upstox master row exceeded size limit");
+    }
+  }
+}
+
+/**
+ * Incremental parser for a top-level JSON object whose values are detail
+ * objects (the official FYERS Symbol Master format: `{ "SYMBOL": {…}, … }`).
+ * Emits one `{ key, value }` pair as soon as its value is complete, tracks
+ * string/escape/nesting state so colons, commas and braces inside string values
+ * cannot confuse the structure, and fails closed on malformed, truncated,
+ * trailing input and unexpected pair value shapes (primitives or arrays). The
+ * buffer is compacted after every chunk so a large source
+ * never accumulates as a single string.
+ *
+ * The emitted key is retained only so the caller can reproduce the legacy
+ * `JSON.stringify(files)` source-hash contract incrementally; the importer uses
+ * the value alone (exactly as `Object.values(file)` did before).
+ */
+class JsonObjectPairParser {
+  private buffer = "";
+  private pos = 0;
+  private phase: "start" | "object" | "done" = "start";
+  private depth = 0;
+  private inString = false;
+  private escaped = false;
+  /** Role of the string currently being read at depth 0: object key or value. */
+  private stringRole: "key" | "value" | null = null;
+  /** Start index of the current key/value slice inside `buffer`. */
+  private stringStart = -1;
+  private currentKey: string | null = null;
+  /** Structural expectation at depth 0. */
+  private expect: "key" | "colon" | "value" | "comma" = "key";
+  private sawComma = false;
+  private maxBufferChars = 0;
+
+  /** Diagnostic high-water mark of retained (unparsed) text. */
+  get maxBufferedChars(): number { return this.maxBufferChars; }
+
+  push(chunk: string): Array<{ key: string; value: unknown }> {
+    this.buffer += chunk;
+    // Record the true peak on growth, before parsing/compaction (§7.4.4).
+    if (this.buffer.length > this.maxBufferChars) this.maxBufferChars = this.buffer.length;
+    const out: Array<{ key: string; value: unknown }> = [];
+    // Jump between structurally significant characters with a native regex
+    // instead of iterating every byte of a ~90 MB source in JS. Backslashes
+    // are included so escaped quotes inside string values stay correct.
+    const interesting = /["{}\[\]:,\\]/g;
+    interesting.lastIndex = this.pos;
+    let match: RegExpExecArray | null;
+    while ((match = interesting.exec(this.buffer)) !== null) {
+      const idx = match.index;
+      if (idx > this.pos) {
+        const skipped = this.buffer.slice(this.pos, idx);
+        if (this.phase === "start" || this.phase === "done") {
+          if (/[^\s]/.test(skipped)) {
+            throw new Error(this.phase === "start"
+              ? "FYERS master must be a JSON object"
+              : "Unexpected trailing content after FYERS master object");
+          }
+        } else if (this.inString) {
+          // An escape payload that is not itself "interesting" (e.g. the `n`
+          // in `\n` or the `u` in `\u0041`) is skipped by the regex. Consume
+          // exactly one such char as the escaped payload and clear the flag.
+          if (this.escaped) {
+            this.escaped = false;
+            this.pos += 1;
+          }
+        } else if (this.depth === 0 && this.expect === "value") {
+          // Official FYERS pair values are always objects. A bare primitive is
+          // an unexpected shape and must fail closed rather than be guessed.
+          if (/[^\s]/.test(skipped)) throw new Error("FYERS master: unexpected primitive pair value");
+        } else if (this.depth === 0 && /[^\s]/.test(skipped)) {
+          throw new Error("FYERS master: unexpected token at object level");
+        }
+        this.pos = idx;
+      }
+      const ch = match[0]!;
+      if (this.phase === "start") {
+        if (ch !== "{") throw new Error("FYERS master must be a JSON object");
+        this.phase = "object";
+        this.expect = "key";
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (this.phase === "done") {
+        throw new Error("Unexpected trailing content after FYERS master object");
+      }
+      if (this.inString) {
+        if (this.escaped) this.escaped = false;
+        else if (ch === "\\") this.escaped = true;
+        else if (ch === '"') {
+          this.inString = false;
+          if (this.depth === 0 && this.stringRole === "key") {
+            this.currentKey = JSON.parse(this.buffer.slice(this.stringStart, idx + 1)) as string;
+            this.stringStart = -1;
+            this.stringRole = null;
+            this.expect = "colon";
+          } else if (this.depth === 0 && this.stringRole === "value") {
+            // A top-level pair value must be an object. Strings are structural
+            // (the opening `"` is handled as a token), so the skipped-text
+            // primitive check never sees them; fail closed here instead of
+            // emitting a pair the importer would silently drop.
+            throw new Error("FYERS master: unexpected primitive pair value");
+          }
+        }
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === '"') {
+        if (this.depth === 0) {
+          if (this.expect === "key") {
+            this.stringRole = "key";
+            this.sawComma = false; // a key followed the comma: not a trailing comma
+          } else if (this.expect === "value") this.stringRole = "value";
+          else throw new Error("FYERS master: unexpected string at object level");
+          this.stringStart = idx;
+          this.inString = true;
+          this.pos = idx + 1;
+          interesting.lastIndex = this.pos;
+          continue;
+        }
+        this.inString = true; // string nested inside a value
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === "{" || ch === "[") {
+        if (this.depth === 0) {
+          if (this.expect !== "value") throw new Error("FYERS master: unexpected value start");
+          // Official FYERS pair values are objects; a top-level array is an
+          // unexpected shape (and would otherwise be counted as a row by the
+          // importer, since arrays are `typeof "object"`). Nested arrays inside
+          // a valid object value remain unaffected (depth > 0).
+          if (ch === "[") throw new Error("FYERS master: unexpected array pair value");
+          this.stringStart = idx;
+        }
+        this.depth++;
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === "\\") { // stray backslash outside a string: JSON.parse will reject it
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === ":") {
+        if (this.depth === 0) {
+          if (this.expect !== "colon") throw new Error("FYERS master: unexpected ':'");
+          this.expect = "value";
+        }
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === ",") {
+        if (this.depth === 0) {
+          if (this.expect !== "comma") throw new Error("FYERS master: unexpected ','");
+          this.expect = "key";
+          this.sawComma = true;
+        }
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+        continue;
+      }
+      if (ch === "}" || ch === "]") {
+        if (this.depth === 0) {
+          if (ch !== "}") throw new Error("FYERS master: unexpected ']'");
+          if (this.expect === "colon" || this.expect === "value") {
+            throw new Error("FYERS master: incomplete key/value pair");
+          }
+          if (this.sawComma) throw new Error("FYERS master: trailing comma");
+          this.phase = "done";
+          this.pos = idx + 1;
+          interesting.lastIndex = this.pos;
+          continue;
+        }
+        this.depth--;
+        if (this.depth === 0) {
+          this.noteElement(idx + 1);
+          out.push({
+            key: this.currentKey!,
+            value: JSON.parse(this.buffer.slice(this.stringStart, idx + 1))
+          });
+          this.currentKey = null;
+          this.stringStart = -1;
+          this.stringRole = null;
+          this.expect = "comma";
+        }
+        this.pos = idx + 1;
+        interesting.lastIndex = this.pos;
+      }
+    }
+    const tail = this.buffer.slice(this.pos);
+    if (this.phase === "start" || this.phase === "done") {
+      if (/[^\s]/.test(tail)) {
+        throw new Error(this.phase === "start"
+          ? "FYERS master must be a JSON object"
+          : "Unexpected trailing content after FYERS master object");
+      }
+    } else if (this.inString) {
+      if (this.escaped) {
+        this.escaped = false;
+        this.pos += 1;
+      }
+    } else if (this.depth === 0 && this.expect === "value") {
+      if (/[^\s]/.test(tail)) throw new Error("FYERS master: unexpected primitive pair value");
+    } else if (this.depth === 0 && /[^\s]/.test(tail)) {
+      throw new Error("FYERS master: unexpected token at object level");
+    }
+    this.pos = this.buffer.length;
+    this.compact();
+    return out;
+  }
+
+  finish(): void {
+    if (this.phase !== "done") throw new Error("Truncated FYERS master object");
+    if (this.inString || this.depth !== 0 || this.currentKey !== null || this.stringStart >= 0) {
+      throw new Error("Truncated FYERS master key/value pair");
+    }
+  }
+
+  /** Fail closed on an oversized in-flight element before it is compacted away. */
+  private noteElement(end: number): void {
+    if (this.stringStart < 0) return;
+    if (end - this.stringStart > FYERS_MAX_ELEMENT_CHARS) {
+      throw new Error("FYERS master row exceeded size limit");
+    }
+  }
+
+  private compact(): void {
+    if (this.stringStart >= 0) {
+      this.noteElement(this.buffer.length);
+      if (this.stringStart > 0) {
+        this.buffer = this.buffer.slice(this.stringStart);
+        this.pos -= this.stringStart;
+        this.stringStart = 0;
+      }
+    } else if (this.pos > 0) {
+      this.buffer = this.buffer.slice(this.pos);
+      this.pos = 0;
+    }
+    if (this.buffer.length > this.maxBufferChars) this.maxBufferChars = this.buffer.length;
+  }
 }

@@ -186,9 +186,10 @@ export function createApp(deps: AppDependencies) {
   // repository. Read-only and LAN-safe like the catalog search route.
   registerDerivativeRoutes(app, { catalog: catalogRepo });
 
-  // WP4A: the single app-owned refresh trigger. Non-blocking and injectable so
-  // tests never make network calls; production composition supplies the owner.
-  deps.catalogRefresh?.startIfNeeded();
+  // WP3: catalog refresh is NOT started here. The HTTP listener must be
+  // established before any provider master download is scheduled (§7.4.9 G0).
+  // The composition root calls `startRefreshAfterListening` after Bun.serve()
+  // succeeds; `catalogRefresh` remains injectable so tests never make calls.
 
   // M5 canonical historical/snapshot services. No live providers are wired in
   // M5 (Phase 4B/Stage G); empty provider lists keep on-demand operations

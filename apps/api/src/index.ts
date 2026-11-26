@@ -55,6 +55,41 @@ let hub: LiveEventHub | null = null;
 let coordinator: SubscriptionCoordinator | null = null;
 let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
 let notificationBridge: McpNotificationBridge | null = null;
+let catalogRefresh: CatalogMasterRefresh | null = null;
+
+/**
+ * WP3 listener-first seam. The HTTP listener is already bound when this runs;
+ * scheduling refresh here (never during `createApp`) keeps startup independent
+ * of remote downloads. Exported so a real-listener G0 test exercises the exact
+ * production ordering. Synchronous errors are surfaced through `onError`; the
+ * refresh tasks themselves are fire-and-forget with internal error handling.
+ */
+export function startRefreshAfterListening(
+  refresh: CatalogMasterRefresh | undefined,
+  onError: (error: unknown) => void
+): void {
+  if (!refresh) return;
+  try {
+    refresh.startIfNeeded();
+  } catch (error) {
+    onError(error);
+  }
+}
+
+/**
+ * WP3-A item 10: partial-initialization failure runs the same drain sequence
+ * as graceful shutdown before any resource is closed. Every step is best
+ * effort and idempotent so repeated calls cannot double-close or throw.
+ */
+async function drainStartupFailure(): Promise<void> {
+  try { if (catalogRefresh) await catalogRefresh.stopAndWait(); } catch {}
+  try { coordinator?.stop(); } catch {}
+  try { if (mcpHandler) await mcpHandler.close(); } catch {}
+  try { notificationBridge?.stop(); } catch {}
+  try { hub?.stop(); } catch {}
+  try { if (server) await server.stop(true); } catch {}
+  try { db?.close(); } catch {}
+}
 
 // M6-D: deliberate handler bounds. maxSubscriptions is a conservative 64 (a
 // single local owner with a handful of MCP clients, not a public service);
@@ -85,6 +120,9 @@ async function main() {
     return;
   }
 
+  // WP3-A item 10: any failure after partial initialization must drain the
+  // refresh owner and all other resources before closing the database.
+  try {
   const credentials = new SqliteCredentialStore(db);
   const settings = new SqliteProviderSettings(db);
   const providerConfig = providerConfigFromAppConfig(config);
@@ -124,7 +162,7 @@ async function main() {
   const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
   // WP4A: one app-owned refresh owner for the public provider master files.
   // No credentials, no live market-data calls, no generic scheduler.
-  const catalogRefresh = new CatalogMasterRefresh({
+  catalogRefresh = new CatalogMasterRefresh({
     catalog,
     sync: new CatalogSyncService(catalog),
     now: () => new Date(),
@@ -234,12 +272,22 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "server", message });
-    try { coordinator?.stop(); } catch {}
-    // Close the MCP handler before detaching the bridge or closing the DB.
-    try { if (mcpHandler) await mcpHandler.close(); } catch {}
-    try { notificationBridge?.stop(); } catch {}
-    try { hub?.stop(); } catch {}
-    try { db?.close(); } catch {}
+    await drainStartupFailure();
+    process.exitCode = 1;
+    return;
+  }
+
+  // WP3 listener-first: the listener is bound, so remote refresh work can no
+  // longer delay readiness. Errors are observable; no unhandled rejection.
+  startRefreshAfterListening(catalogRefresh ?? undefined, (error) => {
+    logger.error("catalog_refresh_start_failed", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("startup_failed", { stage: "composition", message });
+    await drainStartupFailure();
     process.exitCode = 1;
     return;
   }
@@ -249,7 +297,11 @@ async function main() {
     shuttingDown = true;
     shutdownPromise = (async () => {
       logger.info("shutdown_start", { signal });
-      try { catalogRefresh.stop(); } catch {}
+      // WP3-A: enter STOPPING, abort active I/O and AWAIT every refresh task and
+      // its atomic transaction before any database closure (items 1–9).
+      try { if (catalogRefresh) await catalogRefresh.stopAndWait(); } catch (error) {
+        logger.warn("catalog_refresh_drain_error", { message: error instanceof Error ? error.message : String(error) });
+      }
       // 1) stop accepting subscription/config work; 2) stop/cancel the shared
       // coordinator and its provider runtimes (locked drivers own no resources).
       try { coordinator?.stop(); } catch (error) {
