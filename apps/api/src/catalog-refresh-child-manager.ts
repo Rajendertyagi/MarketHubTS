@@ -87,8 +87,20 @@ export interface ManagerOwnershipHooks {
     ok: boolean;
     terminal: ChildMessage | undefined;
     exit: ChildExitInfo;
+    /**
+     * True when the child's exit was actually observed (exit event / code /
+     * signal). False after a last-resort kill whose exit could NOT be confirmed
+     * within the bounded escalation window — the child may still be alive, so
+     * ownership must stay UNKNOWN and the durable token must be retained.
+     * Additive: existing consumers that ignore this field are unaffected.
+     */
+    exitObserved: boolean;
   }) => void;
-  onUnexpectedExit?: (info: { runId: string; exit: ChildExitInfo }) => void;
+  onUnexpectedExit?: (info: {
+    runId: string;
+    exit: ChildExitInfo;
+    exitObserved: boolean;
+  }) => void;
 }
 
 export interface ManagerOptions {
@@ -107,6 +119,12 @@ export interface ManagerOptions {
   pipelineExitTimeoutMs?: number;
   /** G0-D: optional ownership integration; absent = G0-A/B unconditional grant. */
   ownershipHooks?: ManagerOwnershipHooks;
+  /**
+   * Bounded wait after a last-resort kill. Defaults to `EXIT_ESCALATION_TIMEOUT_MS`.
+   * Overridable so a deterministic test can force the unobserved-exit path
+   * (a child that cannot be confirmed dead before the window closes).
+   */
+  exitEscalationTimeoutMs?: number;
 }
 
 export interface ReadyExpectation {
@@ -217,6 +235,7 @@ export class CatalogRefreshChildManager {
   private readonly mode: "handshake" | "pipeline";
   private readonly pipelineExitTimeoutMs: number;
   private readonly ownershipHooks: ManagerOwnershipHooks | undefined;
+  private readonly exitEscalationTimeoutMs: number;
 
   private readonly queue: QueueItem[] = [];
   private active: ChildProcess | null = null;
@@ -240,6 +259,7 @@ export class CatalogRefreshChildManager {
     this.mode = options.mode ?? "handshake";
     this.pipelineExitTimeoutMs = options.pipelineExitTimeoutMs ?? 180_000;
     this.ownershipHooks = options.ownershipHooks;
+    this.exitEscalationTimeoutMs = options.exitEscalationTimeoutMs ?? EXIT_ESCALATION_TIMEOUT_MS;
   }
 
   get activeSubprocess(): ChildProcess | null { return this.active; }
@@ -561,12 +581,14 @@ export class CatalogRefreshChildManager {
         // cannot leave a half-applied write behind.
         try { proc.kill(); } catch {}
         try {
-          exit = await this.waitForExit(run, EXIT_ESCALATION_TIMEOUT_MS);
+          exit = await this.waitForExit(run, this.exitEscalationTimeoutMs);
           error = `${error}; child killed after exit timeout (code=${String(exit.code)} signal=${String(exit.signal)})`;
         } catch {
           // Explicit unrecoverable state: exit was never observed. Record it
-          // and never report success, even though the slot is released so the
-          // manager cannot deadlock its queue.
+          // and never report success. The manager's internal slot is still
+          // released so its queue cannot deadlock, BUT `exitObserved=false` is
+          // propagated to the ownership hooks so the durable permit stays
+          // UNKNOWN and the token is retained — the child may still be alive.
           exit = readExitInfo(proc);
           exitObserved = false;
           error = `${error}; child exit unobserved after kill escalation (unrecoverable)`;
@@ -593,15 +615,18 @@ export class CatalogRefreshChildManager {
       // G0-D: ownership settlement and unexpected-exit observation happen
       // AFTER exit is observed but BEFORE the slot is released, so a new child
       // can never be granted while the old child's permit is still owned.
-      const unexpectedExit = exit.signal !== null || (exit.code !== null && exit.code !== 0);
+      // An UNOBSERVED exit is always unexpected: code/signal may both be null
+      // while the child is still alive, so the old signal-only test would skip
+      // recovery and let settlement release the permit. Include it explicitly.
+      const unexpectedExit = !exitObserved || exit.signal !== null || (exit.code !== null && exit.code !== 0);
       try {
         // Observe an unexpected exit FIRST, while the durable token still
         // exists, so recovery can verify run state before settlement clears it.
         if (unexpectedExit) {
-          this.ownershipHooks?.onUnexpectedExit?.({ runId: request.runId, exit });
+          this.ownershipHooks?.onUnexpectedExit?.({ runId: request.runId, exit, exitObserved });
         }
         this.ownershipHooks?.onSettled?.({
-          runId: request.runId, provider: request.provider, ok, terminal, exit
+          runId: request.runId, provider: request.provider, ok, terminal, exit, exitObserved
         });
       } catch {}
       // Only now — after exit is observed or an unrecoverable state is

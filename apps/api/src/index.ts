@@ -103,6 +103,9 @@ export function startRefreshAfterListening(
  *  - `onSettled` respects an UNKNOWN permit left by unexpected-exit recovery:
  *    a RETRY decision retains the token and refuses new reservations until a
  *    later recovery succeeds (G0 fix #3).
+ *  - An UNOBSERVED exit (`exitObserved === false`) is fail-closed in both hooks:
+ *    the permit stays UNKNOWN and the durable token is retained, so no second
+ *    writer can be reserved/granted while the old child may still be alive.
  */
 export interface CatalogOwnershipWiring {
   onManagerEvent: (event: ManagerEvent) => void;
@@ -128,7 +131,16 @@ export function createCatalogOwnershipWiring(
           ? { granted: true, generation: decision.generation }
           : { granted: false, reason: decision.reason };
       },
-      onSettled: ({ ok, terminal }) => {
+      onSettled: ({ ok, terminal, exitObserved }) => {
+        // Unobserved exit (kill could not be confirmed): the child may still be
+        // alive. Keep the permit UNKNOWN and retain the durable token. Never
+        // release here — a successful writer probe is NOT authorization while
+        // the old process may still hold the write lock. This guard is
+        // authoritative even if onUnexpectedExit was not wired.
+        if (exitObserved === false) {
+          ownership.markUnknown();
+          return;
+        }
         if (terminal?.type === "result" && terminal.status === "FENCED") {
           ownership.updatePhase("FENCED");
         } else if (ok && terminal?.type === "result" && terminal.status === "COMPLETED") {
@@ -141,8 +153,24 @@ export function createCatalogOwnershipWiring(
         // second writer. Only release when the permit is not UNKNOWN.
         if (ownership.currentState !== "UNKNOWN") ownership.release();
       },
-      onUnexpectedExit: ({ runId, exit }) => {
+      onUnexpectedExit: ({ runId, exit, exitObserved }) => {
         ownership.markUnknown();
+        if (exitObserved === false) {
+          // Do NOT run recover(): its RESUME path transitions to IDLE on a
+          // successful writer probe, which would admit a second child while
+          // the old one may still be alive. Surface a non-authorizing
+          // diagnostic instead; the permit stays UNKNOWN with its token.
+          onRecovery?.({
+            runId,
+            exit,
+            decision: {
+              decision: "REFUSED",
+              generation: ownership.currentGeneration,
+              reason: "child exit unobserved after kill escalation"
+            }
+          });
+          return;
+        }
         const decision = ownership.recover();
         onRecovery?.({ runId, exit, decision });
       }
