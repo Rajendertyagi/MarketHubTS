@@ -3,6 +3,10 @@
 > **Status:** Dependency-based roadmap from verified scaffold to product milestones. No arbitrary dates/estimates.
 > **Last updated:** 2026-11-22 (metadata initiative expanded into dependency-sequenced Phases 0–7 with a bounded first milestone)
 > **Related:** [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md), [TESTING_AND_ACCEPTANCE.md](TESTING_AND_ACCEPTANCE.md), [OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md](OPEN_QUESTIONS_AND_TECHNICAL_RISKS.md), [PROJECT_STATUS.md](PROJECT_STATUS.md)
+>
+> **Plan pointer (2026-11-25):** [`M4_STAGE_G_M5_PHASE_4B_DATA_COMPLETION_PLAN.md`](M4_STAGE_G_M5_PHASE_4B_DATA_COMPLETION_PLAN.md) proposes the corrected execution order **Stage G → Phase 4B → coverage audit → M7 (paused, out of scope)**. It is plan-only: no gate is unlocked, no live call is authorized, and M6 remains accepted/closed.
+>
+> **Status note (2026-11-27):** the **G0 catalog-refresh child-process remediation is COMPLETE AND ACCEPTED** — technical lead final **KEEP** after independent review of all published commits (range **`2c22402..08cf605`** on `develop`, HEAD `08cf60567b8d19e8932bc784d1dd38a3b917bedf`); the G0 STOP finding and the catalog-refresh startup defect are resolved. Verification is **local, agent-reported — NOT CI** (full suite **1253 pass / 0 fail**, typecheck/build/diff-check clean; GitHub reported zero status checks). Records: [`G0_CHILD_PROCESS_ARCHITECTURE_PLAN.md`](G0_CHILD_PROCESS_ARCHITECTURE_PLAN.md), [`CATALOG_REFRESH_STARTUP_DEFECT.md`](CATALOG_REFRESH_STARTUP_DEFECT.md), [`CATALOG_REFRESH_RELIABILITY_REMEDIATION_PLAN.md`](CATALOG_REFRESH_RELIABILITY_REMEDIATION_PLAN.md). No other phase status in this roadmap is changed; Stage G, M5 Phase 4B, M7, Phase 3 and production provider activation remain locked, with no live provider verification and no CI claim.
 
 ## 1. Planning principles
 
