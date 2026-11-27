@@ -179,6 +179,24 @@ export function createCatalogOwnershipWiring(
 }
 
 /**
+ * Ownership-release step shared by BOTH shutdown cleanup paths
+ * (`drainStartupFailure` and `shutdown`). Exported so the regression test can
+ * exercise the exact production step rather than a re-implementation.
+ *
+ * An UNKNOWN permit (unobserved child exit or unresolved recovery) is NOT safe
+ * to release: the durable token must survive shutdown so the next process can
+ * verify the prior run before admitting a writer. `releaseIfSafe()` enforces
+ * that; ordinary clean shutdown is unchanged.
+ */
+export function releaseOwnershipForShutdown(
+  ownership: CatalogWriteOwnership | undefined | null
+): { released: boolean; skippedUnknown: boolean } {
+  if (!ownership) return { released: false, skippedUnknown: false };
+  const result = ownership.releaseIfSafe();
+  return { released: result.released, skippedUnknown: !result.released && result.reason === "UNKNOWN" };
+}
+
+/**
  * WP3-A item 10: partial-initialization failure runs the same drain sequence
  * as graceful shutdown before any resource is closed. Every step is best
  * effort and idempotent so repeated calls cannot double-close or throw.
@@ -187,8 +205,10 @@ async function drainStartupFailure(): Promise<void> {
   try { if (catalogRefresh) await catalogRefresh.stopAndWait(); } catch {}
   try { if (childManager) await childManager.shutdown(); } catch {}
   // G0-D: release the write permit and clear the durable token only after the
-  // child has settled and exited, never before (plan §6.4 steps 4–6).
-  try { ownership?.release(); } catch {}
+  // child has settled and exited, never before (plan §6.4 steps 4–6). An UNKNOWN
+  // permit is deliberately retained: its durable token is the evidence the next
+  // process needs to verify the prior run (unobserved exit / unresolved recovery).
+  try { releaseOwnershipForShutdown(ownership); } catch {}
   try { coordinator?.stop(); } catch {}
   try { if (mcpHandler) await mcpHandler.close(); } catch {}
   try { notificationBridge?.stop(); } catch {}
@@ -553,7 +573,16 @@ async function main() {
       }
       // G0-D §6.4 step 4: release the permit and clear the durable token only
       // after the child has settled and exited, before the parent DB closes.
-      try { ownership?.release(); } catch (error) {
+      // An UNKNOWN permit is NOT released: the durable token must survive this
+      // shutdown so a restart can verify the prior run before admitting a writer.
+      try {
+        const released = releaseOwnershipForShutdown(ownership);
+        if (released.skippedUnknown) {
+          logger.info("ownership_release_skipped", {
+            reason: "permit UNKNOWN; durable token retained for next recovery"
+          });
+        }
+      } catch (error) {
         logger.warn("ownership_release_error", { message: error instanceof Error ? error.message : String(error) });
       }
       // 1) stop accepting subscription/config work; 2) stop/cancel the shared

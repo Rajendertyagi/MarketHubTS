@@ -30,6 +30,11 @@ export const DEFAULT_PROBE_TIMEOUT_MS = 250;
 
 export type PermitState = "IDLE" | "RESERVED" | "RELEASING" | "OWNED" | "UNKNOWN";
 
+/** Result of the shutdown-safe release guard (`releaseIfSafe`). */
+export type ReleaseIfSafeResult =
+  | { released: true; from: PermitState }
+  | { released: false; from: "UNKNOWN"; reason: "UNKNOWN" };
+
 export type OwnerPhase =
   | "INIT"
   | "DOWNLOAD"
@@ -468,6 +473,24 @@ export class CatalogWriteOwnership {
     try { deleteOwnerToken(this.sqlite); } catch {}
     this.token = null;
     this.transition("IDLE");
+  }
+
+  /**
+   * Shutdown-safe release. Deletes the durable token ONLY when the permit is
+   * not UNKNOWN. An UNKNOWN permit means child termination was unobserved or
+   * recovery could not positively establish that release is safe; deleting the
+   * token there would erase the evidence the next process needs to verify the
+   * prior run and would admit a second writer while the old child may still be
+   * alive. Ordinary clean shutdown (IDLE/RESERVED/OWNED with confirmed exit)
+   * keeps the exact previous `release()` behaviour.
+   */
+  releaseIfSafe(): ReleaseIfSafeResult {
+    if (this.state === "UNKNOWN") {
+      return { released: false, from: "UNKNOWN", reason: "UNKNOWN" };
+    }
+    const from = this.state;
+    this.release();
+    return { released: true, from };
   }
 
   /**
