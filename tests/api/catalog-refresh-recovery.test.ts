@@ -493,8 +493,15 @@ describe("G0-D — crash recovery, writer ownership and shutdown", () => {
       refresh.startIfNeeded();
       refresh.startIfNeeded(); // duplicate trigger while both providers are in flight
       await Bun.sleep(50); // let the async single-flight tasks reach the executor
-      expect(calls).toBe(2); // one per provider, not four
+      // G0 integration fix #1: executor calls are serialized before ownership
+      // reservation, so only the first provider is in flight; the second is
+      // queued and duplicate triggers are skipped by single-flight.
+      expect(calls).toBe(1);
       release();
+      // Let the queued provider start before shutdown; a run still queued when
+      // STOPPING begins is correctly cancelled rather than dispatched.
+      await Bun.sleep(50);
+      expect(calls).toBe(2); // both providers ran exactly once, sequentially
       await refresh.stopAndWait();
 
       // A stale token does not by itself admit a second writer: reserve from a

@@ -18,8 +18,10 @@ import { wrapMcpHandlerFetch, MCP_SSE_MAX_BUFFERED_BYTES, MCP_SSE_MAX_BUFFERED_F
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
-import { CatalogRefreshChildManager } from "./catalog-refresh-child-manager";
-import { CatalogWriteOwnership, type OwnerPhase } from "./catalog-write-ownership";
+import {
+  CatalogRefreshChildManager, type ManagerEvent, type ManagerOwnershipHooks
+} from "./catalog-refresh-child-manager";
+import { CatalogWriteOwnership, type OwnerPhase, type RecoveryDecision } from "./catalog-write-ownership";
 import { CatalogWriteCoordinator } from "./catalog-write-coordinator";
 
 type RunningServer = ReturnType<typeof Bun.serve>;
@@ -90,6 +92,65 @@ export function startRefreshAfterListening(
 }
 
 /**
+ * Production composition-root wiring between the child manager and the durable
+ * write permit. Extracted so focused tests exercise the EXACT callbacks used
+ * in production (not a re-implementation in the test harness).
+ *
+ *  - `onManagerEvent` mirrors validated child phases into the durable token.
+ *    `CatalogWriteOwnership.updatePhase` suppresses the SQLite write once the
+ *    permit is OWNED, so a `TXN` progress message arriving while the child holds
+ *    `BEGIN IMMEDIATE` cannot block the parent event loop (G0 fix #2).
+ *  - `onSettled` respects an UNKNOWN permit left by unexpected-exit recovery:
+ *    a RETRY decision retains the token and refuses new reservations until a
+ *    later recovery succeeds (G0 fix #3).
+ */
+export interface CatalogOwnershipWiring {
+  onManagerEvent: (event: ManagerEvent) => void;
+  ownershipHooks: ManagerOwnershipHooks;
+}
+
+export function createCatalogOwnershipWiring(
+  ownership: CatalogWriteOwnership,
+  onRecovery?: (info: {
+    runId: string;
+    exit: { code: number | null; signal: string | number | null };
+    decision: RecoveryDecision;
+  }) => void
+): CatalogOwnershipWiring {
+  return {
+    onManagerEvent: (event) => {
+      if (event.type === "phase") ownership.updatePhase(event.phase as OwnerPhase);
+    },
+    ownershipHooks: {
+      requestGrant: async () => {
+        const decision = await ownership.grant();
+        return decision.granted
+          ? { granted: true, generation: decision.generation }
+          : { granted: false, reason: decision.reason };
+      },
+      onSettled: ({ ok, terminal }) => {
+        if (terminal?.type === "result" && terminal.status === "FENCED") {
+          ownership.updatePhase("FENCED");
+        } else if (ok && terminal?.type === "result" && terminal.status === "COMPLETED") {
+          ownership.updatePhase("SETTLED");
+        }
+        // G0 fix #3: an unexpected exit may have left the permit UNKNOWN with a
+        // retained token (e.g. recover() returned RETRY because a writer may
+        // still be active). Settlement must NOT discard that token — doing so
+        // erases the evidence needed for the next recovery and would admit a
+        // second writer. Only release when the permit is not UNKNOWN.
+        if (ownership.currentState !== "UNKNOWN") ownership.release();
+      },
+      onUnexpectedExit: ({ runId, exit }) => {
+        ownership.markUnknown();
+        const decision = ownership.recover();
+        onRecovery?.({ runId, exit, decision });
+      }
+    }
+  };
+}
+
+/**
  * WP3-A item 10: partial-initialization failure runs the same drain sequence
  * as graceful shutdown before any resource is closed. Every step is best
  * effort and idempotent so repeated calls cannot double-close or throw.
@@ -150,39 +211,19 @@ async function main() {
     // run. Pipeline mode runs the full refresh in the child; the parent keeps
     // scheduling, freshness and diagnostic recording. G0-D wires the ownership
     // hooks so the grant is drained and generation-fenced, never unconditional.
+    const ownershipWiring = createCatalogOwnershipWiring(ownership!, ({ runId, exit, decision }) => {
+      logger.warn("catalog_ownership_recovery", {
+        runId, decision: decision.decision,
+        code: exit.code, signal: exit.signal,
+        ...("reason" in decision ? { reason: decision.reason } : {})
+      });
+    });
     childManager = new CatalogRefreshChildManager({
       dbPath: db.path,
       mode: "pipeline",
       childEntryPath: resolve(import.meta.dir, "catalog-refresh-child-pipeline.ts"),
-      onEvent: (event) => {
-        // G0-D: mirror validated child phase transitions into the durable token.
-        if (event.type === "phase") ownership?.updatePhase(event.phase as OwnerPhase);
-      },
-      ownershipHooks: {
-        requestGrant: async () => {
-          const decision = await ownership!.grant();
-          return decision.granted
-            ? { granted: true, generation: decision.generation }
-            : { granted: false, reason: decision.reason };
-        },
-        onSettled: ({ ok, terminal }) => {
-          if (terminal?.type === "result" && terminal.status === "FENCED") {
-            ownership!.updatePhase("FENCED");
-          } else if (ok && terminal?.type === "result" && terminal.status === "COMPLETED") {
-            ownership!.updatePhase("SETTLED");
-          }
-          ownership!.release();
-        },
-        onUnexpectedExit: ({ runId, exit }) => {
-          ownership!.markUnknown();
-          const decision = ownership!.recover();
-          logger.warn("catalog_ownership_recovery", {
-            runId, decision: decision.decision,
-            code: exit.code, signal: exit.signal,
-            ...("reason" in decision ? { reason: decision.reason } : {})
-          });
-        }
-      }
+      onEvent: ownershipWiring.onManagerEvent,
+      ownershipHooks: ownershipWiring.ownershipHooks
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

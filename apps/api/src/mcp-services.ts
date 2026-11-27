@@ -8,7 +8,9 @@ import type {
 } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import { composeProviderStatuses } from "./provider-routes";
-import { CATALOG_WRITE_BUSY, writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
+import {
+  CATALOG_WRITE_BUSY, CatalogWriteBusyError, writeBusyResponse, type ApiWriteGuard
+} from "./catalog-write-coordinator";
 
 /**
  * Build the HTTP-backed MCP services from the existing injected state.
@@ -82,8 +84,21 @@ export function createHttpMcpServices(
     getCachedCandles: async (req) => ({ ok: true, value: { candles: historicalService.getCached(req) } }),
     getCoverage: async (req) => ({ ok: true, value: historicalService.getCoverageStatus(req) }),
     fetchHistorical: async (req) => {
-      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #21 via MCP
-      return { ok: true, value: await historicalService.fetchOnDemand(req) };
+      // G0 integration fix #5: hold ONE active write scope for the whole
+      // operation. A preflight-only check let a refresh acquire OWNED while the
+      // provider call was awaited, splitting the operation and turning its
+      // writes into a provider-unavailable result. `withScope` admits the scope
+      // only while the permit is IDLE/RESERVED and the grant drain waits for it.
+      if (!writeGuard) return { ok: true, value: await historicalService.fetchOnDemand(req) };
+      try {
+        return {
+          ok: true,
+          value: await writeGuard.withScope("I", () => historicalService.fetchOnDemand(req))
+        };
+      } catch (error) {
+        if (error instanceof CatalogWriteBusyError) return busy();
+        throw error;
+      }
     },
     listSnapshots: async (filter) => ({ ok: true, value: { snapshots: snapshotService.listSnapshots(filter.configId, filter.fromMs, filter.toMs) } }),
     listSnapshotsPage: async (req) => {
@@ -107,8 +122,17 @@ export function createHttpMcpServices(
         : { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
     },
     captureSnapshot: async (req) => {
-      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #25 via MCP
-      return { ok: true, value: await snapshotService.captureOnDemand(req) };
+      // G0 integration fix #5: same full-operation write scope as fetchHistorical.
+      if (!writeGuard) return { ok: true, value: await snapshotService.captureOnDemand(req) };
+      try {
+        return {
+          ok: true,
+          value: await writeGuard.withScope("I", () => snapshotService.captureOnDemand(req))
+        };
+      } catch (error) {
+        if (error instanceof CatalogWriteBusyError) return busy();
+        throw error;
+      }
     },
     startActivity: async (req) => {
       if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #27

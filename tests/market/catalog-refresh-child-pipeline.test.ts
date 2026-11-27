@@ -473,7 +473,7 @@ describe("G0-B — child refresh pipeline", () => {
     }
   }, 15_000);
 
-  test("executor failure with applyAttempted=true does not double-record a diagnostic", async () => {
+  test("executor failure persists a parent FAILED diagnostic for both applyAttempted values", async () => {
     async function runScenario(applyAttempted: boolean): Promise<{
       recorded: unknown[]; events: CatalogRefreshEvent[];
     }> {
@@ -507,14 +507,17 @@ describe("G0-B — child refresh pipeline", () => {
       return { recorded, events };
     }
 
-    // applyAttempted=true: the executor's child-mode sync already recorded the
-    // failure inside its atomic apply path; the parent must not add a second row.
+    // G0 integration fix #6: the child runs with diagnostic recording disabled,
+    // so the parent is the SOLE recorder. applyAttempted=true means the atomic
+    // apply rolled back — it is NOT a recorded failure or a commit proof — so
+    // the parent still persists exactly one FAILED row per provider.
     const attempted = await runScenario(true);
     expect(attempted.events.filter((e) => e.outcome === "FAILED").length).toBe(2);
-    expect(attempted.recorded.length).toBe(0);
+    expect(attempted.recorded.length).toBe(2);
+    expect(attempted.recorded.every((r) => (r as { status: string }).status === "FAILED")).toBe(true);
 
-    // Control: a pipeline-time failure (apply not attempted) still records
-    // exactly one parent diagnostic per provider.
+    // Control: a pipeline-time failure (apply not attempted) also records one
+    // parent diagnostic per provider.
     const notAttempted = await runScenario(false);
     expect(notAttempted.events.filter((e) => e.outcome === "FAILED").length).toBe(2);
     expect(notAttempted.recorded.length).toBe(2);

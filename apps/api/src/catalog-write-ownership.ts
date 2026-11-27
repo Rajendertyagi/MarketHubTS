@@ -94,15 +94,44 @@ export function serializeOwnerToken(token: OwnerToken): string {
   });
 }
 
-export function readOwnerToken(sqlite: Database): OwnerToken | null {
+/**
+ * G0 integration fix #4: a token read has FOUR distinct outcomes. Collapsing
+ * malformed/unreadable into "no token" let `recover()` treat a corrupt or
+ * unreadable durable token as a clean startup and admit a writer. Callers that
+ * make an ownership decision MUST use this discriminated result and fail
+ * closed on MALFORMED / READ_FAILED. `readOwnerToken` below is kept as a
+ * convenience wrapper for diagnostics/tests that only need a valid token.
+ */
+export type OwnerTokenRead =
+  | { state: "ABSENT" }
+  | { state: "VALID"; token: OwnerToken }
+  | { state: "MALFORMED"; raw: string }
+  | { state: "READ_FAILED"; reason: string };
+
+export function inspectOwnerToken(sqlite: Database): OwnerTokenRead {
+  let row: { value: string } | null;
   try {
-    const row = sqlite
+    row = sqlite
       .query("SELECT value FROM app_meta WHERE key = ?")
       .get(OWNER_META_KEY) as { value: string } | null;
-    return parseOwnerToken(row?.value);
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      state: "READ_FAILED",
+      reason: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
+    };
   }
+  if (!row) return { state: "ABSENT" };
+  const token = parseOwnerToken(row.value);
+  if (!token) return { state: "MALFORMED", raw: String(row.value).slice(0, 300) };
+  return { state: "VALID", token };
+}
+
+/** Convenience wrapper: a valid token or null. Ownership decisions must use
+ * `inspectOwnerToken` so malformed/unreadable states are not mistaken for
+ * "no token" (G0 integration fix #4). */
+export function readOwnerToken(sqlite: Database): OwnerToken | null {
+  const inspected = inspectOwnerToken(sqlite);
+  return inspected.state === "VALID" ? inspected.token : null;
 }
 
 export function writeOwnerToken(sqlite: Database, token: OwnerToken): void {
@@ -185,7 +214,10 @@ export type RecoveryDecision =
   | { decision: "NO_TOKEN" }
   | { decision: "COMMITTED"; runId: string; generation: number }
   | { decision: "RESUME"; generation: number }
-  | { decision: "RETRY"; generation: number; reason: string };
+  | { decision: "RETRY"; generation: number; reason: string }
+  /** G0 integration fix #4: the durable token is malformed or unreadable. The
+   * permit stays UNKNOWN and the token is retained; no writer may be admitted. */
+  | { decision: "REFUSED"; generation: number; reason: string };
 
 /**
  * Fail-closed post-bump verification decision. This is deliberately a LOCAL
@@ -289,8 +321,20 @@ export class CatalogWriteOwnership {
     private readonly dbPath: string,
     private readonly onEvent?: (event: OwnershipEvent) => void
   ) {
-    this.token = readOwnerToken(sqlite);
-    this.generation = this.token?.generation ?? 0;
+    // G0 integration fix #4: a malformed or unreadable durable token is NOT a
+    // clean startup. Start UNKNOWN so no reserve/grant is possible until
+    // recovery has verified state; a valid token keeps its generation.
+    const inspected = inspectOwnerToken(sqlite);
+    if (inspected.state === "VALID") {
+      this.token = inspected.token;
+      this.generation = inspected.token.generation;
+    } else {
+      this.token = null;
+      this.generation = 0;
+      if (inspected.state === "MALFORMED" || inspected.state === "READ_FAILED") {
+        this.state = "UNKNOWN";
+      }
+    }
   }
 
   get currentState(): PermitState { return this.state; }
@@ -386,7 +430,17 @@ export class CatalogWriteOwnership {
     return true;
   }
 
-  /** Parent-side phase update driven by validated child `progress` messages. */
+  /**
+   * Parent-side phase update driven by validated child `progress` messages.
+   *
+   * G0 integration fix #2: once the permit is OWNED (or draining/unknown) the
+   * child may already hold `BEGIN IMMEDIATE`. A synchronous `app_meta` write
+   * here would contend with that transaction and block the parent event loop
+   * for up to `busy_timeout` (5 s). Phase is diagnostic only, so while the
+   * permit is not IDLE/RESERVED we keep the in-memory token current but do NOT
+   * touch SQLite. Progress messages are still observable via the manager event
+   * seam; only the durable mirror is suppressed.
+   */
   updatePhase(phase: OwnerPhase): void {
     if (!this.token) return;
     const updated: OwnerToken = {
@@ -394,6 +448,10 @@ export class CatalogWriteOwnership {
       phase,
       heartbeatAt: new Date().toISOString()
     };
+    if (this.state === "OWNED" || this.state === "RELEASING" || this.state === "UNKNOWN") {
+      this.token = updated;
+      return;
+    }
     try {
       writeOwnerToken(this.sqlite, updated);
       this.token = updated;
@@ -422,12 +480,26 @@ export class CatalogWriteOwnership {
    *      authorizes a write.
    */
   recover(): RecoveryDecision {
-    const token = readOwnerToken(this.sqlite);
-    if (!token) {
+    // G0 integration fix #4: distinguish ABSENT from MALFORMED / READ_FAILED.
+    // Only a genuinely absent token permits a normal startup; a corrupt or
+    // unreadable token fails closed (UNKNOWN, token retained, no dispatch).
+    const inspected = inspectOwnerToken(this.sqlite);
+    if (inspected.state === "ABSENT") {
       this.token = null;
       this.transition("IDLE");
       return { decision: "NO_TOKEN" };
     }
+    if (inspected.state === "MALFORMED" || inspected.state === "READ_FAILED") {
+      this.transition("UNKNOWN");
+      return {
+        decision: "REFUSED",
+        generation: this.generation,
+        reason: inspected.state === "MALFORMED"
+          ? `malformed owner token: ${inspected.raw}`
+          : `owner token read failed: ${inspected.reason}`
+      };
+    }
+    const token = inspected.token;
     this.generation = Math.max(this.generation, token.generation);
     this.token = token;
 
@@ -472,12 +544,27 @@ export class CatalogWriteOwnership {
    * is NOT modified by this correction.
    */
   recoverAfterBump(): RecoveryAfterBumpDecision | { decision: "NO_TOKEN" } {
-    const token = readOwnerToken(this.sqlite);
-    if (!token) {
+    // G0 integration fix #4: fail closed on a malformed/unreadable token here
+    // too. Reuse the existing refusing decision so `recoverForStartup` maps it
+    // to REFUSED without a new wire value.
+    const inspected = inspectOwnerToken(this.sqlite);
+    if (inspected.state === "ABSENT") {
       this.token = null;
       this.transition("IDLE");
       return { decision: "NO_TOKEN" };
     }
+    if (inspected.state === "MALFORMED" || inspected.state === "READ_FAILED") {
+      this.transition("UNKNOWN");
+      return {
+        decision: "LOOKUP_FAILED_REFUSE",
+        runId: "unknown",
+        generation: this.generation,
+        reason: inspected.state === "MALFORMED"
+          ? `malformed owner token: ${inspected.raw}`
+          : `owner token read failed: ${inspected.reason}`
+      };
+    }
+    const token = inspected.token;
 
     const nextGeneration = Math.max(this.generation, token.generation) + 1;
     const bumped: OwnerToken = { ...token, generation: nextGeneration };
@@ -525,6 +612,16 @@ export class CatalogWriteOwnership {
    */
   recoverForStartup(): StartupRecoveryDecision {
     const pre = this.recover();
+    if (pre.decision === "REFUSED") {
+      // Malformed/unreadable token: fail closed with the full startup decision
+      // shape (the permit is already UNKNOWN and the token retained).
+      return {
+        decision: "REFUSED",
+        runId: this.token?.runId ?? "unknown",
+        generation: pre.generation,
+        reason: pre.reason
+      };
+    }
     if (pre.decision !== "RESUME") return pre;
     const post = this.recoverAfterBump();
     if (post.decision === "NO_TOKEN") return { decision: "NO_TOKEN" };

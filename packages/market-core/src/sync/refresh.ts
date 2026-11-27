@@ -111,10 +111,11 @@ export interface ProviderPipelineOptions {
 /**
  * Parent-side seam that executes one provider run (G0-B: via the child manager).
  * Implementations MUST construct their `CatalogSyncService` in child mode
- * (`disableDiagnosticRunRecording: true`): the parent owns every terminal
- * diagnostic record. An outcome with `applyAttempted: true` means the sync
- * already recorded its own failure inside the atomic apply path, so the parent
- * must not record a second one.
+ * (`disableDiagnosticRunRecording: true`): the parent owns EVERY terminal
+ * diagnostic record, including apply-time failures. An outcome with
+ * `applyAttempted: true` only means the child reached the atomic apply (which
+ * rolled back); it is NOT evidence of a recorded failure or a commit, so the
+ * parent still persists the FAILED diagnostic after settlement.
  */
 export interface RefreshExecutorParams {
   provider: ProviderId;
@@ -206,6 +207,15 @@ export class CatalogMasterRefresh {
   private readonly onEvent: ((event: CatalogRefreshEvent) => void) | undefined;
   private readonly refreshIntervalMs: number;
   private readonly executor: RefreshExecutor | undefined;
+  /**
+   * G0 integration fix #1: executor invocations are serialized so two providers
+   * kicked off together cannot race for the single durable write permit. The
+   * reservation happens INSIDE the executor (production: before
+   * `childManager.requestRefresh`), so a second provider starting while the
+   * first holds RESERVED would otherwise fail reservation and be skipped.
+   * In-process runs (no executor) keep their original concurrent behaviour.
+   */
+  private executorChain: Promise<unknown> = Promise.resolve();
   private readonly inFlight = new Map<ProviderId, Promise<void>>();
   /** One controller per active run; aborted on STOPPING (WP3-A item 4). */
   private readonly controllers = new Map<ProviderId, AbortController>();
@@ -383,25 +393,42 @@ export class CatalogMasterRefresh {
   /** G0-B: execute one provider run through the injected child seam. The parent
    * generates the run ID, owns scheduling/freshness and records every terminal
    * diagnostic after the child settles (decision (a)). Executor implementations
-   * must run their sync in child mode (diagnostic recorder disabled); when an
-   * outcome reports `applyAttempted: true` the sync already recorded the failure
-   * inside its atomic apply path, so recording here too would double-record. */
+   * run their sync in child mode (diagnostic recorder disabled), so the parent
+   * is the SOLE recorder of terminal diagnostics — including apply-time
+   * failures (`applyAttempted: true`) whose transaction rolled back.
+   *
+   * G0 integration fix #1: the executor call is chained so provider runs are
+   * serialized BEFORE ownership reservation. G0 integration fix #6: every
+   * non-COMPLETED, non-cancelled outcome gets a parent FAILED row; that row is
+   * diagnostic only and is never COMPLETED proof (`findCommittedRun` matches
+   * status COMPLETED exclusively). */
   private async doRefreshViaExecutor(
     provider: ProviderId, signal: AbortSignal, nowIso: string
   ): Promise<void> {
     const runId = crypto.randomUUID();
+    // Serialize the executor (and therefore the ownership reservation inside
+    // it) ahead of any other provider's executor. A rejected executor must not
+    // break the chain for later providers. A run that was queued when shutdown
+    // began must NOT reserve/dispatch afterwards — it settles as CANCELLED so
+    // `stopAndWait()` can drain without spawning a new child (WP3-A item 2/4).
+    const queued = this.executorChain.then(() => {
+      if (signal.aborted || this.lifecycleState !== "RUNNING") {
+        return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted: false } as ProviderPipelineOutcome;
+      }
+      return this.executor!({ provider, runId, nowIso, signal });
+    });
+    this.executorChain = queued.catch(() => {});
     try {
-      const outcome = await this.executor!({ provider, runId, nowIso, signal });
+      const outcome = await queued;
       if (outcome.cancelled || signal.aborted) return this.emitCancelled(provider);
       if (outcome.status === "COMPLETED") {
         this.emit({ provider, outcome: "REFRESHED", status: outcome.status, counts: outcome.counts });
       } else {
-        // Same contract as the in-process path: only pipeline-time failures
-        // (apply not attempted) get a parent diagnostic row. Apply-time failures
-        // were already recorded by the child-mode sync inside the transaction.
-        if (!outcome.applyAttempted) {
-          await this.recordDiagnosticFailure(provider, nowIso, outcome.error ?? `refresh ${outcome.status}`);
-        }
+        // The child never records diagnostics (child mode). Persist a FAILED
+        // row for EVERY non-COMPLETED outcome, including apply-time failures
+        // where applyAttempted=true and the transaction rolled back. This is
+        // diagnostic evidence only — never a commit proof.
+        await this.recordDiagnosticFailure(provider, nowIso, outcome.error ?? `refresh ${outcome.status}`);
         this.emit({
           provider, outcome: "FAILED", status: outcome.status, counts: outcome.counts,
           ...(outcome.error ? { reason: outcome.error } : {})
