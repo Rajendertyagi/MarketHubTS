@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, isNull, lt, lte, or } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
+  CatalogWriteGuard,
   OptionChainCaptureConfig,
   OptionChainSnapshot,
   SnapshotPageSelector
@@ -9,9 +10,11 @@ import { optionChainCaptureConfigs, optionChainSnapshots } from "../schema";
 import type { MarketHubDb } from "../index";
 
 export class SnapshotRepository {
-  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database) {}
+  /** G0-C: optional injected write guard; absent = legacy behaviour. */
+  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database, private readonly guard?: CatalogWriteGuard) {}
 
   putCaptureConfig(config: OptionChainCaptureConfig): void {
+    this.guard?.assertWritable("I"); // G0-C #23
     this.db.insert(optionChainCaptureConfigs).values({
       id: config.id,
       underlyingCanonicalId: config.underlyingCanonicalId,
@@ -78,11 +81,13 @@ export class SnapshotRepository {
 
   /** Deleting a config leaves its snapshots intact (config_id becomes NULL via FK). */
   deleteCaptureConfig(id: string): void {
+    this.guard?.assertWritable("I"); // G0-C #24
     this.db.delete(optionChainCaptureConfigs).where(eq(optionChainCaptureConfigs.id, id)).run();
   }
 
   /** Idempotent append: a duplicate id is a no-op, never a constraint error. */
   putSnapshot(snapshot: OptionChainSnapshot): boolean {
+    this.guard?.assertWritable("I"); // G0-C #25/#26: before INSERT OR IGNORE
     const result = this.sqlite.run(
       "INSERT OR IGNORE INTO option_chain_snapshots (id, config_id, captured_at, provider, envelope_json, provenance_json) VALUES (?, ?, ?, ?, ?, ?)",
       [
@@ -164,6 +169,7 @@ export class SnapshotRepository {
    * retention settings first.
    */
   cleanupSnapshots(cutoffMs: number, batchLimit = 500): number {
+    this.guard?.assertWritable("I"); // G0-C #18: before any batched DELETE
     const limit = Math.max(1, Math.min(batchLimit, 10000));
     const cutoff = new Date(cutoffMs).toISOString();
     let deleted = 0;

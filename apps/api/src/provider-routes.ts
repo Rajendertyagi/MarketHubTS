@@ -13,6 +13,7 @@ import type { MarketDataService, ProviderRegistry } from "@markethub/market-core
 import type { UpstoxAdapter } from "@markethub/broker-upstox";
 import type { FyersAdapter } from "@markethub/broker-fyers";
 import { isLocalPeer } from "./lib/net";
+import { runInteractiveWrite, writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 export interface ProviderRouteDependencies {
   providerRegistry?: ProviderRegistry;
@@ -22,6 +23,8 @@ export interface ProviderRouteDependencies {
   upstox?: UpstoxAdapter;
   fyers?: FyersAdapter;
   service?: MarketDataService;
+  /** G0-C: injected write coordinator for fail-fast interactive writes. */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 /**
@@ -79,7 +82,11 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "A non-empty token is required" }), 400);
       }
       try {
-        const status = await deps.upstox!.setToken(body.token, typeof body.expiresAt === "string" ? body.expiresAt : undefined);
+        // G0-C #10: one scope spans credentials.set + settings.set/delete.
+        const status = await runInteractiveWrite(deps.writeGuard, () =>
+          deps.upstox!.setToken(body.token, typeof body.expiresAt === "string" ? body.expiresAt : undefined)
+        );
+        if (status instanceof Response) return status;
         return c.json(withRuntimeStreamingState(deps, status));
       } catch (error) {
         return c.json(apiErrorSchema.parse({ error: "credential_error", message: error instanceof Error ? error.message : String(error) }), 400);
@@ -94,8 +101,13 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "appId and redirectUri are required" }), 400);
       }
       try {
-        await deps.fyers!.setConfig(body.appId, body.redirectUri);
-        return c.json({ ok: true });
+        // G0-C #11: one scope spans both settings.set writes.
+        const result = await runInteractiveWrite(deps.writeGuard, async () => {
+          await deps.fyers!.setConfig(body.appId, body.redirectUri);
+          return { ok: true };
+        });
+        if (result instanceof Response) return result;
+        return c.json(result);
       } catch (error) {
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: error instanceof Error ? error.message : String(error) }), 400);
       }
@@ -106,6 +118,8 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       if (typeof body?.appSecret !== "string" || !body.appSecret.trim()) {
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "A non-empty appSecret is required" }), 400);
       }
+      const busy = writeBusyResponse(deps.writeGuard); // G0-C #12: before any write
+      if (busy) return busy;
       try {
         await deps.fyers!.setAppSecret(body.appSecret);
         return c.json({ ok: true });
@@ -127,11 +141,13 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       const code = c.req.query("code");
       const state = c.req.query("state");
       const error = c.req.query("error");
-      const status = await deps.fyers!.completeAuth({
+      // G0-C #13: one scope spans credentials.set + settings.set + credentials.delete.
+      const status = await runInteractiveWrite(deps.writeGuard, () => deps.fyers!.completeAuth({
         ...(code ? { code } : {}),
         ...(state ? { state } : {}),
         ...(error ? { error } : {})
-      });
+      }));
+      if (status instanceof Response) return status;
       const ok = status.authState === "AUTHENTICATED";
       return c.html(`<!doctype html><title>MarketHubTS</title><p>${ok ? "FYERS authentication completed. You can close this window." : "FYERS authentication failed. Review provider status in the app."}</p>`);
     });
@@ -143,6 +159,8 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       if (id !== "UPSTOX" && id !== "FYERS") {
         return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Unknown provider" }), 400);
       }
+      const busy = writeBusyResponse(deps.writeGuard); // G0-C #14: gate before adapter runs
+      if (busy) return busy;
       const status = await deps.providerRegistry!.validate(id);
       return c.json(withRuntimeStreamingState(deps, status));
     });
@@ -156,7 +174,12 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       if (body?.confirm !== true) {
         return c.json(apiErrorSchema.parse({ error: "confirmation_required", message: "Set confirm=true" }), 400);
       }
-      await deps.providerRegistry!.remove(id);
+      // G0-C #15: one scope spans all credential/settings deletes.
+      const removed = await runInteractiveWrite(deps.writeGuard, async () => {
+        await deps.providerRegistry!.remove(id);
+        return true;
+      });
+      if (removed instanceof Response) return removed;
       return c.json(composeProviderStatuses(deps));
     });
   }
@@ -167,7 +190,12 @@ export function registerProviderRoutes(app: Hono, deps: ProviderRouteDependencie
       if (body?.confirm !== true) {
         return c.json(apiErrorSchema.parse({ error: "confirmation_required", message: "Set confirm=true" }), 400);
       }
-      await deps.credentials!.reset();
+      // G0-C #16: one scope spans DB delete + key-file replace; 503 before either.
+      const reset = await runInteractiveWrite(deps.writeGuard, async () => {
+        await deps.credentials!.reset();
+        return true;
+      });
+      if (reset instanceof Response) return reset;
       return c.json({ ok: true, message: "Credential store reset; re-authentication required" });
     });
   }

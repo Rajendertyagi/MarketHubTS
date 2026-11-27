@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { istDateString, type ProviderId } from "@markethub/contracts";
+import { istDateString, type CatalogSyncResult, type ProviderId } from "@markethub/contracts";
 import type { CatalogRepository } from "../types";
 import { CatalogSyncService } from "./apply";
 import {
@@ -78,6 +78,53 @@ export interface CatalogRefreshEvent {
 export type MasterFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
+ * G0-B — structured outcome of one provider's download→parse→validate→apply
+ * pipeline. It carries no large payloads and no live objects, so it can cross
+ * the child IPC boundary. `applyAttempted` distinguishes an apply-time failure
+ * (the sync already recorded its diagnostic) from a pipeline-time failure (the
+ * parent must record the diagnostic).
+ */
+export interface ProviderPipelineOutcome {
+  status: string;
+  counts: Record<string, number>;
+  sourceVersion?: string;
+  conflicts?: string[];
+  error?: string;
+  cancelled: boolean;
+  applyAttempted: boolean;
+}
+
+/** Options for the reusable pipeline core (in-process or child). */
+export interface ProviderPipelineOptions {
+  provider: ProviderId;
+  nowIso: string;
+  fetchFn: MasterFetch;
+  sync: CatalogSyncService;
+  signal?: AbortSignal;
+  /** Parent-generated run ID threaded into `applyCompleteProviderSnapshot`. */
+  runId?: string;
+  onProgress?: (phase: "DOWNLOAD" | "PARSE" | "VALIDATE" | "AWAIT_TXN_GRANT" | "TXN" | "SETTLED") => void;
+  /** Child-only hook: awaited immediately before the atomic apply (txn-granted ack). */
+  beforeApply?: () => Promise<void>;
+}
+
+/**
+ * Parent-side seam that executes one provider run (G0-B: via the child manager).
+ * Implementations MUST construct their `CatalogSyncService` in child mode
+ * (`disableDiagnosticRunRecording: true`): the parent owns every terminal
+ * diagnostic record. An outcome with `applyAttempted: true` means the sync
+ * already recorded its own failure inside the atomic apply path, so the parent
+ * must not record a second one.
+ */
+export interface RefreshExecutorParams {
+  provider: ProviderId;
+  runId: string;
+  nowIso: string;
+  signal: AbortSignal;
+}
+export type RefreshExecutor = (params: RefreshExecutorParams) => Promise<ProviderPipelineOutcome>;
+
+/**
  * Diagnostic high-water marks for the most recent Upstox streaming ingestion.
  * Test/diagnostic only — not part of the public package API and not exposed to
  * any consumer. `maxParserBufferChars` is the largest *transient* decompressed
@@ -140,6 +187,10 @@ export interface CatalogMasterRefreshOptions {
   onEvent?: ((event: CatalogRefreshEvent) => void) | undefined;
   /** Interval for the in-process daily trigger. Defaults to 30 minutes. */
   refreshIntervalMs?: number | undefined;
+  /** G0-B: when set, provider runs are executed through this seam (the child
+   * manager in production). Scheduling, single-flight, freshness and diagnostic
+   * recording stay parent-side either way. */
+  executor?: RefreshExecutor | undefined;
 }
 
 /**
@@ -154,6 +205,7 @@ export class CatalogMasterRefresh {
   private readonly fetchFn: MasterFetch;
   private readonly onEvent: ((event: CatalogRefreshEvent) => void) | undefined;
   private readonly refreshIntervalMs: number;
+  private readonly executor: RefreshExecutor | undefined;
   private readonly inFlight = new Map<ProviderId, Promise<void>>();
   /** One controller per active run; aborted on STOPPING (WP3-A item 4). */
   private readonly controllers = new Map<ProviderId, AbortController>();
@@ -169,6 +221,7 @@ export class CatalogMasterRefresh {
     this.fetchFn = options.fetch ?? ((input, init) => fetch(input, init));
     this.onEvent = options.onEvent;
     this.refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
+    this.executor = options.executor;
   }
 
   /** Observable lifecycle state (WP3-A item 1). */
@@ -277,6 +330,8 @@ export class CatalogMasterRefresh {
     // DB transaction starts it is never abandoned mid-flight (WP3-A item 7).
     if (signal.aborted) return this.emitCancelled(provider);
 
+    // Read-only freshness check stays parent-side and pre-spawn (plan §4.3 step 1).
+    // The child never runs it and writes no run record for a skip.
     const today = istDateString(this.now().getTime());
     try {
       const runs = await this.catalog.listSyncRuns({ provider, status: "COMPLETED", limit: 1 });
@@ -288,7 +343,7 @@ export class CatalogMasterRefresh {
           return;
         }
       }
-    } catch (e) {
+    } catch {
       // A freshness lookup failure is diagnostic only: it is not positive
       // evidence of a successful refresh today, so still attempt the refresh.
       this.emit({ provider, outcome: "DIAGNOSTIC", reason: "FRESHNESS_LOOKUP_FAILED" });
@@ -296,78 +351,169 @@ export class CatalogMasterRefresh {
     if (signal.aborted) return this.emitCancelled(provider);
 
     const nowIso = this.now().toISOString();
+    if (this.executor) return this.doRefreshViaExecutor(provider, signal, nowIso);
+
+    // In-process path (regression): same shared pipeline core, parent-owned
+    // diagnostics. `applyAttempted` prevents a second FAILED row when the sync
+    // already recorded one inside its failure path.
+    try {
+      const outcome = await this.runPipelineCore({
+        provider, nowIso, fetchFn: this.fetchFn, sync: this.sync, signal
+      });
+      if (outcome.cancelled || signal.aborted) return this.emitCancelled(provider);
+      if (outcome.status === "COMPLETED") {
+        this.emit({ provider, outcome: "REFRESHED", status: outcome.status, counts: outcome.counts });
+      } else {
+        if (!outcome.applyAttempted) {
+          await this.recordDiagnosticFailure(provider, nowIso, outcome.error ?? "refresh failed");
+        }
+        this.emit({
+          provider, outcome: "FAILED", status: outcome.status, counts: outcome.counts,
+          ...(outcome.error ? { reason: outcome.error } : {})
+        });
+      }
+    } catch (e) {
+      if (signal.aborted) return this.emitCancelled(provider);
+      const message = e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
+      await this.recordDiagnosticFailure(provider, nowIso, message);
+      this.emit({ provider, outcome: "FAILED", reason: message });
+    }
+  }
+
+  /** G0-B: execute one provider run through the injected child seam. The parent
+   * generates the run ID, owns scheduling/freshness and records every terminal
+   * diagnostic after the child settles (decision (a)). Executor implementations
+   * must run their sync in child mode (diagnostic recorder disabled); when an
+   * outcome reports `applyAttempted: true` the sync already recorded the failure
+   * inside its atomic apply path, so recording here too would double-record. */
+  private async doRefreshViaExecutor(
+    provider: ProviderId, signal: AbortSignal, nowIso: string
+  ): Promise<void> {
+    const runId = crypto.randomUUID();
+    try {
+      const outcome = await this.executor!({ provider, runId, nowIso, signal });
+      if (outcome.cancelled || signal.aborted) return this.emitCancelled(provider);
+      if (outcome.status === "COMPLETED") {
+        this.emit({ provider, outcome: "REFRESHED", status: outcome.status, counts: outcome.counts });
+      } else {
+        // Same contract as the in-process path: only pipeline-time failures
+        // (apply not attempted) get a parent diagnostic row. Apply-time failures
+        // were already recorded by the child-mode sync inside the transaction.
+        if (!outcome.applyAttempted) {
+          await this.recordDiagnosticFailure(provider, nowIso, outcome.error ?? `refresh ${outcome.status}`);
+        }
+        this.emit({
+          provider, outcome: "FAILED", status: outcome.status, counts: outcome.counts,
+          ...(outcome.error ? { reason: outcome.error } : {})
+        });
+      }
+    } catch (e) {
+      if (signal.aborted) return this.emitCancelled(provider);
+      const message = e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
+      await this.recordDiagnosticFailure(provider, nowIso, message);
+      this.emit({ provider, outcome: "FAILED", reason: message });
+    }
+  }
+
+  /** Parent-owned diagnostic FAILED record (autocommit, outside any tx). */
+  private async recordDiagnosticFailure(
+    provider: ProviderId, startedAt: string, message: string
+  ): Promise<void> {
+    const source = provider === "UPSTOX" ? UPSTOX_SOURCE : FYERS_SOURCE;
+    try {
+      await this.catalog.recordSyncRun?.({
+        runId: crypto.randomUUID(),
+        source,
+        provider,
+        scopeJson: JSON.stringify({ source }),
+        completeness: "COMPLETE",
+        status: "FAILED",
+        startedAt,
+        finishedAt: this.now().toISOString(),
+        countsJson: JSON.stringify({}),
+        conflictsJson: JSON.stringify([{ type: "REFRESH_FAILED", severity: "ERROR", message }]),
+        error: message
+      });
+    } catch {
+      // best effort
+    }
+  }
+
+  /**
+   * G0-B shared pipeline core: download → parse → validate → apply. No freshness
+   * check and no diagnostic run record live here — both are parent-owned. The
+   * parsing/validation/apply semantics are the pre-existing ones; only the
+   * process boundary (which caller invokes them) moved.
+   */
+  async runPipelineCore(options: ProviderPipelineOptions): Promise<ProviderPipelineOutcome> {
+    const { provider, nowIso, fetchFn, sync, signal, runId, onProgress, beforeApply } = options;
+    if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted: false };
+    let applyAttempted = false;
     try {
       if (provider === "UPSTOX") {
-        // WP2-A: bounded streaming ingestion. The response body is consumed as
-        // a stream, gzip is decompressed incrementally, the JSON array is parsed
-        // one element at a time, and the hash is accumulated over decompressed
-        // bytes. No full compressed buffer, full decompressed string or full
-        // parsed array is ever materialised. FYERS remains on its existing path.
+        onProgress?.("DOWNLOAD");
         const accumulator = new UpstoxImportAccumulator();
         const { sourceVersion, lastModified } = await this.streamUpstoxInto(
-          accumulator, UPSTOX_MASTER_URL, signal
+          accumulator, UPSTOX_MASTER_URL, signal, fetchFn
         );
-        if (signal.aborted) return this.emitCancelled(provider);
+        if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+        onProgress?.("PARSE");
         const { batch, reconciliation, report } = accumulator.finish({
           now: nowIso,
           sourceVersion,
           ...(lastModified ? { sourceObservedAt: lastModified } : {})
         });
+        onProgress?.("VALIDATE");
         this.assertValidCompleteImport(report, "UPSTOX");
-        // Last cancellation boundary before the atomic DB transaction.
-        if (signal.aborted) return this.emitCancelled(provider);
-        const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
-        // The transaction reached its existing commit/rollback boundary. Do not
-        // abandon it or force-close the DB; report cancellation distinctly if a
-        // shutdown was requested while it ran.
-        if (signal.aborted) return this.emitCancelled(provider);
-        this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
-      } else {
-        // WP2-B: bounded streaming ingestion. The four segment files are
-        // fetched and parsed strictly sequentially (no concurrent full object
-        // graphs), each keyed JSON object is parsed one key/value pair at a
-        // time, and the legacy `sha256(JSON.stringify(files))` source-version
-        // contract is reproduced incrementally without ever building the second
-        // full JSON string. Only in-scope candidates are retained by the shared
-        // accumulator. No temporary files are used.
-        const accumulator = new FyersImportAccumulator();
-        const { sourceVersion } = await this.streamFyersInto(accumulator, signal);
-        if (signal.aborted) return this.emitCancelled(provider);
-        // FYERS derives its source data date from in-scope lastUpdate values;
-        // a local fetch time must never be substituted (sourceObservedAt is
-        // intentionally not passed).
-        const { batch, reconciliation, report } = accumulator.finish({ now: nowIso, sourceVersion });
-        this.assertValidCompleteImport(report, "FYERS");
-        if (signal.aborted) return this.emitCancelled(provider);
-        const result = await this.sync.applyCompleteProviderSnapshot(batch, reconciliation);
-        if (signal.aborted) return this.emitCancelled(provider);
-        this.emit({ provider, outcome: result.status === "COMPLETED" ? "REFRESHED" : "FAILED", status: result.status, counts: result.counts });
+        if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+        if (beforeApply) { onProgress?.("AWAIT_TXN_GRANT"); await beforeApply(); }
+        onProgress?.("TXN");
+        applyAttempted = true;
+        const result = await sync.applyCompleteProviderSnapshot(batch, reconciliation, runId);
+        onProgress?.("SETTLED");
+        if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+        return this.outcomeFromResult(result, sourceVersion, applyAttempted);
       }
+      onProgress?.("DOWNLOAD");
+      const accumulator = new FyersImportAccumulator();
+      const { sourceVersion } = await this.streamFyersInto(accumulator, signal, fetchFn);
+      if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+      onProgress?.("PARSE");
+      // FYERS derives its source data date from in-scope lastUpdate values;
+      // a local fetch time must never be substituted (sourceObservedAt is
+      // intentionally not passed).
+      const { batch, reconciliation, report } = accumulator.finish({ now: nowIso, sourceVersion });
+      onProgress?.("VALIDATE");
+      this.assertValidCompleteImport(report, "FYERS");
+      if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+      if (beforeApply) { onProgress?.("AWAIT_TXN_GRANT"); await beforeApply(); }
+      onProgress?.("TXN");
+      applyAttempted = true;
+      const result = await sync.applyCompleteProviderSnapshot(batch, reconciliation, runId);
+      onProgress?.("SETTLED");
+      if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
+      return this.outcomeFromResult(result, sourceVersion, applyAttempted);
     } catch (e) {
-      // Cancellation is never a provider failure: no DB write, no reconciliation,
-      // no success record. It is recorded only as a distinct diagnostic event.
-      if (signal.aborted) return this.emitCancelled(provider);
-      // Keep last-known-good data. Record a concise failure run without tokens/raw files.
+      if (signal?.aborted) return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted };
       const message = e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
-      try {
-        await this.catalog.recordSyncRun?.({
-          runId: crypto.randomUUID(),
-          source: provider === "UPSTOX" ? UPSTOX_SOURCE : FYERS_SOURCE,
-          provider,
-          scopeJson: JSON.stringify({ source: provider === "UPSTOX" ? UPSTOX_SOURCE : FYERS_SOURCE }),
-          completeness: "COMPLETE",
-          status: "FAILED",
-          startedAt: nowIso,
-          finishedAt: this.now().toISOString(),
-          countsJson: JSON.stringify({}),
-          conflictsJson: JSON.stringify([{ type: "REFRESH_FAILED", severity: "ERROR", message }]),
-          error: message
-        });
-      } catch {
-        // best effort
-      }
-      this.emit({ provider, outcome: "FAILED", reason: message });
+      return { status: "FAILED", counts: {}, error: message, cancelled: false, applyAttempted };
     }
+  }
+
+  private outcomeFromResult(
+    result: CatalogSyncResult, sourceVersion: string | undefined, applyAttempted: boolean
+  ): ProviderPipelineOutcome {
+    return {
+      status: result.status,
+      counts: result.counts,
+      ...(sourceVersion ? { sourceVersion } : {}),
+      ...(result.conflicts?.length
+        ? { conflicts: result.conflicts.map((c) => c.message.slice(0, 300)).slice(0, 64) }
+        : {}),
+      ...(result.error ? { error: result.error.slice(0, 300) } : {}),
+      cancelled: false,
+      applyAttempted
+    };
   }
 
   /** Distinct cancellation record — never FAILED, never REFRESHED, no DB touch. */
@@ -392,9 +538,10 @@ export class CatalogMasterRefresh {
   private async streamUpstoxInto(
     accumulator: UpstoxImportAccumulator,
     url: string,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    fetchFn: MasterFetch = this.fetchFn
   ): Promise<{ sourceVersion: string; lastModified?: string }> {
-    const response = await this.fetchFn(url, {
+    const response = await fetchFn(url, {
       signal: combinedFetchSignal(signal)
     });
     if (!response.ok) throw new Error(`Master download failed: HTTP ${response.status}`);
@@ -499,7 +646,8 @@ export class CatalogMasterRefresh {
    */
   private async streamFyersInto(
     accumulator: FyersImportAccumulator,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    fetchFn: MasterFetch = this.fetchFn
   ): Promise<{ sourceVersion: string }> {
     const hasher = new IncrementalSha256();
     const encoder = new TextEncoder();
@@ -512,7 +660,7 @@ export class CatalogMasterRefresh {
     for (let si = 0; si < segments.length; si++) {
       if (signal?.aborted) throw new Error("FYERS master download cancelled");
       const segment = segments[si]!;
-      const response = await this.fetchFn(FYERS_MASTER_URLS[segment], {
+      const response = await fetchFn(FYERS_MASTER_URLS[segment], {
         signal: combinedFetchSignal(signal)
       });
       if (!response.ok) throw new Error(`FYERS ${segment} download failed: HTTP ${response.status}`);
@@ -621,6 +769,31 @@ export class CatalogMasterRefresh {
       throw new Error(`${provider} complete master import failed validation: ${validation.errors.join(", ")}`);
     }
   }
+}
+
+/**
+ * G0-B — reusable pipeline entry point for the refresh child. It reuses the
+ * exact streaming/validation/apply implementation in `CatalogMasterRefresh`
+ * (no duplicated market-data logic); only the caller/process boundary differs.
+ * The supplied `sync` is expected to be constructed in child mode (diagnostic
+ * recorder disabled) so the child writes SQLite only inside the atomic apply.
+ */
+export async function runProviderRefreshPipeline(
+  options: ProviderPipelineOptions
+): Promise<ProviderPipelineOutcome> {
+  const runner = new CatalogMasterRefresh({
+    // The pipeline core never touches the catalog repository; a no-op instance
+    // keeps the constructor contract intact without giving the child a second
+    // data owner.
+    catalog: {
+      listSyncRuns: async () => [],
+      recordSyncRun: async () => {}
+    } as unknown as CatalogRepository,
+    sync: options.sync,
+    now: () => new Date(options.nowIso),
+    fetch: options.fetchFn
+  });
+  return runner.runPipelineCore(options);
 }
 
 /** Only a parseable Last-Modified header is a reliable source date; never use local fetch time. */

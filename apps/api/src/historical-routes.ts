@@ -15,6 +15,7 @@ import {
 import type { HistoricalCandleService } from "@markethub/market-core";
 import type { AppSettings, CandleRepository, SnapshotRepository, McpActivityRepository } from "@markethub/database";
 import { isLocalPeer } from "./lib/net";
+import { runInteractiveWrite, writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 export interface HistoricalRouteDependencies {
   service: HistoricalCandleService;
@@ -22,6 +23,8 @@ export interface HistoricalRouteDependencies {
   snapshots: SnapshotRepository;
   settings: AppSettings;
   activities?: McpActivityRepository;
+  /** G0-C: injected write coordinator for fail-fast interactive writes. */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 /** Kept as a public alias so existing consumers do not break; the shape is contract-owned. */
@@ -99,7 +102,11 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     }
     const parsed = candleRangeRequestSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid range request" }), 400);
-    const result = await deps.service.fetchOnDemand(parsed.data as CandleRangeRequest);
+    // G0-C #21: one scope spans upsertCandles + addRangeNote; 503 before fetch.
+    const result = await runInteractiveWrite(deps.writeGuard, () =>
+      deps.service.fetchOnDemand(parsed.data as CandleRangeRequest)
+    );
+    if (result instanceof Response) return result;
     return c.json({
       candles: result.candles.map((candle) => historicalCandleSchema.parse(candle)),
       gaps: result.gaps.map((gap) => candleGapSchema.parse(gap)),
@@ -120,6 +127,8 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     }
     const parsed = historicalSyncConfigSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid sync config" }), 400);
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #19
+    if (busy) return busy;
     const stored = deps.candles.putSyncConfig(parsed.data);
     return c.json({ config: historicalSyncConfigSchema.parse(stored) });
   });
@@ -128,6 +137,8 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Configuration is local-owner only" }), 403);
     }
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #20
+    if (busy) return busy;
     deps.candles.deleteSyncConfig(c.req.param("id"));
     return c.json({ ok: true });
   });
@@ -144,14 +155,21 @@ export function registerHistoricalRoutes(app: Hono, deps: HistoricalRouteDepende
     }
     const parsed = retentionSettingsSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid retention settings" }), 400);
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #17
+    if (busy) return busy;
     deps.settings.setRetention(parsed.data);
     return c.json(retentionSettingsViewSchema.parse({ settings: parsed.data, valid: true, error: null }));
   });
 
-  app.post("/api/retention/cleanup", (c) => {
+  app.post("/api/retention/cleanup", async (c) => {
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Retention cleanup is local-owner only" }), 403);
     }
-    return c.json(retentionCleanupResultSchema.parse(applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots, deps.activities)));
+    // G0-C #18: one scope spans all batched DELETE loops; no partial deletion.
+    const result = await runInteractiveWrite(deps.writeGuard, () =>
+      applyRetentionCleanup(deps.settings, deps.candles, deps.snapshots, deps.activities)
+    );
+    if (result instanceof Response) return result;
+    return c.json(retentionCleanupResultSchema.parse(result));
   });
 }

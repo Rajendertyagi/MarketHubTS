@@ -64,6 +64,27 @@ export const apiErrorSchema = z.object({
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
 
+/**
+ * G0-C — dependency-light write-coordination seam (plan §8.4).
+ *
+ * Additive interface only: no enum, schema value or selectable option is
+ * introduced. `packages/database` consumes this interface via injection and
+ * never imports the API-owned coordinator (no dependency inversion).
+ */
+export type WritePriority = "I" | "B" | "INTERNAL";
+
+export interface WriteScope {
+  readonly priority: WritePriority;
+  readonly id: string;
+}
+
+export interface CatalogWriteGuard {
+  /** `I`/`INTERNAL` throw when busy; `B` returns "SKIP" (never queues). */
+  assertWritable(priority: WritePriority, scope?: WriteScope): void | "SKIP";
+  acquireWriteScope(priority: WritePriority): WriteScope;
+  releaseWriteScope(scope: WriteScope): void;
+}
+
 export * from "./market";
 export * from "./provider";
 export * from "./live";

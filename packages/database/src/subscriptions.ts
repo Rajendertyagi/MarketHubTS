@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
-import type { SubscriptionRepository, SubscriptionSelection, SubscriptionState } from "@markethub/contracts";
+import type { CatalogWriteGuard, SubscriptionRepository, SubscriptionSelection, SubscriptionState } from "@markethub/contracts";
 import { appMeta, streamingSubscriptions } from "./schema";
 import type { MarketHubDb } from "./index";
 
@@ -15,7 +15,8 @@ export const STREAMING_GENERATION_KEY = "streaming_subscriptions_generation";
 export class SqliteSubscriptionRepository implements SubscriptionRepository {
   private txQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database) {}
+  /** G0-C: optional injected write guard; absent = legacy behaviour. */
+  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database, private readonly guard?: CatalogWriteGuard) {}
 
   async load(): Promise<SubscriptionState> {
     // Synchronous body: rows and generation are read from one consistent point.
@@ -28,6 +29,7 @@ export class SqliteSubscriptionRepository implements SubscriptionRepository {
   }
 
   async replace(selections: SubscriptionSelection[]): Promise<number> {
+    this.guard?.assertWritable("I"); // G0-C #30: before any delete/insert/generation change
     const run = async (): Promise<number> => {
       const seen = new Set<string>();
       for (const selection of selections) {

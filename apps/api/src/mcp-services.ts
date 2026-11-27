@@ -8,6 +8,7 @@ import type {
 } from "@markethub/market-core";
 import type { LiveEventHub } from "@markethub/realtime";
 import { composeProviderStatuses } from "./provider-routes";
+import { CATALOG_WRITE_BUSY, writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 /**
  * Build the HTTP-backed MCP services from the existing injected state.
@@ -25,8 +26,11 @@ export function createHttpMcpServices(
   historicalService: HistoricalCandleService,
   snapshotService: OptionChainSnapshotService,
   activityRepo: McpActivityRepository,
-  onActivityError?: (error: unknown) => void
+  onActivityError?: (error: unknown) => void,
+  writeGuard?: ApiWriteGuard
 ): McpServices {
+  /** G0-C §8.2: MCP tools report a retryable unavailable error, never success. */
+  const busy = () => ({ ok: false as const, error: { category: "unavailable" as const, message: CATALOG_WRITE_BUSY } });
   return {
     ...(onActivityError ? { onActivityError } : {}),
     getHealth: async () => {
@@ -77,7 +81,10 @@ export function createHttpMcpServices(
     getLiveSnapshot: async () => ({ ok: true, value: service.getSnapshot() }),
     getCachedCandles: async (req) => ({ ok: true, value: { candles: historicalService.getCached(req) } }),
     getCoverage: async (req) => ({ ok: true, value: historicalService.getCoverageStatus(req) }),
-    fetchHistorical: async (req) => ({ ok: true, value: await historicalService.fetchOnDemand(req) }),
+    fetchHistorical: async (req) => {
+      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #21 via MCP
+      return { ok: true, value: await historicalService.fetchOnDemand(req) };
+    },
     listSnapshots: async (filter) => ({ ok: true, value: { snapshots: snapshotService.listSnapshots(filter.configId, filter.fromMs, filter.toMs) } }),
     listSnapshotsPage: async (req) => {
       const result = snapshotService.listSnapshotsPage(req);
@@ -99,14 +106,19 @@ export function createHttpMcpServices(
         ? { ok: true, value: snapshot }
         : { ok: false, error: { category: "unavailable", message: "Snapshot not found" } };
     },
-    captureSnapshot: async (req) => ({ ok: true, value: await snapshotService.captureOnDemand(req) }),
+    captureSnapshot: async (req) => {
+      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #25 via MCP
+      return { ok: true, value: await snapshotService.captureOnDemand(req) };
+    },
     startActivity: async (req) => {
+      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #27
       const result = activityRepo.start(req);
       return result.ok
         ? { ok: true, value: result.value }
         : { ok: false, error: { category: "internal", message: result.message } };
     },
     completeActivity: async (req) => {
+      if (writeBusyResponse(writeGuard) !== null) return busy(); // G0-C #28
       const result = activityRepo.complete(req);
       if (result.ok) return { ok: true, value: result.value };
       return {

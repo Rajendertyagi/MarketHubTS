@@ -1,5 +1,6 @@
 import type {
-  OptionChainCaptureConfig, OptionChainSnapshot, OptionChainSnapshotEnvelope, ProviderId
+  CatalogWriteGuard, OptionChainCaptureConfig, OptionChainSnapshot,
+  OptionChainSnapshotEnvelope, ProviderId
 } from "@markethub/contracts";
 import type { RetentionReader } from "../historical/service";
 import {
@@ -45,11 +46,18 @@ export interface SnapshotServiceOptions {
   settings: RetentionReader;
   providers: OptionChainProvider[];
   now?: () => number;
+  /** G0-C: optional injected write guard for background skip/retry (§7 #26). */
+  writeGuard?: CatalogWriteGuard;
 }
 
 export interface CaptureResult {
   snapshot: OptionChainSnapshot | null;
   error: string | null;
+  /** G0-C #26: true when the scheduled cycle was skipped because refresh owns
+   * the write permit. No DB mutation, no success status, retry on next tick. */
+  skipped?: boolean;
+  reason?: "CATALOG_WRITE_BUSY";
+  retryable?: boolean;
 }
 
 export class OptionChainSnapshotService {
@@ -126,6 +134,14 @@ export class OptionChainSnapshotService {
 
   /** Scheduled/manual capture through a saved config reads that config. */
   async captureScheduled(config: OptionChainCaptureConfig): Promise<CaptureResult> {
+    // G0-C #26: background capture skips (never queues, never claims success)
+    // when the refresh owns the write permit; the scheduler retries next tick.
+    if (this.options.writeGuard?.assertWritable("B") === "SKIP") {
+      return {
+        snapshot: null, error: "CATALOG_WRITE_BUSY",
+        skipped: true, reason: "CATALOG_WRITE_BUSY", retryable: true
+      };
+    }
     if (!config.captureEnabled) return { snapshot: null, error: "capture disabled" };
     return this.capture({
       underlyingCanonicalId: config.underlyingCanonicalId,

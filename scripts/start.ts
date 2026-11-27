@@ -11,7 +11,7 @@ if (!existsSync(distIndex)) {
 }
 
 const env = { ...process.env, MARKETHUB_ENV: process.env.MARKETHUB_ENV ?? "production" };
-const proc = Bun.spawn(["bun", "src/index.ts"], {
+const proc = Bun.spawn([process.execPath, "src/index.ts"], {
   cwd: resolve(root, "apps/api"),
   env,
   stdout: "inherit",

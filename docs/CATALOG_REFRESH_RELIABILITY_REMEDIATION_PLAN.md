@@ -8,6 +8,8 @@
 > **Prepared:** 2026-11-25  
 > **Revised in place:** 2026-11-25 (audit corrections A–G; see §16). Official Upstox and FYERS documentation re-fetched 2026-11-25 (§6.4, §9). This remains a plan-audit artifact only — no implementation is authorized.  
 > **Repository location:** now published at `docs/CATALOG_REFRESH_RELIABILITY_REMEDIATION_PLAN.md` on `develop`.
+>
+> **Status note (2026-11-27):** G0 remediation is **complete** — packages G0-A through G0-E are implemented and independently audited KEEP, the G0 STOP finding is resolved, and the full suite is **1244/1244 local (not CI)**. The separate canonical design/implementation record is [`G0_CHILD_PROCESS_ARCHITECTURE_PLAN.md`](G0_CHILD_PROCESS_ARCHITECTURE_PLAN.md); the startup defect record [`CATALOG_REFRESH_STARTUP_DEFECT.md`](CATALOG_REFRESH_STARTUP_DEFECT.md) is now marked RESOLVED. All G0 changes are **uncommitted** at `c70b999` on `develop` — not published. This note does not rewrite the historical plan below; all gates, evidence classes and historical status entries remain unchanged. No live provider verification; Stage G, M5 Phase 4B, M7, Phase 3 and production activation remain locked.
 
 ---
 

@@ -9,9 +9,12 @@ import {
 } from "@markethub/contracts";
 import type { McpActivityRepository } from "@markethub/database";
 import { isLocalPeer } from "./lib/net";
+import { writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 export interface McpActivityRouteDependencies {
   activities: McpActivityRepository;
+  /** G0-C: injected write coordinator for fail-fast interactive writes. */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 function badRequest(c: { json: (body: unknown, status?: number) => Response }, message: string): Response {
@@ -92,6 +95,8 @@ export function registerMcpActivityRoutes(app: Hono, deps: McpActivityRouteDepen
       return badRequest(c, "Invalid activity start request");
     }
     if (!parsed.success) return badRequest(c, "Invalid activity start request");
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #29
+    if (busy) return busy;
     const result = deps.activities.start({
       ...parsed.data,
       transport: "STDIO",
@@ -117,6 +122,8 @@ export function registerMcpActivityRoutes(app: Hono, deps: McpActivityRouteDepen
       return badRequest(c, "Invalid activity complete request");
     }
     if (!parsed.success) return badRequest(c, "Invalid activity complete request");
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #29
+    if (busy) return busy;
     // Redact caller-supplied failure fields before persistence (defense in depth
     // for the local-owner STDIO write path; in-process path is already sanitized).
     const safeComplete = {

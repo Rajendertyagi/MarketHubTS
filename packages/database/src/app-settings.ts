@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { retentionSettingsSchema, type RetentionSettings, type RetentionSettingsView } from "@markethub/contracts";
+import { retentionSettingsSchema, type CatalogWriteGuard, type RetentionSettings, type RetentionSettingsView } from "@markethub/contracts";
 import { appMeta } from "./schema";
 import type { MarketHubDb } from "./index";
 
@@ -10,7 +10,8 @@ export const RETENTION_SETTINGS_KEY = "retention_settings";
 export type RetentionReadResult = RetentionSettingsView;
 
 export class AppSettings {
-  constructor(private readonly db: MarketHubDb) {}
+  /** G0-C: optional injected write guard; absent = legacy behaviour (all writes allowed). */
+  constructor(private readonly db: MarketHubDb, private readonly guard?: CatalogWriteGuard) {}
 
   getRetention(): RetentionSettingsView {
     const row = this.db.select().from(appMeta).where(eq(appMeta.key, RETENTION_SETTINGS_KEY)).get();
@@ -27,6 +28,7 @@ export class AppSettings {
   }
 
   setRetention(settings: RetentionSettings): void {
+    this.guard?.assertWritable("I"); // G0-C #17: fail fast before any mutation
     const value = JSON.stringify(retentionSettingsSchema.parse(settings));
     const now = new Date();
     this.db.insert(appMeta)

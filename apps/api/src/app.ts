@@ -34,6 +34,10 @@ import type { FyersAdapter } from "@markethub/broker-fyers";
 import type { Logger } from "./lib/logger";
 import type { StreamSupervisor } from "./stream-supervisor";
 import type { SubscriptionCoordinator } from "./subscription-coordinator";
+import {
+  CatalogWriteBusyError, catalogWriteBusyBody, mapContentionError, writeBusyResponse,
+  type ApiWriteGuard
+} from "./catalog-write-coordinator";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -65,6 +69,8 @@ export interface AppDependencies {
   activityRepo?: McpActivityRepository;
   /** WP4A: app-owned provider-master refresh owner. When supplied, started non-blocking. */
   catalogRefresh?: CatalogMasterRefresh;
+  /** G0-C: injected write coordinator; absent = legacy behaviour (all writes allowed). */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 function dbCheckState(db: DatabaseHandle): CheckState {
@@ -137,6 +143,19 @@ export function createApp(deps: AppDependencies) {
     deps.logger.info("http_request", { method: c.req.method, path: c.req.path, status: c.res.status, ms: Date.now() - start });
   });
 
+  // G0-C: fail-fast gate BEFORE route validation for every interactive write
+  // entry point (§7 rows #10–#30). Reads (GET/HEAD/OPTIONS), the MCP transport
+  // and the read-only auth-start helper are not interactive writes. Per-route
+  // checks and repository gates remain as defence in depth.
+  app.use("/api/*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+    if (c.req.path === "/api/provider/fyers/auth/start") return next();
+    const busy = writeBusyResponse(deps.writeGuard, "I");
+    if (busy) return busy;
+    await next();
+  });
+
   app.use(
     "*",
     cors({
@@ -148,6 +167,13 @@ export function createApp(deps: AppDependencies) {
   );
 
   app.onError((err, c) => {
+    // G0-C: fail-fast interactive writes and residual SQLite contention map to
+    // the SAME retryable 503 contract — never a 500 (§8.2).
+    const mapped = mapContentionError(err);
+    if (mapped instanceof CatalogWriteBusyError) {
+      deps.logger.warn("catalog_write_busy", { message: mapped.message });
+      return c.json(catalogWriteBusyBody(mapped), 503);
+    }
     if (err instanceof HTTPException) {
       const status = err.status as ContentfulStatusCode;
       return c.json(apiErrorSchema.parse({ error: "http_error", message: err.message }), status);
@@ -179,7 +205,7 @@ export function createApp(deps: AppDependencies) {
   registerProviderRoutes(app, deps);
 
   // M6-B1: read-only bounded catalog search over the same catalog repository.
-  const catalogRepo = deps.catalogRepo ?? new SqliteCatalogRepository(deps.db.db, deps.db.sqlite);
+  const catalogRepo = deps.catalogRepo ?? new SqliteCatalogRepository(deps.db.db, deps.db.sqlite, deps.writeGuard);
   registerCatalogRoutes(app, { catalog: catalogRepo });
 
   // WP4B: bounded, provider-aware expiry discovery over the same catalogue
@@ -194,9 +220,9 @@ export function createApp(deps: AppDependencies) {
   // M5 canonical historical/snapshot services. No live providers are wired in
   // M5 (Phase 4B/Stage G); empty provider lists keep on-demand operations
   // honest. All consumers (API/WebUI) share these services and repositories.
-  const appSettings = deps.appSettings ?? new AppSettings(deps.db.db);
-  const candleRepo = deps.candleRepo ?? new CandleRepository(deps.db.db, deps.db.sqlite);
-  const snapshotRepo = deps.snapshotRepo ?? new SnapshotRepository(deps.db.db, deps.db.sqlite);
+  const appSettings = deps.appSettings ?? new AppSettings(deps.db.db, deps.writeGuard);
+  const candleRepo = deps.candleRepo ?? new CandleRepository(deps.db.db, deps.db.sqlite, deps.writeGuard);
+  const snapshotRepo = deps.snapshotRepo ?? new SnapshotRepository(deps.db.db, deps.db.sqlite, deps.writeGuard);
   const historicalService = deps.historicalService ?? new HistoricalCandleService({
     candles: candleRepo, settings: appSettings, providers: []
   });
@@ -205,16 +231,16 @@ export function createApp(deps: AppDependencies) {
   });
   // M6-C: construct the activity repository once, before any route that needs
   // it, so default composition and injected composition share the same instance.
-  const activityRepo = deps.activityRepo ?? new McpActivityRepository(deps.db.db, deps.db.sqlite);
+  const activityRepo = deps.activityRepo ?? new McpActivityRepository(deps.db.db, deps.db.sqlite, deps.writeGuard);
   registerHistoricalRoutes(app, {
     service: historicalService, candles: candleRepo, snapshots: snapshotRepo, settings: appSettings,
-    activities: activityRepo
+    activities: activityRepo, writeGuard: deps.writeGuard
   });
-  registerSnapshotRoutes(app, { service: snapshotService, snapshots: snapshotRepo });
+  registerSnapshotRoutes(app, { service: snapshotService, snapshots: snapshotRepo, writeGuard: deps.writeGuard });
 
   // M6-C: durable activity history. Write routes are local-owner-only, reads
   // follow the LAN model. Same repository instance as retention cleanup.
-  registerMcpActivityRoutes(app, { activities: activityRepo });
+  registerMcpActivityRoutes(app, { activities: activityRepo, writeGuard: deps.writeGuard });
 
   // Phase 2: read-only operation discovery for the Activity selector. Sourced
   // from the same registration-owned descriptors used by the MCP registrations.
@@ -225,7 +251,8 @@ export function createApp(deps: AppDependencies) {
       service: deps.service,
       hub: deps.hub,
       supervisor: deps.supervisor,
-      coordinator: deps.coordinator
+      coordinator: deps.coordinator,
+      writeGuard: deps.writeGuard
     });
   }
   app.get("/api/status", (c) => {

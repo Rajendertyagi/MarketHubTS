@@ -2,6 +2,7 @@ import { and, desc, eq, gte, lt, lte, or, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import { mcpActivityResultRefSchema, projectSafeSummaryJson, sanitizeSensitiveText } from "@markethub/contracts";
 import type {
+  CatalogWriteGuard,
   McpActivityCompleteRequest, McpActivityCompleteResult, McpActivityFilters,
   McpActivityList, McpActivityStartRequest, McpActivityStartResult,
   McpActivityStatus, McpActivityView
@@ -58,10 +59,12 @@ function decodeCursor(raw: string, expectedFingerprint: string): CursorPayload |
 
 /** Durable, bounded MCP activity history. The API process owns this repository. */
 export class McpActivityRepository {
-  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database) {}
+  /** G0-C: optional injected write guard; absent = legacy behaviour. */
+  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database, private readonly guard?: CatalogWriteGuard) {}
 
   /** Insert a started row; identical repeats are idempotent, immutable-field repeats conflict. */
   start(req: McpActivityStartRequest, now: () => number = () => Date.now()): ActivityStartOutcome {
+    this.guard?.assertWritable("I"); // G0-C #27/#29: before INSERT OR IGNORE
     const id = crypto.randomUUID();
     const startedAt = new Date(now()).toISOString();
     // Atomic insert: a concurrent duplicate is ignored by the unique index rather
@@ -90,6 +93,7 @@ export class McpActivityRepository {
 
   /** Update to a terminal status; unknown -> not-found, conflicting terminal -> conflict. */
   complete(req: McpActivityCompleteRequest, now: () => number = () => Date.now()): ActivityCompleteOutcome {
+    this.guard?.assertWritable("I"); // G0-C #28/#29: before conditional UPDATE
     const row = this.db.select().from(mcpActivity)
       .where(eq(mcpActivity.operationId, req.operationId)).get();
     if (!row) return { ok: false, reason: "not_found", message: "unknown operationId" };
@@ -193,6 +197,7 @@ export class McpActivityRepository {
 
   /** Bounded, batched cleanup by authoritative started_at. */
   cleanupActivities(cutoffMs: number, batchLimit = 500): number {
+    this.guard?.assertWritable("I"); // G0-C #18: before any batched DELETE
     const limit = Math.max(1, Math.min(batchLimit, 10000));
     const cutoff = new Date(cutoffMs).toISOString();
     let deleted = 0;

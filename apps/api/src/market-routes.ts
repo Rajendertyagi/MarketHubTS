@@ -17,6 +17,7 @@ import {
   type StreamSupervisor
 } from "./stream-supervisor";
 import type { SubscriptionCoordinator } from "./subscription-coordinator";
+import { runInteractiveWrite, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 /** Either the standalone supervisor or the shared coordinator can own the view. */
 export interface SubscriptionStatePort {
@@ -29,6 +30,8 @@ export interface MarketRouteDependencies {
   hub: LiveEventHub;
   supervisor?: StreamSupervisor | undefined;
   coordinator?: SubscriptionCoordinator | undefined;
+  /** G0-C: injected write coordinator for fail-fast interactive writes. */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 function subscriptionPort(deps: MarketRouteDependencies): SubscriptionStatePort {
@@ -119,7 +122,11 @@ export function registerMarketRoutes(app: Hono, deps: MarketRouteDependencies): 
       return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid subscription payload" }), 400);
     }
     try {
-      const result = await subscriptionPort(deps).replaceSubscriptions(parsed.data.selections);
+      // G0-C #30: one scope spans delete/insert + generation bump; 503 before any.
+      const result = await runInteractiveWrite(deps.writeGuard, () =>
+        subscriptionPort(deps).replaceSubscriptions(parsed.data.selections)
+      );
+      if (result instanceof Response) return result;
       // The view exposes committed generation/selections separately from
       // runtime status (including any post-commit reconciliation error).
       return c.json(subscriptionStateViewSchema.parse(result.view));

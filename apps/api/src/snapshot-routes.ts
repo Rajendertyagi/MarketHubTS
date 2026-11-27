@@ -9,10 +9,13 @@ import type { OptionChainSnapshotService, OptionChainRequest } from "@markethub/
 import type { SnapshotPageSelector } from "@markethub/contracts";
 import type { SnapshotRepository } from "@markethub/database";
 import { isLocalPeer } from "./lib/net";
+import { runInteractiveWrite, writeBusyResponse, type ApiWriteGuard } from "./catalog-write-coordinator";
 
 export interface SnapshotRouteDependencies {
   service: OptionChainSnapshotService;
   snapshots: SnapshotRepository;
+  /** G0-C: injected write coordinator for fail-fast interactive writes. */
+  writeGuard?: ApiWriteGuard | undefined;
 }
 
 function parseOptionalMs(raw: string | undefined): number | undefined {
@@ -43,6 +46,8 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
     }
     const parsed = optionChainCaptureConfigSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(apiErrorSchema.parse({ error: "invalid_request", message: "Invalid capture config" }), 400);
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #23
+    if (busy) return busy;
     deps.service.putCaptureConfig(parsed.data);
     return c.json({ config: optionChainCaptureConfigSchema.parse(deps.service.getCaptureConfig(parsed.data.id)!) });
   });
@@ -51,6 +56,8 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
     if (!isLocalPeer(c.req.raw, c.env)) {
       return c.json(apiErrorSchema.parse({ error: "forbidden", message: "Configuration is local-owner only" }), 403);
     }
+    const busy = writeBusyResponse(deps.writeGuard); // G0-C #24
+    if (busy) return busy;
     deps.service.deleteCaptureConfig(c.req.param("id")); // snapshots retained (config_id nulled)
     return c.json({ ok: true });
   });
@@ -74,7 +81,9 @@ export function registerSnapshotRoutes(app: Hono, deps: SnapshotRouteDependencie
       ...(body.strikeRangeJson !== undefined ? { strikeRangeJson: body.strikeRangeJson } : {}),
       ...(body.nativeIdentifier ? { nativeIdentifier: body.nativeIdentifier } : {})
     };
-    const result = await deps.service.captureOnDemand(request);
+    // G0-C #25: gate before the provider call; no snapshot is written when busy.
+    const result = await runInteractiveWrite(deps.writeGuard, () => deps.service.captureOnDemand(request));
+    if (result instanceof Response) return result;
     if (!result.snapshot) {
       return c.json(apiErrorSchema.parse({ error: "capture_unavailable", message: result.error ?? "Capture unavailable" }), 422);
     }

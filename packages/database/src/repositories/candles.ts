@@ -2,6 +2,7 @@ import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   CandleRangeNote,
+  CatalogWriteGuard,
   HistoricalCandle,
   HistoricalSyncConfig
 } from "@markethub/contracts";
@@ -43,10 +44,12 @@ function toRow(c: HistoricalCandle) {
 }
 
 export class CandleRepository {
-  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database) {}
+  /** G0-C: optional injected write guard; absent = legacy behaviour. */
+  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database, private readonly guard?: CatalogWriteGuard) {}
 
   /** First valid write wins. Conflicts are recorded, never silently applied. */
   upsertCandles(candles: HistoricalCandle[], options: UpsertCandlesOptions = {}): UpsertCandlesResult {
+    this.guard?.assertWritable("I"); // G0-C #21/#22: before BEGIN IMMEDIATE
     const result: UpsertCandlesResult = { inserted: 0, unchanged: 0, conflicts: 0, refreshed: 0 };
     if (candles.length === 0) return result;
     this.sqlite.exec("BEGIN IMMEDIATE");
@@ -179,6 +182,7 @@ export class CandleRepository {
   }
 
   addRangeNote(note: CandleRangeNote): void {
+    this.guard?.assertWritable("I"); // G0-C #21/#22
     const now = new Date().toISOString();
     this.db.insert(candleRangeNotes).values({
       canonicalId: note.canonicalId,
@@ -229,6 +233,7 @@ export class CandleRepository {
    * retention settings first.
    */
   cleanupCandles(cutoffMs: number, batchLimit = 1000): number {
+    this.guard?.assertWritable("I"); // G0-C #18: before any batched DELETE
     const limit = Math.max(1, Math.min(batchLimit, 10000));
     let deleted = 0;
     while (true) {
@@ -250,6 +255,7 @@ export class CandleRepository {
    * existing row instead of raising a constraint error. Returns the stored row.
    */
   putSyncConfig(config: HistoricalSyncConfig): HistoricalSyncConfig {
+    this.guard?.assertWritable("I"); // G0-C #19
     const existing = this.db.select().from(historicalSyncConfigs).where(
       and(
         eq(historicalSyncConfigs.canonicalId, config.canonicalId),
@@ -292,6 +298,7 @@ export class CandleRepository {
   }
 
   deleteSyncConfig(id: string): void {
+    this.guard?.assertWritable("I"); // G0-C #20
     this.db.delete(historicalSyncConfigs).where(eq(historicalSyncConfigs.id, id)).run();
   }
 

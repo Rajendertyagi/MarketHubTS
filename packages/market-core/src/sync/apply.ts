@@ -33,6 +33,18 @@ export class SyncConflictError extends Error {
   }
 }
 
+/**
+ * Additive child-mode injection (G0-B, plan §4.2 decision (a)). In child mode
+ * the three failure paths that call `recordRunBestEffort()` become no-ops so
+ * the child never performs an autocommit `recordSyncRun` write outside the
+ * atomic apply transaction. The parent records terminal diagnostics after the
+ * child settles. Transaction, reconciliation and conflict semantics are
+ * unchanged; only this diagnostic recorder is suppressed.
+ */
+export interface CatalogSyncServiceOptions {
+  disableDiagnosticRunRecording?: boolean;
+}
+
 interface AppliedBatch {
   conflicts: SyncConflict[];
   counts: CatalogSyncResult["counts"];
@@ -54,7 +66,10 @@ function statusFromConflicts(conflicts: SyncConflict[]): SyncRunStatus {
 }
 
 export class CatalogSyncService {
-  constructor(private readonly repo: CatalogRepository) {}
+  constructor(
+    private readonly repo: CatalogRepository,
+    private readonly options: CatalogSyncServiceOptions = {}
+  ) {}
 
   async applyBatch(rawBatch: CatalogSyncBatch): Promise<CatalogSyncResult> {
     const prepared = await this.prepareRun(rawBatch);
@@ -76,9 +91,12 @@ export class CatalogSyncService {
    */
   async applyCompleteProviderSnapshot(
     rawBatch: CatalogSyncBatch,
-    reconciliation: ProviderReconciliationDescriptor
+    reconciliation: ProviderReconciliationDescriptor,
+    /** Parent-generated run ID (G0-B run-ID threading). Existing callers omit it
+     * and keep the generated default; semantics are otherwise unchanged. */
+    runId?: string
   ): Promise<CatalogSyncResult> {
-    const prepared = await this.prepareRun(rawBatch);
+    const prepared = await this.prepareRun(rawBatch, runId);
     if ("errorResult" in prepared) return prepared.errorResult;
     const { batch, runRecord } = prepared;
     const conflicts: SyncConflict[] = [];
@@ -120,9 +138,14 @@ export class CatalogSyncService {
     }
   }
 
-  private async prepareRun(rawBatch: CatalogSyncBatch): Promise<PreparedRun | { errorResult: CatalogSyncResult }> {
+  private async prepareRun(
+    rawBatch: CatalogSyncBatch,
+    suppliedRunId?: string
+  ): Promise<PreparedRun | { errorResult: CatalogSyncResult }> {
     const startedAt = nowIso();
-    const runId = makeRunId();
+    // G0-B run-ID threading: a supplied parent-generated ID is used verbatim so
+    // the committed COMPLETED row carries it; otherwise preserve current behaviour.
+    const runId = suppliedRunId ?? makeRunId();
     let batch: CatalogSyncBatch;
     try {
       batch = catalogSyncBatchSchema.parse(rawBatch);
@@ -669,6 +692,9 @@ export class CatalogSyncService {
   }
 
   private async recordRunBestEffort(run: CatalogSyncRunRecord): Promise<void> {
+    // Child mode (G0-B decision (a)): the child writes SQLite only inside the
+    // atomic apply transaction, so no autocommit diagnostic record is emitted.
+    if (this.options.disableDiagnosticRunRecording) return;
     try {
       if (this.repo.recordSyncRun) await this.repo.recordSyncRun(run);
     } catch {

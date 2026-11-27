@@ -1,8 +1,8 @@
 import {
   providerPolicySchema,
-  type CandleGap, type CandleRangeNote, type CandleRangeRequest, type DataUnavailableReport,
-  type HistoricalCandle, type HistoricalSyncConfig, type ProviderId, type RetentionSettings,
-  type UnavailableReasonCode
+  type CandleGap, type CandleRangeNote, type CandleRangeRequest, type CatalogWriteGuard,
+  type DataUnavailableReport, type HistoricalCandle, type HistoricalSyncConfig, type ProviderId,
+  type RetentionSettings, type UnavailableReasonCode
 } from "@markethub/contracts";
 import { assessGaps } from "./gaps";
 
@@ -37,6 +37,8 @@ export interface HistoricalServiceOptions {
   settings: RetentionReader;
   providers: HistoricalProvider[];
   now?: () => number;
+  /** G0-C: optional injected write guard for background skip/retry (§7 #22). */
+  writeGuard?: CatalogWriteGuard;
 }
 
 export interface CoverageStatus {
@@ -54,6 +56,11 @@ export interface HistoricalFetchResult {
   unavailable: DataUnavailableReport[];
   conflicts: number;
   providersTried: ProviderId[];
+  /** G0-C #22: true when the background cycle was skipped because refresh owns
+   * the write permit. No DB mutation, no success status, retry on next tick. */
+  skipped?: boolean;
+  reason?: "CATALOG_WRITE_BUSY";
+  retryable?: boolean;
 }
 
 export interface RetentionCleanupResult {
@@ -161,6 +168,14 @@ export class HistoricalCandleService {
 
   /** User-configured synchronization reads the saved config; on-demand does not. */
   async runSync(config: HistoricalSyncConfig): Promise<HistoricalFetchResult> {
+    // G0-C #22: background work skips (never queues, never claims success) when
+    // the refresh owns the write permit. The scheduler retries on its next tick.
+    if (this.options.writeGuard?.assertWritable("B") === "SKIP") {
+      return {
+        candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [],
+        skipped: true, reason: "CATALOG_WRITE_BUSY", retryable: true
+      };
+    }
     if (!config.enabled) {
       return { candles: [], gaps: [], unavailable: [], conflicts: 0, providersTried: [] };
     }

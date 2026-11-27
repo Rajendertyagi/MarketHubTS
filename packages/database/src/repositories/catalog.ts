@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Database } from "bun:sqlite";
 import type {
   CanonicalInstrument,
+  CatalogWriteGuard,
   InstrumentAlias,
   InstrumentCategory,
   InstrumentIdentifier,
@@ -34,7 +35,8 @@ import {
   rowToInstrument, rowToMapping, rowToSyncRun, syncRunToRow, toJson
 } from "./catalog-mappers";
 class TxRepo implements CatalogRepositoryTx {
-  constructor(private readonly db: MarketHubDb) {}
+  /** G0-C: injected guard (child-mode repo has none → child-only apply unchanged). */
+  constructor(private readonly db: MarketHubDb, private readonly guard?: CatalogWriteGuard) {}
 
   async getInstrumentByCanonicalId(canonicalId: string): Promise<CanonicalInstrument | null> {
     const row = this.db.select().from(canonicalInstruments).where(eq(canonicalInstruments.canonicalId, canonicalId)).get();
@@ -49,6 +51,7 @@ class TxRepo implements CatalogRepositoryTx {
     return rowToInstrument(row, deriv ?? null);
   }
   async upsertInstrument(instrument: CanonicalInstrument): Promise<{ created: boolean }> {
+    this.guard?.assertWritable("I"); // G0-C #4/#5
     const existing = this.db.select().from(canonicalInstruments).where(eq(canonicalInstruments.canonicalId, instrument.canonicalId)).get();
     const row = instrumentToRow(instrument);
     if (!existing) {
@@ -67,6 +70,7 @@ class TxRepo implements CatalogRepositoryTx {
     return { created: !existing };
   }
   async upsertDerivativeContract(contract: DerivativeContractRecord): Promise<{ created: boolean }> {
+    this.guard?.assertWritable("I"); // G0-C #5
     const existing = this.db.select().from(derivativeContracts).where(eq(derivativeContracts.canonicalId, contract.canonicalId)).get();
     if (!existing) {
       this.db.insert(derivativeContracts).values(contract as any).run();
@@ -84,6 +88,7 @@ class TxRepo implements CatalogRepositoryTx {
     return row ? rowToMapping(row) : null;
   }
   async upsertMapping(mapping: ProviderInstrumentMapping): Promise<{ created: boolean }> {
+    this.guard?.assertWritable("I"); // G0-C #6
     const existing = await this.getMapping(mapping.provider, mapping.nativeIdentifier);
     const row = mappingToRow(mapping);
     if (!existing) {
@@ -98,6 +103,7 @@ class TxRepo implements CatalogRepositoryTx {
     return { created: false };
   }
   async upsertAlias(alias: InstrumentAlias): Promise<{ created: boolean }> {
+    this.guard?.assertWritable("I"); // G0-C #7
     const row = aliasToRow(alias);
     const candidates = this.db
       .select()
@@ -120,6 +126,7 @@ class TxRepo implements CatalogRepositoryTx {
     return { created: false };
   }
   async upsertIdentifier(identifier: InstrumentIdentifier): Promise<{ created: boolean }> {
+    this.guard?.assertWritable("I"); // G0-C #8
     const row = identifierToRow(identifier);
     const authoritative = ["ISIN", "EXCHANGE_SECURITY_ID", "STABLE_ID"].includes(row.identifierType);
     if (authoritative && row.status === "CURRENT") {
@@ -187,9 +194,11 @@ class TxRepo implements CatalogRepositoryTx {
     return rows.map(rowToIdentifier);
   }
   async createSyncRun(run: CatalogSyncRunRecord): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #3
     this.db.insert(catalogSyncRuns).values(syncRunToRow(run)).run();
   }
   async updateSyncRun(runId: string, patch: Partial<CatalogSyncRunRecord>): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #3
     const existing = this.db.select().from(catalogSyncRuns).where(eq(catalogSyncRuns.runId, runId)).get();
     if (!existing) return;
     const merged: CatalogSyncRunRecord = { ...rowToSyncRun(existing), ...patch };
@@ -203,6 +212,7 @@ class TxRepo implements CatalogRepositoryTx {
    * untouched; canonical rows are never deleted.
    */
   async reconcileProviderMappings(input: ProviderMappingReconciliationInput): Promise<ProviderMappingReconciliationResult> {
+    this.guard?.assertWritable("I"); // G0-C #9
     const removedNativeIdentifiers: string[] = [];
     let examined = 0;
     const rows = this.db
@@ -266,11 +276,13 @@ class TxRepo implements CatalogRepositoryTx {
 export class SqliteCatalogRepository implements CatalogRepository {
   private txQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database) {}
+  /** G0-C: optional injected guard; absent = legacy behaviour (child apply unchanged). */
+  constructor(private readonly db: MarketHubDb, private readonly sqlite: Database, private readonly guard?: CatalogWriteGuard) {}
 
   async transaction<T>(fn: (tx: CatalogRepositoryTx) => Promise<T> | T): Promise<T> {
+    this.guard?.assertWritable("I"); // G0-C #1: parent-side apply is gated; child repo has no guard
     const run = async () => {
-      const txRepo = new TxRepo(this.db);
+      const txRepo = new TxRepo(this.db, this.guard);
       this.sqlite.exec("BEGIN IMMEDIATE");
       try {
         const result = await fn(txRepo);
@@ -475,6 +487,7 @@ export class SqliteCatalogRepository implements CatalogRepository {
   }
 
   async recordSyncRun(run: CatalogSyncRunRecord): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #2: parent diagnostic record, never during OWNED
     const existing = this.db.select().from(catalogSyncRuns).where(eq(catalogSyncRuns.runId, run.runId)).get();
     if (!existing) this.db.insert(catalogSyncRuns).values(syncRunToRow(run)).run();
     else this.db.update(catalogSyncRuns).set(syncRunToRow(run)).where(eq(catalogSyncRuns.runId, run.runId)).run();

@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { loadConfig, providerConfigFromAppConfig, redactConfigForLog } from "@markethub/config";
 import {
   openDatabase, runMigrations, defaultMigrationsFolder, SqliteCredentialStore, SqliteProviderSettings,
@@ -17,6 +18,9 @@ import { wrapMcpHandlerFetch, MCP_SSE_MAX_BUFFERED_BYTES, MCP_SSE_MAX_BUFFERED_F
 import { createLogger } from "./lib/logger";
 import { LockedProviderDriver, StreamSupervisor } from "./stream-supervisor";
 import { SubscriptionCoordinator } from "./subscription-coordinator";
+import { CatalogRefreshChildManager } from "./catalog-refresh-child-manager";
+import { CatalogWriteOwnership, type OwnerPhase } from "./catalog-write-ownership";
+import { CatalogWriteCoordinator } from "./catalog-write-coordinator";
 
 type RunningServer = ReturnType<typeof Bun.serve>;
 
@@ -56,6 +60,15 @@ let coordinator: SubscriptionCoordinator | null = null;
 let mcpHandler: ReturnType<typeof createMcpHandler> | null = null;
 let notificationBridge: McpNotificationBridge | null = null;
 let catalogRefresh: CatalogMasterRefresh | null = null;
+// G0-A: constructed after the database is ready; no child is spawned until a
+// refresh request is made. Drained before the parent DB is closed on shutdown.
+let childManager: CatalogRefreshChildManager | null = null;
+// G0-D: single parent-owned write permit + durable generation token. Constructed
+// after migrations so startup recovery can read the existing token.
+let ownership: CatalogWriteOwnership | null = null;
+// G0-C: API-owned write coordinator. Reads the authoritative permit state from
+// G0-D ownership and owns active write scopes + the stop-admit drain.
+let writeCoordinator: CatalogWriteCoordinator | null = null;
 
 /**
  * WP3 listener-first seam. The HTTP listener is already bound when this runs;
@@ -83,6 +96,10 @@ export function startRefreshAfterListening(
  */
 async function drainStartupFailure(): Promise<void> {
   try { if (catalogRefresh) await catalogRefresh.stopAndWait(); } catch {}
+  try { if (childManager) await childManager.shutdown(); } catch {}
+  // G0-D: release the write permit and clear the durable token only after the
+  // child has settled and exited, never before (plan §6.4 steps 4–6).
+  try { ownership?.release(); } catch {}
   try { coordinator?.stop(); } catch {}
   try { if (mcpHandler) await mcpHandler.close(); } catch {}
   try { notificationBridge?.stop(); } catch {}
@@ -112,6 +129,61 @@ async function main() {
     db = openDatabase({ dbPath: config.dbPath });
     runMigrations(db.db, defaultMigrationsFolder);
     logger.info("database_ready", { path: db.path });
+    // G0-D: the durable ownership token and monotonic generation are read from
+    // app_meta here (after migrations). Startup recovery runs before any child
+    // is dispatched; see the conditional startRefreshAfterListening below.
+    ownership = new CatalogWriteOwnership(db.sqlite, db.path, (event) => {
+      logger.info("catalog_write_ownership", {
+        from: event.from, to: event.to, generation: event.generation
+      });
+    });
+    // G0-C: the coordinator reads the authoritative permit state from G0-D and
+    // installs the real write-scope drain into the grant handshake. No new
+    // state machine is introduced; `busy_timeout` stays at 5000 ms.
+    writeCoordinator = new CatalogWriteCoordinator({
+      getPermitState: () => ownership!.currentState,
+      onEvent: (event) => logger.info("catalog_write_coordinator", { ...event })
+    });
+    ownership.setDrainHook(() => writeCoordinator!.drain());
+    // G0-A/G0-B: the child manager is constructed here (after migrations) but
+    // does not spawn anything until CatalogMasterRefresh schedules a provider
+    // run. Pipeline mode runs the full refresh in the child; the parent keeps
+    // scheduling, freshness and diagnostic recording. G0-D wires the ownership
+    // hooks so the grant is drained and generation-fenced, never unconditional.
+    childManager = new CatalogRefreshChildManager({
+      dbPath: db.path,
+      mode: "pipeline",
+      childEntryPath: resolve(import.meta.dir, "catalog-refresh-child-pipeline.ts"),
+      onEvent: (event) => {
+        // G0-D: mirror validated child phase transitions into the durable token.
+        if (event.type === "phase") ownership?.updatePhase(event.phase as OwnerPhase);
+      },
+      ownershipHooks: {
+        requestGrant: async () => {
+          const decision = await ownership!.grant();
+          return decision.granted
+            ? { granted: true, generation: decision.generation }
+            : { granted: false, reason: decision.reason };
+        },
+        onSettled: ({ ok, terminal }) => {
+          if (terminal?.type === "result" && terminal.status === "FENCED") {
+            ownership!.updatePhase("FENCED");
+          } else if (ok && terminal?.type === "result" && terminal.status === "COMPLETED") {
+            ownership!.updatePhase("SETTLED");
+          }
+          ownership!.release();
+        },
+        onUnexpectedExit: ({ runId, exit }) => {
+          ownership!.markUnknown();
+          const decision = ownership!.recover();
+          logger.warn("catalog_ownership_recovery", {
+            runId, decision: decision.decision,
+            code: exit.code, signal: exit.signal,
+            ...("reason" in decision ? { reason: decision.reason } : {})
+          });
+        }
+      }
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "database", message });
@@ -123,8 +195,8 @@ async function main() {
   // WP3-A item 10: any failure after partial initialization must drain the
   // refresh owner and all other resources before closing the database.
   try {
-  const credentials = new SqliteCredentialStore(db);
-  const settings = new SqliteProviderSettings(db);
+  const credentials = new SqliteCredentialStore(db, writeCoordinator ?? undefined);
+  const settings = new SqliteProviderSettings(db, writeCoordinator ?? undefined);
   const providerConfig = providerConfigFromAppConfig(config);
   const registry = new ProviderRegistry();
   const upstox = new UpstoxAdapter({ credentials, settings, config: providerConfig });
@@ -159,19 +231,66 @@ async function main() {
   });
   hub.start();
 
-  const catalog = new SqliteCatalogRepository(db.db, db.sqlite);
+  const catalog = new SqliteCatalogRepository(db.db, db.sqlite, writeCoordinator ?? undefined);
   // WP4A: one app-owned refresh owner for the public provider master files.
   // No credentials, no live market-data calls, no generic scheduler.
   catalogRefresh = new CatalogMasterRefresh({
     catalog,
     sync: new CatalogSyncService(catalog),
     now: () => new Date(),
+    // G0-B: the parent generates the run ID and delegates the pipeline to the
+    // serialized child. Cancellation is forwarded as a cooperative IPC message;
+    // the child owns its AbortController. The structured terminal result is
+    // mapped back to the shared pipeline outcome for parent-owned diagnostics.
+    executor: async ({ provider, runId, nowIso, signal }) => {
+      // G0-D: reserve the single write permit and bump the durable generation
+      // BEFORE dispatch. A stale/unknown permit is a retryable failure, never a
+      // second writer. The child validates this generation inside its txn.
+      const reservation = ownership!.reserve({
+        runId, provider, pid: process.pid, startedAt: nowIso
+      });
+      if (!reservation.ok) {
+        return {
+          status: "FAILED", counts: {}, cancelled: false, applyAttempted: false,
+          error: `catalog write ownership unavailable: ${reservation.reason}`
+        };
+      }
+      const onAbort = () => { void childManager?.cancel(runId, "shutdown"); };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        const result = await childManager!.requestRefresh({
+          runId, provider, nowIso, intentKey: "catalog-master-refresh", generation: reservation.generation
+        });
+        const terminal = result.terminal;
+        if (terminal?.type === "result") {
+          return {
+            status: terminal.status,
+            counts: terminal.counts,
+            ...(terminal.sourceVersion ? { sourceVersion: terminal.sourceVersion } : {}),
+            ...(terminal.conflicts ? { conflicts: terminal.conflicts } : {}),
+            ...(terminal.error ? { error: terminal.error } : {}),
+            cancelled: false,
+            applyAttempted: true
+          };
+        }
+        if (terminal?.type === "cancelled") {
+          return { status: "CANCELLED", counts: {}, cancelled: true, applyAttempted: false };
+        }
+        return {
+          status: "FAILED", counts: {}, cancelled: false, applyAttempted: false,
+          error: result.error ?? "child produced no terminal result"
+        };
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    },
     onEvent: (event) => {
       if (event.outcome === "FAILED") logger.warn("catalog_master_refresh_failed", { provider: event.provider, reason: event.reason ?? event.status ?? "unknown" });
       else logger.info("catalog_master_refresh", { provider: event.provider, outcome: event.outcome, status: event.status });
     }
   });
-  const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite);
+  const subscriptions = new SqliteSubscriptionRepository(db.db, db.sqlite, writeCoordinator ?? undefined);
   // AD-024 production boundary: one shared coordinator owns desired state; each
   // configured provider has an independent runtime with its own locked driver.
   // No real SDK, socket or provider connection is ever constructed. Only a
@@ -200,12 +319,16 @@ async function main() {
 
   // M6-B2: construct the M5 services once and share the same instances with
   // REST routes and the MCP adapter. No second app/DB/provider/service.
-  const appSettings = new AppSettings(db.db);
-  const candleRepo = new CandleRepository(db.db, db.sqlite);
-  const snapshotRepo = new SnapshotRepository(db.db, db.sqlite);
-  const activityRepo = new McpActivityRepository(db.db, db.sqlite);
-  const historicalService = new HistoricalCandleService({ candles: candleRepo, settings: appSettings, providers: [] });
-  const snapshotService = new OptionChainSnapshotService({ snapshots: snapshotRepo, settings: appSettings, providers: [] });
+  const appSettings = new AppSettings(db.db, writeCoordinator ?? undefined);
+  const candleRepo = new CandleRepository(db.db, db.sqlite, writeCoordinator ?? undefined);
+  const snapshotRepo = new SnapshotRepository(db.db, db.sqlite, writeCoordinator ?? undefined);
+  const activityRepo = new McpActivityRepository(db.db, db.sqlite, writeCoordinator ?? undefined);
+  const historicalService = new HistoricalCandleService({
+    candles: candleRepo, settings: appSettings, providers: [], writeGuard: writeCoordinator ?? undefined
+  });
+  const snapshotService = new OptionChainSnapshotService({
+    snapshots: snapshotRepo, settings: appSettings, providers: [], writeGuard: writeCoordinator ?? undefined
+  });
 
   // M6-A: one handler for the process lifetime; its factory builds a fresh
   // McpServer per request over the existing services. No second app/DB/provider.
@@ -217,7 +340,8 @@ async function main() {
       config, runtimeDb, runtimeCatalog, runtimeHub, registry, service, historicalService, snapshotService, activityRepo,
       (error) => logger.warn("mcp_activity_write_failed", {
         message: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)
-      })
+      }),
+      writeCoordinator ?? undefined
     )),
     {
       maxSubscriptions: MCP_MAX_SUBSCRIPTIONS,
@@ -261,7 +385,8 @@ async function main() {
     config, db, logger, startedAt: Date.now(),
     providerRegistry: registry, credentials, settings, providerConfig, upstox, fyers,
     service, hub, coordinator, mcpHandler, catalogRepo: catalog, catalogRefresh,
-    appSettings, candleRepo, snapshotRepo, historicalService, snapshotService, activityRepo
+    appSettings, candleRepo, snapshotRepo, historicalService, snapshotService, activityRepo,
+    writeGuard: writeCoordinator ?? undefined
   });
 
   try {
@@ -279,11 +404,62 @@ async function main() {
 
   // WP3 listener-first: the listener is bound, so remote refresh work can no
   // longer delay readiness. Errors are observable; no unhandled rejection.
-  startRefreshAfterListening(catalogRefresh ?? undefined, (error) => {
+  const startRefresh = () => startRefreshAfterListening(catalogRefresh ?? undefined, (error) => {
     logger.error("catalog_refresh_start_failed", {
       message: error instanceof Error ? error.message : String(error)
     });
   });
+
+  // G0-D: verify any durable token left by a previous process BEFORE any child
+  // is dispatched. A committed COMPLETED row is the sole positive proof of a
+  // prior commit (do not re-apply); a live writer makes recovery retryable; a
+  // successful probe only permits a fresh reserve with a bumped generation.
+  //
+  // The ambiguous RESUME case additionally performs a FAIL-CLOSED post-bump
+  // verification with the EXACT parent-generated runId: if that lookup fails,
+  // ownership stays UNKNOWN, the token is retained and NO refresh is scheduled.
+  // This is deliberately distinct from the ordinary startup freshness check at
+  // packages/market-core/src/sync/refresh.ts:333-350, which fails OPEN on a
+  // lookup error and is NOT changed by this correction.
+  const recovery = ownership!.recoverForStartup();
+  logger.info("catalog_ownership_startup_recovery", {
+    decision: recovery.decision,
+    generation: "generation" in recovery ? recovery.generation : 0,
+    ...("runId" in recovery ? { runId: recovery.runId } : {}),
+    ...("reason" in recovery ? { reason: recovery.reason } : {})
+  });
+  if (recovery.decision === "REFUSED") {
+    // Fail closed: the post-bump run-state lookup failed, so a prior commit
+    // cannot be ruled out. Keep the token and UNKNOWN permit; do NOT dispatch.
+    logger.warn("catalog_refresh_refused", {
+      runId: recovery.runId, generation: recovery.generation, reason: recovery.reason,
+      note: "post-bump run-state lookup failed; refusing refresh (fail-closed)"
+    });
+  } else if (recovery.decision === "RETRY") {
+    // Refuse to start a writer while one may still be active. Retry on a
+    // bounded, unref'd cadence; reads and the HTTP listener stay available.
+    logger.warn("catalog_refresh_deferred", { reason: recovery.reason });
+    const retry = setInterval(() => {
+      if (shuttingDown) { clearInterval(retry); return; }
+      const next = ownership!.recoverForStartup();
+      logger.info("catalog_ownership_retry", { decision: next.decision });
+      if (next.decision === "REFUSED") {
+        clearInterval(retry);
+        logger.warn("catalog_refresh_refused", {
+          ...("runId" in next ? { runId: next.runId } : {}),
+          ...("generation" in next ? { generation: next.generation } : {}),
+          ...("reason" in next ? { reason: next.reason } : {}),
+          note: "post-bump run-state lookup failed; refusing refresh (fail-closed)"
+        });
+      } else if (next.decision !== "RETRY") {
+        clearInterval(retry);
+        startRefresh();
+      }
+    }, 2_000);
+    (retry as { unref?: () => void } | null)?.unref?.();
+  } else {
+    startRefresh();
+  }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("startup_failed", { stage: "composition", message });
@@ -301,6 +477,15 @@ async function main() {
       // its atomic transaction before any database closure (items 1–9).
       try { if (catalogRefresh) await catalogRefresh.stopAndWait(); } catch (error) {
         logger.warn("catalog_refresh_drain_error", { message: error instanceof Error ? error.message : String(error) });
+      }
+      // G0-A: drain any active/queued child before the parent DB is closed.
+      try { if (childManager) await childManager.shutdown(); } catch (error) {
+        logger.warn("child_manager_drain_error", { message: error instanceof Error ? error.message : String(error) });
+      }
+      // G0-D §6.4 step 4: release the permit and clear the durable token only
+      // after the child has settled and exited, before the parent DB closes.
+      try { ownership?.release(); } catch (error) {
+        logger.warn("ownership_release_error", { message: error instanceof Error ? error.message : String(error) });
       }
       // 1) stop accepting subscription/config work; 2) stop/cancel the shared
       // coordinator and its provider runtimes (locked drivers own no resources).

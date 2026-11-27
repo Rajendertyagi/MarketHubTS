@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CredentialStore, CredentialStoreStatus, ProviderId } from "@markethub/contracts";
+import type { CatalogWriteGuard, CredentialStore, CredentialStoreStatus, ProviderId } from "@markethub/contracts";
 import { providerCredentials } from "./schema";
 import type { DatabaseHandle } from "./index";
 
@@ -54,7 +54,8 @@ export class SqliteCredentialStore implements CredentialStore {
   private key: Bytes | null = null;
   private statusValue: CredentialStoreStatus;
 
-  constructor(private readonly handle: DatabaseHandle) {
+  /** G0-C: optional injected write guard; absent = legacy behaviour. */
+  constructor(private readonly handle: DatabaseHandle, private readonly guard?: CatalogWriteGuard) {
     this.keyPath = resolveCredentialKeyPath(handle.path);
     this.statusValue = this.initialize();
   }
@@ -164,6 +165,7 @@ export class SqliteCredentialStore implements CredentialStore {
   }
 
   async set(provider: ProviderId, name: string, value: string): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #10/#12/#13: before encryption/key work
     if (!value || value.trim().length === 0) {
       throw new Error("Refusing to store an empty credential; existing value is preserved");
     }
@@ -206,6 +208,7 @@ export class SqliteCredentialStore implements CredentialStore {
   }
 
   async delete(provider: ProviderId, name: string): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #13/#15
     this.handle.db
       .delete(providerCredentials)
       .where(and(eq(providerCredentials.provider, provider), eq(providerCredentials.name, name)))
@@ -213,6 +216,7 @@ export class SqliteCredentialStore implements CredentialStore {
   }
 
   async reset(): Promise<void> {
+    this.guard?.assertWritable("I"); // G0-C #16: before DB delete AND key-file replace
     // Explicit destructive reset: discard unrecoverable credential rows and create a new key.
     this.handle.db.delete(providerCredentials).run();
     try {
